@@ -28,6 +28,17 @@ docker compose up -d          # ArangoDB + Python core sidecar
 # core API: http://localhost:8080  ·  ArangoDB UI: http://localhost:8529
 ```
 
+### Secret-scanning hook (one-time per clone)
+
+A gitleaks pre-commit hook blocks commits containing hardcoded secrets.
+
+```bash
+brew install gitleaks pre-commit   # or: pip install pre-commit
+pre-commit install                 # activates the hook for this clone
+```
+
+Manual scan: `gitleaks dir . --redact`
+
 ### Core (Python, uv)
 
 ```bash

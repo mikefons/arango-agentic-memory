@@ -1,0 +1,15 @@
+# Pre-commit hooks. One-time setup per clone:
+#   pip install pre-commit   # or: brew install pre-commit
+#   pre-commit install
+#
+# gitleaks scans staged changes for hardcoded secrets and blocks the commit
+# if any are found. It catches secrets pasted INSIDE otherwise-legit files,
+# which .gitignore cannot. Requires the gitleaks binary (brew install gitleaks).
+repos:
+  - repo: local
+    hooks:
+      - id: gitleaks
+        name: gitleaks (detect hardcoded secrets)
+        entry: gitleaks git --pre-commit --staged --redact --verbose
+        language: system
+        pass_filenames: false
