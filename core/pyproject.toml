@@ -1,0 +1,55 @@
+[project]
+name = "arango-memory"
+version = "0.1.0"
+description = "Agentic memory core for ArangoDB — ingestion, retrieval, consolidation, decay"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "python-arango>=8.1.0",
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.32.0",
+    "pydantic>=2.9.0",
+    "pydantic-settings>=2.6.0",
+    "httpx>=0.27.0",
+    "openai>=1.54.0",
+    "anthropic>=0.39.0",
+    "tiktoken>=0.8.0",
+    "opentelemetry-api>=1.28.0",
+    "opentelemetry-sdk>=1.28.0",
+]
+
+[project.optional-dependencies]
+extraction = [
+    "spacy>=3.8.0",
+    "gliner>=0.2.0",
+]
+dev = [
+    "pytest>=8.3.0",
+    "pytest-asyncio>=0.24.0",
+    "testcontainers>=4.8.0",
+    "ruff>=0.7.0",
+    "mypy>=1.13.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/arango_memory"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]

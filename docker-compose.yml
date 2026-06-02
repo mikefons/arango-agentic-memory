@@ -1,0 +1,39 @@
+# Local dev: ArangoDB + Python core sidecar.
+# ArangoDB v3.12.9+ is required for vector-index auto-training (see docs/DESIGN.md §6).
+services:
+  arangodb:
+    image: arangodb/arangodb:3.12.9
+    container_name: arango-memory-db
+    environment:
+      ARANGO_ROOT_PASSWORD: ${ARANGO_PASSWORD:-changeme}
+    # --vector-index permanently enables Faiss IVF support (DESIGN.md §5).
+    command: ["arangod", "--experimental-vector-index=true"]
+    ports:
+      - "8529:8529"
+    volumes:
+      - arango-data:/var/lib/arangodb3
+    healthcheck:
+      test: ["CMD", "arangosh", "--server.password", "${ARANGO_PASSWORD:-changeme}",
+             "--javascript.execute-string", "db._version()"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  core:
+    build:
+      context: ./core
+      dockerfile: Dockerfile
+    container_name: arango-memory-core
+    env_file: .env
+    environment:
+      ARANGO_URL: http://arangodb:8529
+      CORE_HOST: 0.0.0.0
+      CORE_PORT: 8080
+    ports:
+      - "8080:8080"
+    depends_on:
+      arangodb:
+        condition: service_healthy
+
+volumes:
+  arango-data:
