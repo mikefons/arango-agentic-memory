@@ -23,22 +23,30 @@ src/arango_memory/
 
 ## Develop
 
+Use the `Makefile` — it bakes in the two env settings every command needs
+(relocated venv + `PYTHONPATH=src`), so you don't have to remember them:
+
 ```bash
-uv sync --extra dev
-# PYTHONPATH=src makes the package importable regardless of editable-install
-# state (uv's src-layout editable .pth can be flaky across re-syncs).
-PYTHONPATH=src uv run uvicorn arango_memory.api.app:app --reload --port 8080
-uv run pytest                       # pythonpath=src configured in pyproject
-uv run ruff check . && uv run mypy src
+make sync     # install/update deps (into ~/.venvs/arango-memory)
+make dev      # run the core API with autoreload on :8080
+make check    # connection/round-trip probe
+make test     # pytest
+make ci       # lint + type + test
 ```
 
-> **iCloud caveat:** if this repo lives under an iCloud-synced `Documents`
-> folder, iCloud creates `name 2.ext` conflict copies inside `.venv`, which can
-> corrupt packages (e.g. a duplicate `tiktoken_ext/openai_public 2.py` breaks
-> tiktoken). Keep the venv out of the synced tree:
-> `export UV_PROJECT_ENVIRONMENT="$HOME/.venvs/arango-memory"` before `uv sync`.
-> Quick repair if it happens: `find .venv -name '* [0-9].*' -delete` or rebuild
-> with `rm -rf .venv && uv sync --extra dev`.
+For ad-hoc `uv` commands outside make, export the same venv path first:
+
+```bash
+export UV_PROJECT_ENVIRONMENT="$HOME/.venvs/arango-memory"
+uv run --no-sync pytest
+```
+
+> **Why the relocated venv:** if this repo lives under an iCloud-synced
+> `Documents` folder, iCloud creates `name 2.ext` conflict copies inside the
+> virtualenv, which corrupt packages (e.g. a duplicate
+> `tiktoken_ext/openai_public 2.py` breaks tiktoken). Keeping the venv at
+> `$HOME/.venvs/arango-memory` (outside the synced tree) avoids this entirely.
+> If you ever see corruption: `make clean-venv`.
 
 ## Connection targets (local Docker vs ArangoGraph)
 
