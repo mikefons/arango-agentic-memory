@@ -2,10 +2,17 @@ name: gitleaks
 
 # Server-side secret scanning — runs independently of local pre-commit hooks,
 # so secrets are caught even if a contributor skipped `pre-commit install`.
+#
+# Runs the gitleaks binary directly (pinned to match the local hook version)
+# rather than gitleaks-action@v2, which builds a `<commit>^..<commit>` diff
+# range that fails on a repo's initial commit (no parent revision).
 on:
   push:
   pull_request:
   workflow_dispatch:
+
+env:
+  GITLEAKS_VERSION: 8.30.1
 
 jobs:
   scan:
@@ -14,10 +21,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0 # full history so commits are scanned, not just the tip
-      - name: gitleaks
-        uses: gitleaks/gitleaks-action@v2
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # GITLEAKS_LICENSE is only required for GitHub organizations.
-          # This is a personal repo, so no license is needed.
+          fetch-depth: 0 # full history so all commits are scanned
+
+      - name: Install gitleaks
+        run: |
+          curl -sSfL \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" \
+            | tar -xz -C /usr/local/bin gitleaks
+          gitleaks version
+
+      - name: Scan git history for secrets
+        run: gitleaks git . --redact --verbose --exit-code 1
