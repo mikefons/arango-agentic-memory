@@ -1,0 +1,23 @@
+name: gitleaks
+
+# Server-side secret scanning — runs independently of local pre-commit hooks,
+# so secrets are caught even if a contributor skipped `pre-commit install`.
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  scan:
+    name: Scan for secrets
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # full history so commits are scanned, not just the tip
+      - name: gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # GITLEAKS_LICENSE is only required for GitHub organizations.
+          # This is a personal repo, so no license is needed.
