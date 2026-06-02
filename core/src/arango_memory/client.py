@@ -7,7 +7,7 @@ token (ArangoGraph) to basic auth (local).
 
 from __future__ import annotations
 
-from arango import ArangoClient
+from arango import ArangoClient  # type: ignore[attr-defined]
 from arango.database import StandardDatabase
 
 from .config import Settings, settings
