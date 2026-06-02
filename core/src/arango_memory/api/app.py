@@ -1,13 +1,13 @@
 """FastAPI app exposing the core memory API (DESIGN.md §19).
 
-Step 0 scaffold: defines the request/response contract and wires the ArangoDB
-client lifecycle. Endpoint bodies are stubs that return shape-correct responses
-so the Vercel adapter can be developed against a stable contract. Pipeline
-logic lands in later steps.
+Step 0 walking skeleton: minimal `/v1/store` (episode + memory) and
+`/v1/retrieve` (BM25 + token-budgeted assembly), wired over the ArangoDB
+client lifecycle. Enrichment, lifecycle, and security land in later steps.
 """
 
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import Literal
 
@@ -16,14 +16,17 @@ from pydantic import BaseModel, Field
 
 from ..client import ArangoMemoryClient
 from ..config import settings
+from ..ingest.store import store
+from ..retrieve.search import retrieve
+from ..schema.collections import ensure_schema
 
 client = ArangoMemoryClient()
 
 
 @asynccontextmanager
-async def lifespan(app: FastAPI):
-    client.connect()
-    # TODO(step-0): ensure_schema() — collections, view, vector index (DESIGN.md §6)
+async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+    db = client.connect()
+    ensure_schema(db)
     yield
 
 
@@ -65,9 +68,20 @@ class StoreResponse(BaseModel):
 
 
 @app.post("/v1/store", response_model=StoreResponse)
-async def store(req: StoreRequest) -> StoreResponse:
-    # TODO(step-0): run minimal ingestion (episode + memory, idempotency key)
-    return StoreResponse()
+async def store_endpoint(req: StoreRequest) -> StoreResponse:
+    result = store(
+        client.db,
+        content=req.content,
+        tenant_id=req.ctx.tenant_id,
+        agent_id=req.ctx.agent_id,
+        session_id=req.ctx.session_id,
+        turn_index=req.turn_index,
+    )
+    return StoreResponse(
+        episode_id=result.episode_id,
+        memory_ids=result.memory_ids,
+        entity_ids=result.entity_ids,
+    )
 
 
 # ── /v1/retrieve ──────────────────────────────────────────
@@ -90,6 +104,17 @@ class RetrieveResponse(BaseModel):
 
 
 @app.post("/v1/retrieve", response_model=RetrieveResponse)
-async def retrieve(req: RetrieveRequest) -> RetrieveResponse:
-    # TODO(step-0): run minimal retrieval (BM25 + naive assembly)
-    return RetrieveResponse()
+async def retrieve_endpoint(req: RetrieveRequest) -> RetrieveResponse:
+    result = retrieve(
+        client.db,
+        query=req.query,
+        tenant_id=req.ctx.tenant_id,
+        agent_id=req.ctx.agent_id,
+        k=req.opts.k,
+        max_memory_tokens=req.opts.max_memory_tokens,
+    )
+    return RetrieveResponse(
+        context=result.context,
+        hits=[MemoryHit(text=h.text, score=h.score, source=h.source) for h in result.hits],
+        tokens_injected=result.tokens_injected,
+    )

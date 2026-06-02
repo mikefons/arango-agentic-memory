@@ -1,8 +1,10 @@
 # Local dev: ArangoDB + Python core sidecar.
-# ArangoDB v3.12.9+ is required for vector-index auto-training (see docs/DESIGN.md §6).
+# NOTE: Step 0 uses BM25-only retrieval, so any 3.12.4+ image works. The vector
+# index was introduced in 3.12.4; auto-training (DESIGN.md §6/§7) needs 3.12.9+,
+# which is not yet published on Docker Hub — bump this tag when it lands.
 services:
   arangodb:
-    image: arangodb/arangodb:3.12.9
+    image: arangodb/arangodb:3.12.4
     container_name: arango-memory-db
     environment:
       ARANGO_ROOT_PASSWORD: ${ARANGO_PASSWORD:-changeme}
