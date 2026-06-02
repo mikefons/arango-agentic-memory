@@ -1,0 +1,82 @@
+"""HTTP contract tests for the core API — the TS↔Python seam (DESIGN.md §19, §22).
+
+Exercises the FastAPI app built via `create_app(client)` against a real
+container, pinning the request/response shapes the Vercel adapter depends on.
+"""
+
+from __future__ import annotations
+
+import time
+from collections.abc import Iterator
+
+import pytest
+from fastapi.testclient import TestClient
+
+from arango_memory.api.app import create_app
+from arango_memory.client import ArangoMemoryClient
+
+
+@pytest.fixture
+def api(client: ArangoMemoryClient) -> Iterator[TestClient]:
+    # `with` triggers the lifespan (connect + ensure_schema) against the test db.
+    with TestClient(create_app(client)) as test_client:
+        yield test_client
+
+
+def test_health(api: TestClient) -> None:
+    resp = api.get("/health")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "ok"
+    assert body["arango"] is True
+    assert body["mode"] == "lite"
+
+
+def test_store_response_shape(api: TestClient) -> None:
+    resp = api.post(
+        "/v1/store",
+        json={"content": "alpha bravo charlie", "ctx": {"tenant_id": "t1", "agent_id": "a1"}},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["episode_id"]
+    assert len(body["memory_ids"]) == 1
+    assert body["entity_ids"] == []
+
+
+def test_store_then_retrieve_over_http(api: TestClient) -> None:
+    ctx = {"tenant_id": "t_http", "agent_id": "a_http"}
+    api.post("/v1/store", json={"content": "delta echo foxtrot", "ctx": ctx})
+
+    body: dict[str, object] = {}
+    for _ in range(20):
+        resp = api.post("/v1/retrieve", json={"query": "echo foxtrot", "ctx": ctx})
+        assert resp.status_code == 200
+        body = resp.json()
+        if body["hits"]:
+            break
+        time.sleep(0.25)
+
+    assert body["hits"], "stored memory not retrievable over HTTP"
+    hit = body["hits"][0]  # type: ignore[index]
+    assert set(hit.keys()) == {"text", "score", "source"}
+    assert body["tokens_injected"] > 0
+    assert isinstance(body["context"], str)
+
+
+def test_retrieve_empty_for_unknown_tenant(api: TestClient) -> None:
+    resp = api.post(
+        "/v1/retrieve",
+        json={"query": "anything", "ctx": {"tenant_id": "ghost", "agent_id": "nobody"}},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["hits"] == []
+    assert body["context"] == ""
+    assert body["tokens_injected"] == 0
+
+
+def test_store_validation_error(api: TestClient) -> None:
+    # Missing required `content` → 422 from FastAPI validation.
+    resp = api.post("/v1/store", json={"ctx": {"tenant_id": "t1", "agent_id": "a1"}})
+    assert resp.status_code == 422

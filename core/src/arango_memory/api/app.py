@@ -11,7 +11,7 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import Literal
 
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI, Request
 from pydantic import BaseModel, Field
 
 from ..client import ArangoMemoryClient
@@ -20,17 +20,10 @@ from ..ingest.store import store
 from ..retrieve.search import retrieve
 from ..schema.collections import ensure_schema
 
-client = ArangoMemoryClient()
 
-
-@asynccontextmanager
-async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-    db = client.connect()
-    ensure_schema(db)
-    yield
-
-
-app = FastAPI(title="arango-memory core", version="0.1.0", lifespan=lifespan)
+def get_client(request: Request) -> ArangoMemoryClient:
+    """Resolve the request-scoped Arango client from app state."""
+    return request.app.state.client  # type: ignore[no-any-return]
 
 
 # ── Shared models ─────────────────────────────────────────
@@ -48,12 +41,6 @@ class RetrieveOptions(BaseModel):
     k: int = settings.k
 
 
-# ── /health ───────────────────────────────────────────────
-@app.get("/health")
-async def health() -> dict[str, object]:
-    return {"status": "ok", "arango": client.ping(), "mode": settings.memory_mode}
-
-
 # ── /v1/store ─────────────────────────────────────────────
 class StoreRequest(BaseModel):
     content: str
@@ -65,23 +52,6 @@ class StoreResponse(BaseModel):
     episode_id: str | None = None
     memory_ids: list[str] = Field(default_factory=list)
     entity_ids: list[str] = Field(default_factory=list)
-
-
-@app.post("/v1/store", response_model=StoreResponse)
-async def store_endpoint(req: StoreRequest) -> StoreResponse:
-    result = store(
-        client.db,
-        content=req.content,
-        tenant_id=req.ctx.tenant_id,
-        agent_id=req.ctx.agent_id,
-        session_id=req.ctx.session_id,
-        turn_index=req.turn_index,
-    )
-    return StoreResponse(
-        episode_id=result.episode_id,
-        memory_ids=result.memory_ids,
-        entity_ids=result.entity_ids,
-    )
 
 
 # ── /v1/retrieve ──────────────────────────────────────────
@@ -103,8 +73,32 @@ class RetrieveResponse(BaseModel):
     tokens_injected: int = 0
 
 
-@app.post("/v1/retrieve", response_model=RetrieveResponse)
-async def retrieve_endpoint(req: RetrieveRequest) -> RetrieveResponse:
+# ── Route handlers ────────────────────────────────────────
+async def health(client: ArangoMemoryClient = Depends(get_client)) -> dict[str, object]:
+    return {"status": "ok", "arango": client.ping(), "mode": settings.memory_mode}
+
+
+async def store_endpoint(
+    req: StoreRequest, client: ArangoMemoryClient = Depends(get_client)
+) -> StoreResponse:
+    result = store(
+        client.db,
+        content=req.content,
+        tenant_id=req.ctx.tenant_id,
+        agent_id=req.ctx.agent_id,
+        session_id=req.ctx.session_id,
+        turn_index=req.turn_index,
+    )
+    return StoreResponse(
+        episode_id=result.episode_id,
+        memory_ids=result.memory_ids,
+        entity_ids=result.entity_ids,
+    )
+
+
+async def retrieve_endpoint(
+    req: RetrieveRequest, client: ArangoMemoryClient = Depends(get_client)
+) -> RetrieveResponse:
     result = retrieve(
         client.db,
         query=req.query,
@@ -118,3 +112,33 @@ async def retrieve_endpoint(req: RetrieveRequest) -> RetrieveResponse:
         hits=[MemoryHit(text=h.text, score=h.score, source=h.source) for h in result.hits],
         tokens_injected=result.tokens_injected,
     )
+
+
+# ── App factory ───────────────────────────────────────────
+def create_app(client: ArangoMemoryClient | None = None) -> FastAPI:
+    """Build the FastAPI app around a (possibly injected) Arango client.
+
+    Tests pass a client configured for an ephemeral container; production and
+    `make dev` call with no argument and get the env-driven default.
+    """
+    mem_client = client or ArangoMemoryClient()
+
+    @asynccontextmanager
+    async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+        db = mem_client.connect()
+        ensure_schema(db)
+        yield
+
+    app = FastAPI(title="arango-memory core", version="0.1.0", lifespan=lifespan)
+    app.state.client = mem_client
+
+    app.add_api_route("/health", health, methods=["GET"])
+    app.add_api_route("/v1/store", store_endpoint, methods=["POST"], response_model=StoreResponse)
+    app.add_api_route(
+        "/v1/retrieve", retrieve_endpoint, methods=["POST"], response_model=RetrieveResponse
+    )
+    return app
+
+
+# Default app for uvicorn (`make dev`) and production.
+app = create_app()
