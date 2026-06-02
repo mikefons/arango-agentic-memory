@@ -1,0 +1,40 @@
+{
+  "samples": [
+    {
+      "sample_id": "locomo_smoke_1",
+      "sessions": [
+        [
+          {"speaker": "Alice", "text": "I just adopted a golden retriever puppy named Biscuit."},
+          {"speaker": "Bob", "text": "That's wonderful! How old is Biscuit?"},
+          {"speaker": "Alice", "text": "He's twelve weeks old and loves chasing tennis balls."}
+        ],
+        [
+          {"speaker": "Alice", "text": "I started a new job as a data engineer at Vertex Logistics last Monday."},
+          {"speaker": "Bob", "text": "Congrats! Is the office downtown?"},
+          {"speaker": "Alice", "text": "Yes, the Vertex Logistics office is on Fifth Avenue in Seattle."}
+        ],
+        [
+          {"speaker": "Bob", "text": "I'm planning a trip to Kyoto in October for the autumn leaves."},
+          {"speaker": "Alice", "text": "You should visit the Fushimi Inari shrine while you're there."}
+        ]
+      ],
+      "qa": [
+        {
+          "question": "What is the name of Alice's dog?",
+          "answer": "Biscuit",
+          "gold_fact": "golden retriever puppy named Biscuit"
+        },
+        {
+          "question": "Where does Alice work?",
+          "answer": "Vertex Logistics",
+          "gold_fact": "data engineer at Vertex Logistics"
+        },
+        {
+          "question": "Which city is Bob planning to visit?",
+          "answer": "Kyoto",
+          "gold_fact": "trip to Kyoto in October"
+        }
+      ]
+    }
+  ]
+}

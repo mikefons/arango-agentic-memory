@@ -25,8 +25,13 @@ def ensure_schema(db: StandardDatabase) -> None:
 
     # Unique idempotency index on episodes + memories (DESIGN.md §5).
     for name in ("episodes", "memories"):
-        db.collection(name).add_persistent_index(
-            fields=["idempotency_key"], unique=True, name="idx_idempotency"
+        db.collection(name).add_index(
+            {
+                "type": "persistent",
+                "fields": ["idempotency_key"],
+                "unique": True,
+                "name": "idx_idempotency",
+            }
         )
 
     _ensure_search_view(db)
