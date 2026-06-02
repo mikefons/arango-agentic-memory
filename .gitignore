@@ -1,9 +1,49 @@
-# Environment / secrets — NEVER commit
+# ─── Secrets / credentials — NEVER commit ───────────────────
+# Env files (allow only the committed template)
 .env
 .env.*
+*.env
 !.env.example
+env/.env*
+
+# Keys, certificates, tokens
 *.pem
 *.key
+*.crt
+*.cer
+*.p12
+*.pfx
+*.keystore
+*.jks
+id_rsa
+id_ed25519
+*.ppk
+
+# Cloud / provider credentials
+.aws/
+.gcp/
+*service-account*.json
+*-credentials.json
+*credentials*.json
+gha-creds-*.json
+.netrc
+.npmrc
+.pypirc
+
+# ArangoGraph / database connection dumps
+*.dump
+secrets.*
+*secret*
+*.secrets
+config.local.*
+local.settings.json
+
+# API key / token files commonly created by tools
+.anthropic
+.openai
+*.token
+*token*.txt
+.notebooklm/
 
 # Python
 __pycache__/
