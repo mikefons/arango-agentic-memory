@@ -18,7 +18,13 @@ class ArangoMemoryClient:
 
     def __init__(self, config: Settings | None = None) -> None:
         self._config = config or settings
-        self._client = ArangoClient(hosts=self._config.arango_url)
+        # verify_override controls TLS verification for HTTPS (ArangoGraph).
+        # Harmless for plain-http local connections.
+        self._client = ArangoClient(
+            hosts=self._config.arango_url,
+            verify_override=self._config.arango_tls_verify,
+            request_timeout=self._config.arango_request_timeout,
+        )
         self._db: StandardDatabase | None = None
 
     @property
@@ -57,3 +63,13 @@ class ArangoMemoryClient:
             return True
         except Exception:
             return False
+
+    def describe(self) -> dict[str, str]:
+        """Connection metadata for diagnostics (no secrets)."""
+        return {
+            "target": self._config.arango_target,
+            "url": self._config.arango_url,
+            "database": self._config.arango_db,
+            "auth": "bearer_token" if self._config.arango_bearer_token else "basic",
+            "tls_verify": str(self._config.arango_tls_verify),
+        }
