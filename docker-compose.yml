@@ -1,15 +1,16 @@
 # Local dev: ArangoDB + Python core sidecar.
-# NOTE: Step 0 uses BM25-only retrieval, so any 3.12.4+ image works. The vector
-# index was introduced in 3.12.4; auto-training (DESIGN.md §6/§7) needs 3.12.9+,
-# which is not yet published on Docker Hub — bump this tag when it lands.
+# Enterprise 3.12.9.1 — needed for vector-index auto-training (DESIGN.md §6/§7).
+# Requires ARANGO_LICENSE_KEY (set it in .env; never commit it).
 services:
   arangodb:
-    image: arangodb/arangodb:3.12.4
+    image: arangodb/enterprise:3.12.9.1
     container_name: arango-memory-db
     environment:
       ARANGO_ROOT_PASSWORD: ${ARANGO_PASSWORD:-changeme}
-    # --vector-index permanently enables Faiss IVF support (DESIGN.md §5).
-    command: ["arangod", "--experimental-vector-index=true"]
+      ARANGO_LICENSE_KEY: ${ARANGO_LICENSE_KEY:-}
+    # --vector-index enables Faiss IVF support (DESIGN.md §5).
+    # (Renamed from --experimental-vector-index in 3.12.9.)
+    command: ["arangod", "--vector-index=true"]
     ports:
       - "8529:8529"
     volumes:

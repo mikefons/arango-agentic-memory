@@ -53,3 +53,6 @@ ignore_missing_imports = true
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+# Import the package from src directly — robust regardless of editable-install
+# state (uv's editable .pth for src-layout can be flaky across re-syncs).
+pythonpath = ["src"]

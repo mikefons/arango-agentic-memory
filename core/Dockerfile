@@ -9,5 +9,9 @@ COPY src ./src
 
 RUN uv sync --no-dev
 
+# Import from src directly so uvicorn finds the package regardless of the
+# editable-install state (uv's src-layout editable .pth can be flaky).
+ENV PYTHONPATH=/app/src
+
 EXPOSE 8080
-CMD ["uv", "run", "uvicorn", "arango_memory.api.app:app", "--host", "0.0.0.0", "--port", "8080"]
+CMD ["uv", "run", "--no-sync", "uvicorn", "arango_memory.api.app:app", "--host", "0.0.0.0", "--port", "8080"]
