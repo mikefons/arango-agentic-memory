@@ -23,10 +23,14 @@ v1 ships the core + Vercel adapter only. MCP, LangChain/LangGraph, and CrewAI ad
 ## Quick start (local dev)
 
 ```bash
-cp .env.example .env          # fill in OPENAI_API_KEY, ANTHROPIC_API_KEY
-docker compose up -d          # ArangoDB + Python core sidecar
+cp .env.example .env          # OPENAI_API_KEY, ANTHROPIC_API_KEY, ARANGO_LICENSE_KEY
+docker compose up -d          # ArangoDB (Enterprise) + Python core sidecar
 # core API: http://localhost:8080  ·  ArangoDB UI: http://localhost:8529
 ```
+
+> Uses the ArangoDB **Enterprise** image (`arangodb/enterprise:3.12.9.1`) for
+> vector-index auto-training. Set `ARANGO_LICENSE_KEY` in `.env`; it runs in
+> evaluation mode without one.
 
 ### Secret-scanning hook (one-time per clone)
 

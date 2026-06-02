@@ -25,7 +25,9 @@ src/arango_memory/
 
 ```bash
 uv sync --extra dev
-uv run uvicorn arango_memory.api.app:app --reload --port 8080
-uv run pytest
+# PYTHONPATH=src makes the package importable regardless of editable-install
+# state (uv's src-layout editable .pth can be flaky across re-syncs).
+PYTHONPATH=src uv run uvicorn arango_memory.api.app:app --reload --port 8080
+uv run pytest                       # pythonpath=src configured in pyproject
 uv run ruff check . && uv run mypy src
 ```

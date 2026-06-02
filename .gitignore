@@ -74,6 +74,8 @@ packages/*/dist/
 
 # OS / editor
 .DS_Store
+# iCloud/Finder conflict copies (this tree may live under synced Documents)
+* [0-9].*
 *.swp
 .idea/
 .vscode/*
