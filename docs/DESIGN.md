@@ -1,9 +1,11 @@
 # ArangoDB Agentic Memory System — Design Specification
 
-> **Status:** Pre-implementation. Authoritative reference before any code is written.
-> **Last updated:** 2026-06-02 (rev 2 — post-reassessment)
+> **Status:** Step 0 (walking skeleton) implemented and verified. Authoritative reference.
+> **Last updated:** 2026-06-02 (rev 3 — post Step 0)
 >
 > **Rev 2 decisions:** Python-first core with a thin TypeScript client · v1 scope is Vercel-only · build a walking skeleton first, then a test/eval harness, then thicken each layer.
+>
+> **Rev 3 updates (from Step 0):** ArangoDB image is **Enterprise 3.12.9.1** (Community tops out at 3.12.4.3; runs in evaluation mode without a license) · vector-index flag renamed `--experimental-vector-index` → `--vector-index` · **two configurable connection targets** (local Docker + ArangoGraph) via `ARANGO_TARGET` + a `check` probe · Vercel middleware uses `LanguageModelV2Middleware` (`ai@5` + `@ai-sdk/provider@2`), not V4 · dev tooling/infra captured in §25 · build sequence Step 0 marked done.
 
 ---
 
@@ -33,6 +35,7 @@
 22. [Testing and Eval Harness](#22-testing-and-eval-harness)
 23. [Benchmarking Strategy](#23-benchmarking-strategy)
 24. [Build Sequence](#24-build-sequence)
+25. [Development, Tooling & Infrastructure](#25-development-tooling--infrastructure)
 
 ---
 
@@ -110,8 +113,13 @@ arango-agentic-memory/
 │   └── adapters/          ← per-adapter guides (future)
 ├── core/                  ← Python core (the heart of the system)
 │   ├── pyproject.toml     ← uv-managed
+│   ├── Makefile           ← dev tasks; bakes in relocated venv + PYTHONPATH (§25)
+│   ├── Dockerfile         ← uv-based image (PYTHONPATH=/app/src)
 │   └── src/arango_memory/
-│       ├── client.py      ← ArangoDB client + connection abstraction
+│       ├── client.py      ← ArangoDB client + connection abstraction (TLS, targets)
+│       ├── config.py      ← env-driven Settings (target, mode, tls, budgets)
+│       ├── models.py      ← record helpers (idempotency_key, timestamps)
+│       ├── check.py       ← connection/round-trip probe CLI (both targets)
 │       ├── schema/        ← collection/view/index definitions, migrations
 │       ├── ingest/        ← PII redaction, extraction, prospective indexing, writes
 │       ├── retrieve/      ← HyDE, hybrid search, fusion, reranking, budget
@@ -119,10 +127,12 @@ arango-agentic-memory/
 │       ├── api/           ← local/service HTTP API (FastAPI) — the boundary
 │       └── telemetry/     ← OpenTelemetry instrumentation
 ├── packages/
-│   └── vercel/            ← thin TypeScript client (LanguageModelV4Middleware)
-│       └── package.json   ← pnpm
-├── docker-compose.yml     ← ArangoDB + Python core sidecar for local dev
+│   └── vercel/            ← thin TypeScript client (LanguageModelV2Middleware)
+│       └── package.json   ← pnpm (npm in practice; pnpm not installed locally)
+├── .github/workflows/     ← gitleaks secret-scanning CI (§25)
+├── docker-compose.yml     ← ArangoDB (Enterprise) + Python core sidecar for local dev
 ├── .env.example
+├── .pre-commit-config.yaml ← gitleaks pre-commit hook (§25)
 └── README.md
 
 # Deferred to v2 (not created in v1):
@@ -131,8 +141,9 @@ arango-agentic-memory/
 #   adapters/crewai/       ← Python CrewAI adapter
 ```
 
-**Package managers:** `uv` for Python, `pnpm` for TypeScript.
+**Package managers:** `uv` for Python, `pnpm`/`npm` for TypeScript.
 **Publishing (v1):** `arango-memory` (PyPI, the core), `@arango-memory/vercel` (npm).
+**Dev venv:** lives at `$HOME/.venvs/arango-memory` (outside iCloud), driven by the `core/Makefile` — see §25.
 
 ---
 
@@ -240,15 +251,24 @@ owned_by       memory/entity/step → tenant
 }
 ```
 
+**Idempotency implementation (Step 0):** `idempotency_key = sha256(tenant_id ⨂ agent_id ⨂ session_id ⨂ turn_index ⨂ content)`. For `episodes`/`memories` this hash is used as the document `_key` (memory uses `{key}-mem`), and inserts use `overwrite_mode="ignore"` — so a retried/duplicate write is a no-op rather than a duplicate. A unique persistent index on `idempotency_key` backs this.
+
 ### ArangoSearch View
+
+The view indexes memory `text` (and entity `name`/`summary`) for BM25, plus
+`tenant_id`/`agent_id` with the `identity` analyzer so tenant scoping is applied
+inside the `SEARCH` clause (not as a post-filter). Step 0 links `memories`;
+`entities` links are added when semantic retrieval lands.
 
 ```json
 {
   "name": "memory_search_view",
   "type": "arangosearch",
   "links": {
-    "memories": { "fields": { "text": { "analyzers": ["text_en"] } } },
-    "entities": { "fields": { "name": { "analyzers": ["text_en"] },
+    "memories": { "fields": { "text":      { "analyzers": ["text_en"] },
+                              "tenant_id": { "analyzers": ["identity"] },
+                              "agent_id":  { "analyzers": ["identity"] } } },
+    "entities": { "fields": { "name":    { "analyzers": ["text_en"] },
                               "summary": { "analyzers": ["text_en"] } } }
   },
   "primarySort": [{ "field": "ingestion_time", "direction": "desc" }],
@@ -261,16 +281,27 @@ owned_by       memory/entity/step → tenant
 
 ## 6. ArangoDB Infrastructure
 
-### Target Version
-**v3.12.9+** — required for vector-index auto-training (create index before data load).
+### Image & Version (decided Rev 3)
+**`arangodb/enterprise:3.12.9.1`.** Findings from Step 0:
+- The **3.12.9.x line is published only as `arangodb/enterprise`** — the Community image (`arangodb/arangodb`) tops out at `3.12.4.3` on Docker Hub.
+- The Enterprise image **starts in evaluation mode without a license** ("ready for business"); set `ARANGO_LICENSE_KEY` (via `.env`) for licensed/full use. Never commit the key.
+- **Vector-index startup flag renamed** `--experimental-vector-index` → `--vector-index` in 3.12.9 (the old name still works with a deprecation warning). Compose uses `--vector-index=true`; startup logs confirm the `VectorIndex` column family is created.
+- 3.12.9+ is the target because it gives vector-index auto-training (create index before data load).
 
-### Deployment Targets
-Connection-string abstraction; same code targets both:
-- **ArangoDB Cloud (ArangoGraph)** — managed, production
-- **Self-hosted / Docker** — local dev and on-prem (see `docker-compose.yml`)
+### Connection Targets (decided Rev 3)
+Two configurable targets, selected entirely via environment — same code path for both:
+
+| `ARANGO_TARGET` | Where | Auth | TLS |
+|---|---|---|---|
+| `local` (default) | Docker container (`docker-compose`) | basic (root/password) | plain http |
+| `arangograph` | Arango's managed cloud | basic **or** bearer/JWT token | https, `ARANGO_TLS_VERIFY=true` |
+
+- `client.py` passes `verify_override` (from `ARANGO_TLS_VERIFY`) and `request_timeout` to the ArangoDB client; chooses bearer-token auth if `ARANGO_BEARER_TOKEN` is set, else basic.
+- **Connection probe:** `python -m arango_memory.check` connects, bootstraps schema, runs a real store→retrieve round-trip under an isolated `__healthcheck__` tenant, then cleans up. Works against either target; used to validate cloud connectivity.
+- **ArangoGraph caveat:** it's managed, so the `--vector-index` startup flag is **not user-settable** there — confirm vector-index availability on the chosen tier before relying on it for production (the BM25 path works regardless; §7).
 
 ### Startup Sequence
-1. Connect, verify database
+1. Connect, verify database (auto-create if missing)
 2. Migration runner — check `_meta.schema_version`, apply pending scripts
 3. Ensure collections exist
 4. Ensure ArangoSearch view exists
@@ -687,14 +718,21 @@ const model = wrapLanguageModel({
 const result = await streamText({ model, prompt }) // drop-in
 ```
 
-### Middleware (`LanguageModelV4Middleware`, specificationVersion `'v3'`)
+### Middleware type (corrected Rev 3)
+`ai@5` exposes the middleware as **`LanguageModelV2Middleware`** (the lower-level
+`LanguageModelV2CallOptions`/`LanguageModelV2Prompt` types come from
+`@ai-sdk/provider@2`). The earlier "V4 / specificationVersion `v3`" note was from
+preliminary docs and does not match the shipped `ai@5` API.
+
 ```
 transformParams (BEFORE):
-  → POST {coreUrl}/v1/retrieve  → inject assembled context into system prompt
-  → on core/network failure: pass through with no memory (§15)
+  → POST {coreUrl}/v1/retrieve (AbortController timeout, default 800ms)
+  → inject assembled context as a leading system message
+  → on core/network failure OR timeout: pass through with no memory (§15)
 
 wrapGenerate / wrapStream (AFTER):
-  → enqueue POST {coreUrl}/v1/store (durable, non-blocking)
+  → POST {coreUrl}/v1/store (non-blocking; Step 0 is best-effort fire-and-forget,
+    upgraded to the durable queue in Step 3 — §15)
   → capture tool traces → procedural memory
   → return immediately
 ```
@@ -718,9 +756,10 @@ Not built in v1. The schema and core API are designed to support them without re
 *(New in Rev 2 — sequenced immediately after the walking skeleton.)*
 
 ### Unit / integration
-- **ArangoDB via testcontainers** — spin a real v3.12.9+ instance per test session; no mocking the database.
+- **ArangoDB via testcontainers** — spin a real `arangodb/enterprise:3.12.9.1` instance per test session (evaluation mode, no license needed); no mocking the database. Pass `--vector-index=true` for tests that exercise vectors.
 - Fixtures for tenants/agents/sessions; deterministic seed data.
 - Contract tests for the core HTTP API (the TS↔Python seam) so the adapter and core can't drift.
+- Imports resolve via `pythonpath=["src"]` (pytest config), independent of the editable install (§25).
 
 ### Eval harness (dev loop)
 - Minimal **LoCoMo-style** runner: load multi-session conversations, ingest, query, score F1 / Recall@k / Deducible Score.
@@ -728,9 +767,10 @@ Not built in v1. The schema and core API are designed to support them without re
 - Lite vs full mode compared on the same slice to quantify the quality/cost trade-off.
 
 ### CI
-- Lint + type (ruff/mypy for Python, eslint/tsc for TS)
+- Lint + type (ruff/mypy for Python, eslint/tsc for TS) — locally via `make ci`
 - Unit + integration (testcontainers)
 - Eval smoke (small slice, regression gate on F1)
+- Secret scanning (gitleaks) already runs server-side on every push/PR (§25)
 
 ---
 
@@ -763,15 +803,18 @@ The rev 1 single 200ms target was unachievable with LLM calls in the path; split
 
 Walking skeleton first, then harness, then thicken. Each step is independently runnable.
 
-### Step 0 — Walking skeleton (lite mode, vertical slice)
-Thinnest end-to-end loop, no breadth:
-- `docker-compose` with ArangoDB + Python core
-- Core: minimal schema (episodes, memories, entities), `store` + `retrieve` (BM25 + naive vector + simple assembly), LLM-only extraction (defer spaCy/GLiNER2)
-- Vercel adapter: `transformParams` retrieve-and-inject, `wrapGenerate` durable store
-- **Done = one real `streamText` turn reads and writes memory across the TS↔Python seam**
+### Step 0 — Walking skeleton (lite mode, vertical slice) ✅ DONE
+Thinnest end-to-end loop, no breadth. Delivered:
+- `docker-compose`: ArangoDB Enterprise 3.12.9.1 + Python core sidecar
+- Core: minimal schema (`episodes`/`memories`/`entities` + BM25 view + idempotency indexes), `store` (WORM episode + episodic memory, idempotency-keyed), `retrieve` (tenant/agent-scoped BM25 + tiktoken token-budgeted assembly), FastAPI `/health` + `/v1/store` + `/v1/retrieve`
+- Vercel adapter: `arangoMemory()` middleware — retrieve+inject in `transformParams`, best-effort store in `wrapGenerate`/`wrapStream`, memory-less degradation on failure
+- Connection probe (`check.py`) and two targets (local + ArangoGraph, §6)
+- **Verified** vs real Enterprise 3.12.9.1: store→BM25 retrieve round-trip, idempotency (3 docs from 4 calls), tenant isolation, ruff+mypy clean, adapter typechecks+builds
+- *Deferred within Step 0:* LLM-only entity extraction (entities collection exists but is not yet populated); a live end-to-end `streamText` turn through the seam (both halves proven independently — needs an example app + model key)
+- *Resolved along the way:* uv src-layout editable-install flakiness and iCloud `.venv` corruption (§25)
 
-### Step 1 — Test + eval harness
-testcontainers, fixtures, core HTTP contract tests, minimal LoCoMo runner, CI wiring.
+### Step 1 — Test + eval harness ← NEXT
+testcontainers (Enterprise 3.12.9.1), fixtures, core HTTP contract tests, minimal LoCoMo runner, CI wiring (`make ci`).
 
 ### Step 2 — Thicken retrieval
 HyDE, RRF, MMR, graph expansion, tiered token budget, lite/full mode switch, caching.
@@ -796,4 +839,46 @@ MCP server, LangChain/LangGraph adapter, CrewAI adapter + G-Memory tiers.
 
 ---
 
-*End of Design Specification (rev 2)*
+## 25. Development, Tooling & Infrastructure
+
+Decisions about how the project is built, tested, and kept safe.
+
+### Toolchain
+- **Python:** `uv` (3.11+), `hatchling` build backend, `src/` layout. Lint `ruff`, types `mypy --strict`.
+- **TypeScript:** `pnpm`/`npm`, `tsc` strict. Adapter targets `ai@5` + `@ai-sdk/provider@2`.
+- **Containers:** Docker Compose for local ArangoDB + core sidecar.
+
+### Dev venv relocation (resolved)
+This repo lives under iCloud-synced `Documents`, which created `name 2.ext`
+conflict copies — corrupting both source files and the virtualenv (335 dup files,
+incl. a duplicate `tiktoken_ext/openai_public 2.py` that crashed tiktoken).
+Decisions:
+- The venv is relocated **outside** the synced tree to `$HOME/.venvs/arango-memory`.
+- `core/Makefile` bakes in `UV_PROJECT_ENVIRONMENT` (relocated venv) + `PYTHONPATH=src`
+  for every task (`sync`/`dev`/`check`/`test`/`lint`/`type`/`ci`/`clean-venv`), so
+  commands work regardless of the (flaky) uv src-layout editable `.pth`.
+- `.gitignore` ignores iCloud conflict copies (`* [0-9].*`).
+- pytest uses `pythonpath=["src"]` so tests never depend on the editable install.
+- Recommended (not enforced): move the repo out of iCloud, or keep using the Makefile.
+
+### Editable-install note
+uv's editable `.pth` for `src/` layout can intermittently drop off `sys.path`
+across re-syncs. We do **not** rely on it for execution — `PYTHONPATH=src`
+(Makefile, Dockerfile `ENV PYTHONPATH=/app/src`, pytest config) is the source of truth.
+
+### Secret protection (three layers)
+1. **`.gitignore`** — blocks env files, keys/certs, cloud credentials, token files; only `.env.example` is committed.
+2. **gitleaks pre-commit hook** (`.pre-commit-config.yaml`) — scans staged content for secrets pasted *inside* files. One-time `pre-commit install` per clone.
+3. **gitleaks GitHub Action** (`.github/workflows/gitleaks.yml`) — server-side scan on every push/PR, independent of local setup. Runs a pinned gitleaks binary via `gitleaks git .` (avoids the action's initial-commit diff-range bug).
+
+Never commit `ARANGO_LICENSE_KEY`, `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, or `ARANGO_BEARER_TOKEN`.
+
+### Git workflow
+- Standalone repo: `github.com/mikefons/arango-agentic-memory` (independent of the
+  `arango-demo-creator` repo whose checkout it nests inside).
+- **Feature branch → PR → squash-merge**; never push directly to `main` (except the
+  unavoidable initial bootstrap push). CI (gitleaks, later `make ci`) must be green before merge.
+
+---
+
+*End of Design Specification (rev 3)*
