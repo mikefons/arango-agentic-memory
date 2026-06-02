@@ -1,11 +1,13 @@
 # ArangoDB Agentic Memory System — Design Specification
 
-> **Status:** Step 0 (walking skeleton) implemented and verified. Authoritative reference.
-> **Last updated:** 2026-06-02 (rev 3 — post Step 0)
+> **Status:** Step 1 (test + eval harness) implemented and verified. Authoritative reference.
+> **Last updated:** 2026-06-02 (rev 4 — post Step 1)
 >
 > **Rev 2 decisions:** Python-first core with a thin TypeScript client · v1 scope is Vercel-only · build a walking skeleton first, then a test/eval harness, then thicken each layer.
 >
 > **Rev 3 updates (from Step 0):** ArangoDB image is **Enterprise 3.12.9.1** (Community tops out at 3.12.4.3; runs in evaluation mode without a license) · vector-index flag renamed `--experimental-vector-index` → `--vector-index` · **two configurable connection targets** (local Docker + ArangoGraph) via `ARANGO_TARGET` + a `check` probe · Vercel middleware uses `LanguageModelV2Middleware` (`ai@5` + `@ai-sdk/provider@2`), not V4 · dev tooling/infra captured in §25 · build sequence Step 0 marked done.
+>
+> **Rev 4 updates (from Step 1):** FastAPI core is now an **app factory** (`create_app(client=None)` + a `get_client` dependency) so tests inject a client; the module-level `app = create_app()` still serves `make dev`/prod · tests use **testcontainers** (Enterprise 3.12.9.1, eval mode) with a **fresh per-test database** for isolation · HTTP contract tests pin the TS↔Python seam via `TestClient` · the **LoCoMo runner is lite/BM25-only** for now (Recall@k + token-F1), with lite-vs-full comparison deferred to Step 2 · CI (`.github/workflows/ci.yml`) runs `make ci` · build sequence Step 1 marked done.
 
 ---
 
@@ -813,10 +815,17 @@ Thinnest end-to-end loop, no breadth. Delivered:
 - *Deferred within Step 0:* LLM-only entity extraction (entities collection exists but is not yet populated); a live end-to-end `streamText` turn through the seam (both halves proven independently — needs an example app + model key)
 - *Resolved along the way:* uv src-layout editable-install flakiness and iCloud `.venv` corruption (§25)
 
-### Step 1 — Test + eval harness ← NEXT
-testcontainers (Enterprise 3.12.9.1), fixtures, core HTTP contract tests, minimal LoCoMo runner, CI wiring (`make ci`).
+### Step 1 — Test + eval harness ✅ DONE
+testcontainers (Enterprise 3.12.9.1), fixtures, core HTTP contract tests, minimal LoCoMo runner, CI wiring (`make ci`). Delivered:
+- **App-factory refactor:** `create_app(client=None)` + `get_client` dependency replaces the import-time client singleton, so tests point the app at an ephemeral container (random port). Module-level `app = create_app()` preserved for `make dev`/prod.
+- **`conftest.py`:** session-scoped Enterprise 3.12.9.1 container (`--vector-index=true`, evaluation mode — no license); **fresh per-test database** (created/dropped each test) for isolation; tenant/agent fixtures; a `wait_for_searchable` helper for ArangoSearch eventual consistency.
+- **Integration tests:** schema idempotency (+ unique-index assertion), store→retrieve round-trip, idempotency dedupe (4 calls → 1 record), distinct turns, tenant isolation.
+- **HTTP contract tests:** `TestClient` over the factory app — health, store/retrieve shapes, empty-tenant, 422 validation — pinning the TS↔Python seam.
+- **Eval harness:** minimal LoCoMo-style runner (`arango_memory.eval`) — ingest → query → score **Recall@k + token-F1** — with a smoke dataset and a CI regression gate. **Lite/BM25 only**; lite-vs-full comparison deferred to Step 2 (full mode doesn't exist yet).
+- **CI:** `.github/workflows/ci.yml` runs `make ci` (lint + type + test) on a Docker-enabled runner.
+- *Resolved along the way:* migrated `add_persistent_index` → `add_index({"type": "persistent", …})` (the former is deprecated).
 
-### Step 2 — Thicken retrieval
+### Step 2 — Thicken retrieval ← NEXT
 HyDE, RRF, MMR, graph expansion, tiered token budget, lite/full mode switch, caching.
 
 ### Step 3 — Thicken ingestion
@@ -836,6 +845,52 @@ Migration runner, `vector:rebuild`, `embeddings:migrate`, dead-letter replay, fu
 
 ### v2 (post-v1)
 MCP server, LangChain/LangGraph adapter, CrewAI adapter + G-Memory tiers.
+
+### Candidate enhancements (open ideas, not committed)
+
+Drawn from a review of adjacent prior art (a self-evolving POI link-analysis
+harness on the same ArangoDB substrate). Each is tagged to the phase where it
+would land. None are commitments — they are recorded here so the spec stays the
+single source of future direction.
+
+1. **Lazy decay computed at query time** → **Step 4 (Lifecycle).**
+   Evaluate `strength × exp(-λ × time_since_access)` as a ranking-time multiplier
+   *inside* the AQL retrieval query rather than (only) via a scheduled batch job.
+   Always-fresh, removes a moving part. Trade-off: a computed value can't be
+   indexed, so it's a ranking multiplier only — the scheduled job is still needed
+   for hard soft-deprecation (`invalid_at`). Candidate to become the *default*
+   decay path (§11), with the batch job reserved for deprecation sweeps.
+
+2. **Corroboration count + source reliability as first-class confidence inputs**
+   → **Step 3 (ingestion conflict detection, §8 Stage 3) and Step 4 (conflict
+   resolution, §12).** Today confidence is `1.0 observed / 0.6 seeded` plus EWA
+   edge weights. Add (a) **corroboration count** — how many *independent*
+   episodes assert the same fact (cheap; every episode is already a provenance
+   anchor) — as a confidence boost and conflict-resolution tiebreaker, and
+   (b) optional **source reliability** as a per-episode input to the score.
+
+3. **Graph-algorithmic salience (centrality / community via Pregel)**
+   → **Step 2 (retrieval ranking) and Step 4 (consolidation).** Retrieval is
+   currently local (vector + BM25 + 1–2 hop traversal); we never compute global
+   structure. Two uses: (a) **centrality** (e.g. PageRank) as a salience signal
+   that boosts retrieval ranking and resists decay for hub entities; (b)
+   **community detection** to cluster related entities before Dream State review,
+   complementing the per-entity `mention_count` threshold (§13). Pregel ships with
+   ArangoDB, so this is cheap to prototype.
+
+4. **Ontology evolution — propose new relationship types, human-in-loop review**
+   → **v2 research item (extends §13 Dream State), behind a config flag.**
+   `relates_to` types are a fixed enum (§5). Let the consolidation layer detect a
+   recurring cluster of `associated_with` edges that really represents a new,
+   nameable relation, write a proposal record, and require human approval before a
+   migration adds the new edge type. Dream State already reviews stored structure
+   asynchronously, so this is an extension, not a new subsystem. **Tension:** it
+   leans toward a curated application rather than a drop-in library — hence v2 and
+   flag-gated, not a v1 commitment.
+
+*Not adopted from that prior art:* LangGraph for the core (contradicts the
+lite-mode zero-hot-path-LLM envelope, §10), its POI-specific domain schema, and
+its React/Cytoscape UI — all out of scope for a domain-agnostic memory backend.
 
 ---
 
