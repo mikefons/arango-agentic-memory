@@ -28,6 +28,10 @@ class ArangoMemoryClient:
         self._db: StandardDatabase | None = None
 
     @property
+    def config(self) -> Settings:
+        return self._config
+
+    @property
     def db(self) -> StandardDatabase:
         if self._db is None:
             raise RuntimeError("Client not connected; call connect() first.")

@@ -49,6 +49,10 @@ class Settings(BaseSettings):
     core_host: str = "0.0.0.0"
     core_port: int = 8080
 
+    # Durable write path (DESIGN.md §15)
+    write_max_retries: int = Field(default=5, ge=1)
+    write_backoff_base: float = Field(default=0.5, ge=0.0)
+
     # Entity extraction (DESIGN.md §8). "fake" (deterministic, no models — tests/
     # sim) or "spacy" (real NER, needs the `extraction` extra). GLiNER deferred.
     extraction_provider: Literal["fake", "spacy"] = "fake"

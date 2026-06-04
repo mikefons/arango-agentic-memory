@@ -16,6 +16,10 @@ from arango.exceptions import IndexCreateError
 DOCUMENT_COLLECTIONS: tuple[str, ...] = ("episodes", "memories", "entities")
 EDGE_COLLECTIONS: tuple[str, ...] = ("mentions", "relates_to", "produced_by")
 
+# Dead-letter for writes that exhaust retries (DESIGN.md §15). Named without a
+# leading underscore (ArangoDB reserves "_*" for system collections).
+DEAD_LETTER_COLLECTION = "failed_writes"
+
 SEARCH_VIEW = "memory_search_view"
 VECTOR_FIELD = "embedding"
 VECTOR_INDEX_NAME = "idx_vector"
@@ -42,7 +46,7 @@ _EDGE_DEFINITIONS = [
 
 def ensure_schema(db: StandardDatabase) -> None:
     """Create collections, indexes, and the search view if absent. Idempotent."""
-    for name in DOCUMENT_COLLECTIONS:
+    for name in (*DOCUMENT_COLLECTIONS, DEAD_LETTER_COLLECTION):
         if not db.has_collection(name):
             db.create_collection(name)
     for name in EDGE_COLLECTIONS:

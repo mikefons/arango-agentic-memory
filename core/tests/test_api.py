@@ -39,9 +39,9 @@ def test_store_response_shape(api: TestClient) -> None:
     )
     assert resp.status_code == 200
     body = resp.json()
-    assert body["episode_id"]
-    assert len(body["memory_ids"]) == 1
-    assert body["entity_ids"] == []
+    assert body["status"] == "queued"          # durable write path (§15)
+    assert body["episode_id"]                  # deterministic from the idempotency key
+    assert body["memory_ids"] == [f"{body['episode_id']}-mem"]
 
 
 def test_store_then_retrieve_over_http(api: TestClient) -> None:
