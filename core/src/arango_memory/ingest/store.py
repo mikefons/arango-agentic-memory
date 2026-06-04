@@ -11,6 +11,7 @@ from dataclasses import dataclass
 
 from arango.database import StandardDatabase
 
+from ..embedding import Embedder, get_embedder
 from ..models import idempotency_key, utcnow_iso
 
 
@@ -29,8 +30,13 @@ def store(
     agent_id: str,
     session_id: str | None = None,
     turn_index: int = 0,
+    embedder: Embedder | None = None,
 ) -> StoreResult:
-    """Persist one turn as an episode + episodic memory. Idempotent."""
+    """Persist one turn as an episode + episodic memory. Idempotent.
+
+    The memory carries an embedding for vector retrieval (DESIGN.md §5, §9).
+    """
+    emb = embedder or get_embedder()
     now = utcnow_iso()
     key = idempotency_key(
         tenant_id=tenant_id,
@@ -66,6 +72,9 @@ def store(
         "agent_id": agent_id,
         "tenant_id": tenant_id,
         "schema_version": "0.1.0",
+        "embedding": emb.embed(content),
+        "embedding_model": emb.model,
+        "embedding_version": emb.version,
     }
     db.collection("memories").insert(memory, overwrite_mode="ignore", silent=True)
 
