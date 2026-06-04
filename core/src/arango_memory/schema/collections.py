@@ -11,10 +11,13 @@ from __future__ import annotations
 from typing import Any, cast
 
 from arango.database import StandardDatabase
+from arango.exceptions import IndexCreateError
 
 DOCUMENT_COLLECTIONS: tuple[str, ...] = ("episodes", "memories", "entities")
 
 SEARCH_VIEW = "memory_search_view"
+VECTOR_FIELD = "embedding"
+VECTOR_INDEX_NAME = "idx_vector"
 
 
 def ensure_schema(db: StandardDatabase) -> None:
@@ -35,6 +38,41 @@ def ensure_schema(db: StandardDatabase) -> None:
         )
 
     _ensure_search_view(db)
+
+
+def has_vector_index(db: StandardDatabase) -> bool:
+    """True if the Faiss IVF index on `memories.embedding` exists (DESIGN.md §7)."""
+    indexes = cast("list[dict[str, Any]]", db.collection("memories").indexes())
+    return any(idx.get("type") == "vector" for idx in indexes)
+
+
+def ensure_vector_index(db: StandardDatabase, *, dimensions: int, n_lists: int) -> bool:
+    """Create the Faiss IVF index on `memories.embedding` if warm enough.
+
+    The index can only be built once the corpus has ≥ `n_lists` documents
+    (ArangoDB raises ERR 1555 "vector index not ready" otherwise). Returns True
+    if the index exists (or was just created), False if creation was deferred —
+    in which case retrieval falls back to BM25 (DESIGN.md §7, §15).
+    """
+    if has_vector_index(db):
+        return True
+    # Only attempt creation once warm enough to train; below the threshold the
+    # build raises ERR 1555 and can leave a phantom index behind. The shared
+    # index trains on the aggregate corpus across tenants (§7), so count is total.
+    if cast(int, db.collection("memories").count()) < n_lists:
+        return False
+    try:
+        db.collection("memories").add_index(
+            {
+                "type": "vector",
+                "name": VECTOR_INDEX_NAME,
+                "fields": [VECTOR_FIELD],
+                "params": {"metric": "cosine", "dimension": dimensions, "nLists": n_lists},
+            }
+        )
+        return True
+    except IndexCreateError:
+        return False
 
 
 def _ensure_search_view(db: StandardDatabase) -> None:

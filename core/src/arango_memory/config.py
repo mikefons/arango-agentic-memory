@@ -32,6 +32,11 @@ class Settings(BaseSettings):
     # Embeddings
     openai_api_key: str | None = None
     embedding_model: str = "text-embedding-3-small"
+    # "openai" (real) or "fake" (deterministic, no key — tests/sim). Default
+    # "fake" so dev/test/CI run keyless; the reference app/prod set "openai".
+    embedding_provider: Literal["openai", "fake"] = "fake"
+    # Dimensionality for the fake embedder + the vector index when fake is used.
+    embedding_dimensions: int = 256
 
     # Background / extraction LLM
     anthropic_api_key: str | None = None
@@ -48,6 +53,8 @@ class Settings(BaseSettings):
     max_memory_tokens: int = Field(default=1500, ge=0)
     n_probe: int = Field(default=10, ge=1)
     k: int = Field(default=10, ge=1)
+    # Faiss IVF training tier (DESIGN.md §7): index trains once corpus ≥ n_lists.
+    vector_n_lists: int = Field(default=256, ge=1)
 
 
 settings = Settings()

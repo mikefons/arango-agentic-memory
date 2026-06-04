@@ -16,6 +16,7 @@ from pydantic import BaseModel, Field
 
 from ..client import ArangoMemoryClient
 from ..config import settings
+from ..embedding import Embedder, get_embedder
 from ..ingest.store import store
 from ..retrieve.search import retrieve
 from ..schema.collections import ensure_schema
@@ -24,6 +25,11 @@ from ..schema.collections import ensure_schema
 def get_client(request: Request) -> ArangoMemoryClient:
     """Resolve the request-scoped Arango client from app state."""
     return request.app.state.client  # type: ignore[no-any-return]
+
+
+def get_embedder_dep(request: Request) -> Embedder:
+    """Resolve the shared embedder from app state."""
+    return request.app.state.embedder  # type: ignore[no-any-return]
 
 
 # ── Shared models ─────────────────────────────────────────
@@ -79,7 +85,9 @@ async def health(client: ArangoMemoryClient = Depends(get_client)) -> dict[str, 
 
 
 async def store_endpoint(
-    req: StoreRequest, client: ArangoMemoryClient = Depends(get_client)
+    req: StoreRequest,
+    client: ArangoMemoryClient = Depends(get_client),
+    embedder: Embedder = Depends(get_embedder_dep),
 ) -> StoreResponse:
     result = store(
         client.db,
@@ -88,6 +96,7 @@ async def store_endpoint(
         agent_id=req.ctx.agent_id,
         session_id=req.ctx.session_id,
         turn_index=req.turn_index,
+        embedder=embedder,
     )
     return StoreResponse(
         episode_id=result.episode_id,
@@ -97,7 +106,9 @@ async def store_endpoint(
 
 
 async def retrieve_endpoint(
-    req: RetrieveRequest, client: ArangoMemoryClient = Depends(get_client)
+    req: RetrieveRequest,
+    client: ArangoMemoryClient = Depends(get_client),
+    embedder: Embedder = Depends(get_embedder_dep),
 ) -> RetrieveResponse:
     result = retrieve(
         client.db,
@@ -106,6 +117,8 @@ async def retrieve_endpoint(
         agent_id=req.ctx.agent_id,
         k=req.opts.k,
         max_memory_tokens=req.opts.max_memory_tokens,
+        embedder=embedder,
+        mode=req.opts.mode,
     )
     return RetrieveResponse(
         context=result.context,
@@ -122,6 +135,7 @@ def create_app(client: ArangoMemoryClient | None = None) -> FastAPI:
     `make dev` call with no argument and get the env-driven default.
     """
     mem_client = client or ArangoMemoryClient()
+    embedder = get_embedder()
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
@@ -131,6 +145,7 @@ def create_app(client: ArangoMemoryClient | None = None) -> FastAPI:
 
     app = FastAPI(title="arango-memory core", version="0.1.0", lifespan=lifespan)
     app.state.client = mem_client
+    app.state.embedder = embedder
 
     app.add_api_route("/health", health, methods=["GET"])
     app.add_api_route("/v1/store", store_endpoint, methods=["POST"], response_model=StoreResponse)

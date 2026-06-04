@@ -1,13 +1,16 @@
-"""Minimal retrieval for the Step 0 walking skeleton (DESIGN.md §9).
+"""Core retrieval (DESIGN.md §9) — Step 2a.
 
-BM25 search over the memory view (tenant/agent scoped), then naive context
-assembly under a token budget. HyDE, vector search, graph expansion, RRF/MMR
-fusion, and the adaptive gate are added in later steps. Vector search is
-intentionally absent here — cold start falls back to BM25 (DESIGN.md §7).
+Parallel BM25 + vector search → RRF fusion → MMR diversity → tiered token-budget
+assembly. Vector search activates only when the Faiss IVF index is trained
+(corpus ≥ n_lists); until then retrieval degrades to BM25-only (§7, §15).
+Embeddings live on the documents regardless of index state, so MMR diversity
+still applies in the BM25-only path. HyDE / adaptive gate (full mode) land in
+Step 2b; graph expansion (needs entities/edges) lands in Step 3.
 """
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 from typing import Any, cast
 
@@ -15,7 +18,9 @@ import tiktoken
 from arango.cursor import Cursor
 from arango.database import StandardDatabase
 
-from ..schema.collections import SEARCH_VIEW
+from ..config import settings
+from ..embedding import Embedder, get_embedder
+from ..schema.collections import SEARCH_VIEW, ensure_vector_index, has_vector_index
 
 _BM25_QUERY = f"""
 FOR doc IN {SEARCH_VIEW}
@@ -24,12 +29,35 @@ FOR doc IN {SEARCH_VIEW}
      AND doc.agent_id == @agent_id
   FILTER doc.invalid_at == null
   SORT BM25(doc) DESC
-  LIMIT @k
-  RETURN {{ text: doc.text, score: BM25(doc) }}
+  LIMIT @pool
+  RETURN {{ key: doc._key, text: doc.text, score: BM25(doc),
+            embedding: doc.embedding, type: doc.type }}
 """
 
-# Cheap, model-agnostic token counter for budgeting.
+# APPROX_NEAR_COSINE requires the vector index; tenant/agent scoping is applied
+# in the same loop so the shared index stays logically isolated (§7).
+_VECTOR_QUERY = """
+FOR doc IN memories
+  FILTER doc.tenant_id == @tenant_id
+     AND doc.agent_id == @agent_id
+     AND doc.invalid_at == null
+  LET score = APPROX_NEAR_COSINE(doc.embedding, @qvec)
+  SORT score DESC
+  LIMIT @pool
+  RETURN { key: doc._key, text: doc.text, score: score,
+           embedding: doc.embedding, type: doc.type }
+"""
+
 _ENCODER = tiktoken.get_encoding("cl100k_base")
+
+_RRF_K = 60
+_MMR_LAMBDA = 0.5
+
+# Tier token budget as fractions of max_memory_tokens (§9: 400/700/300/100 of 1500).
+_TIER_FRACTIONS = {"working": 0.267, "episodic": 0.467, "semantic": 0.20, "reasoning": 0.067}
+_TIER_ORDER = ("working", "episodic", "semantic", "reasoning")
+_TYPE_TO_TIER = {"working": "working", "episodic": "episodic", "semantic": "semantic",
+                 "step": "reasoning"}
 
 
 @dataclass
@@ -46,8 +74,106 @@ class RetrieveResult:
     tokens_injected: int = 0
 
 
+@dataclass
+class _Candidate:
+    key: str
+    text: str
+    embedding: list[float]
+    type: str
+    signals: set[str] = field(default_factory=set)
+    fused_score: float = 0.0
+
+
 def _count_tokens(text: str) -> int:
     return len(_ENCODER.encode(text))
+
+
+def _cos(a: list[float], b: list[float]) -> float:
+    if not a or not b:
+        return 0.0
+    dot = sum(x * y for x, y in zip(a, b, strict=False))
+    na = math.sqrt(sum(x * x for x in a))
+    nb = math.sqrt(sum(y * y for y in b))
+    if na == 0.0 or nb == 0.0:
+        return 0.0
+    return dot / (na * nb)
+
+
+def _run(db: StandardDatabase, query: str, bind_vars: dict[str, Any]) -> list[dict[str, Any]]:
+    cursor = cast(Cursor, db.aql.execute(query, bind_vars=bind_vars))
+    return [row for row in cursor]
+
+
+def _rrf_fuse(ranked_lists: list[list[dict[str, Any]]], names: list[str]) -> list[_Candidate]:
+    """Reciprocal-rank fusion across ranked result lists, keyed by document."""
+    by_key: dict[str, _Candidate] = {}
+    for rows, name in zip(ranked_lists, names, strict=True):
+        for rank, row in enumerate(rows, start=1):
+            key = row["key"]
+            cand = by_key.get(key)
+            if cand is None:
+                cand = _Candidate(
+                    key=key,
+                    text=row["text"],
+                    embedding=row.get("embedding") or [],
+                    type=row.get("type") or "episodic",
+                )
+                by_key[key] = cand
+            cand.signals.add(name)
+            cand.fused_score += 1.0 / (_RRF_K + rank)
+    return sorted(by_key.values(), key=lambda c: c.fused_score, reverse=True)
+
+
+def _mmr(query_emb: list[float], candidates: list[_Candidate], k: int) -> list[_Candidate]:
+    """Maximal-marginal-relevance re-rank for diversity (§9)."""
+    selected: list[_Candidate] = []
+    remaining = list(candidates)
+    while remaining and len(selected) < k:
+        best: _Candidate | None = None
+        best_val = -math.inf
+        for cand in remaining:
+            relevance = _cos(query_emb, cand.embedding)
+            diversity = max((_cos(cand.embedding, s.embedding) for s in selected), default=0.0)
+            val = _MMR_LAMBDA * relevance - (1.0 - _MMR_LAMBDA) * diversity
+            if val > best_val:
+                best_val, best = val, cand
+        assert best is not None
+        selected.append(best)
+        remaining.remove(best)
+    return selected
+
+
+def _assemble_tiered(hits: list[_Candidate], max_tokens: int) -> tuple[str, int]:
+    """Tiered token-budget assembly with roll-up of unused budget (§9)."""
+    caps = {tier: int(frac * max_tokens) for tier, frac in _TIER_FRACTIONS.items()}
+    tier_used = dict.fromkeys(_TIER_FRACTIONS, 0)
+    chosen: list[_Candidate] = []
+    total = 0
+
+    ordered = sorted(
+        hits, key=lambda c: (_TIER_ORDER.index(_TYPE_TO_TIER.get(c.type, "episodic")),
+                             -c.fused_score)
+    )
+    # Pass 1 — respect per-tier caps.
+    for cand in ordered:
+        tier = _TYPE_TO_TIER.get(cand.type, "episodic")
+        cost = _count_tokens(cand.text)
+        if total + cost <= max_tokens and tier_used[tier] + cost <= caps[tier]:
+            chosen.append(cand)
+            tier_used[tier] += cost
+            total += cost
+    # Pass 2 — roll unused budget up across tiers, by score.
+    for cand in sorted(hits, key=lambda c: -c.fused_score):
+        if cand in chosen:
+            continue
+        cost = _count_tokens(cand.text)
+        if total + cost <= max_tokens:
+            chosen.append(cand)
+            total += cost
+
+    chosen.sort(key=lambda c: -c.fused_score)
+    context = "\n".join(f"- {c.text}" for c in chosen)
+    return context, total
 
 
 def retrieve(
@@ -58,25 +184,41 @@ def retrieve(
     agent_id: str,
     k: int = 10,
     max_memory_tokens: int = 1500,
+    embedder: Embedder | None = None,
+    mode: str = "lite",  # full-mode HyDE/adaptive gate land in Step 2b
+    candidate_pool: int = 100,
+    n_lists: int | None = None,
 ) -> RetrieveResult:
-    """BM25 retrieval + token-budgeted assembly."""
-    bind_vars: dict[str, Any] = {
-        "query": query,
-        "tenant_id": tenant_id,
-        "agent_id": agent_id,
-        "k": k,
-    }
-    cursor = cast(Cursor, db.aql.execute(_BM25_QUERY, bind_vars=bind_vars))
-    hits = [MemoryHit(text=row["text"], score=row["score"]) for row in cursor]
+    """BM25 (+ vector when trained) → RRF → MMR → tiered token-budget assembly."""
+    emb = embedder or get_embedder()
+    scope = {"tenant_id": tenant_id, "agent_id": agent_id, "pool": candidate_pool}
 
-    assembled: list[str] = []
-    tokens = 0
-    for hit in hits:
-        cost = _count_tokens(hit.text)
-        if tokens + cost > max_memory_tokens:
-            break
-        assembled.append(hit.text)
-        tokens += cost
+    bm25_rows = _run(db, _BM25_QUERY, {"query": query, **scope})
 
-    context = "\n".join(f"- {line}" for line in assembled)
+    ranked_lists = [bm25_rows]
+    names = ["bm25"]
+    # Self-healing cold start (§7): once the corpus is warm, the first retrieval
+    # builds the index lazily; until then we run BM25-only. The one-time build
+    # cost moves to the durable write path in Step 3.
+    vector_ready = has_vector_index(db) or ensure_vector_index(
+        db, dimensions=emb.dimensions, n_lists=n_lists or settings.vector_n_lists
+    )
+    if vector_ready:
+        qvec = emb.embed(query)
+        vector_rows = _run(db, _VECTOR_QUERY, {"qvec": qvec, **scope})
+        ranked_lists.append(vector_rows)
+        names.append("vector")
+
+    fused = _rrf_fuse(ranked_lists, names)
+    if not fused:
+        return RetrieveResult()
+
+    query_emb = emb.embed(query)
+    selected = _mmr(query_emb, fused, k)
+    context, tokens = _assemble_tiered(selected, max_memory_tokens)
+
+    hits = [
+        MemoryHit(text=c.text, score=round(c.fused_score, 6), source="+".join(sorted(c.signals)))
+        for c in selected
+    ]
     return RetrieveResult(context=context, hits=hits, tokens_injected=tokens)
