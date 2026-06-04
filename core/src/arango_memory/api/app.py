@@ -17,7 +17,9 @@ from pydantic import BaseModel, Field
 from ..client import ArangoMemoryClient
 from ..config import settings
 from ..embedding import Embedder, get_embedder
+from ..generation import Generator, get_generator
 from ..ingest.store import store
+from ..retrieve.enrich import QueryCache
 from ..retrieve.search import retrieve
 from ..schema.collections import ensure_schema
 
@@ -30,6 +32,16 @@ def get_client(request: Request) -> ArangoMemoryClient:
 def get_embedder_dep(request: Request) -> Embedder:
     """Resolve the shared embedder from app state."""
     return request.app.state.embedder  # type: ignore[no-any-return]
+
+
+def get_generator_dep(request: Request) -> Generator:
+    """Resolve the shared generator (full-mode enrichment) from app state."""
+    return request.app.state.generator  # type: ignore[no-any-return]
+
+
+def get_cache_dep(request: Request) -> QueryCache:
+    """Resolve the shared query cache from app state."""
+    return request.app.state.cache  # type: ignore[no-any-return]
 
 
 # ── Shared models ─────────────────────────────────────────
@@ -109,6 +121,8 @@ async def retrieve_endpoint(
     req: RetrieveRequest,
     client: ArangoMemoryClient = Depends(get_client),
     embedder: Embedder = Depends(get_embedder_dep),
+    generator: Generator = Depends(get_generator_dep),
+    cache: QueryCache = Depends(get_cache_dep),
 ) -> RetrieveResponse:
     result = retrieve(
         client.db,
@@ -119,6 +133,8 @@ async def retrieve_endpoint(
         max_memory_tokens=req.opts.max_memory_tokens,
         embedder=embedder,
         mode=req.opts.mode,
+        generator=generator,
+        cache=cache,
     )
     return RetrieveResponse(
         context=result.context,
@@ -136,6 +152,8 @@ def create_app(client: ArangoMemoryClient | None = None) -> FastAPI:
     """
     mem_client = client or ArangoMemoryClient()
     embedder = get_embedder()
+    generator = get_generator()
+    cache = QueryCache()
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
@@ -146,6 +164,8 @@ def create_app(client: ArangoMemoryClient | None = None) -> FastAPI:
     app = FastAPI(title="arango-memory core", version="0.1.0", lifespan=lifespan)
     app.state.client = mem_client
     app.state.embedder = embedder
+    app.state.generator = generator
+    app.state.cache = cache
 
     app.add_api_route("/health", health, methods=["GET"])
     app.add_api_route("/v1/store", store_endpoint, methods=["POST"], response_model=StoreResponse)
