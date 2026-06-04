@@ -49,6 +49,15 @@ class Settings(BaseSettings):
     core_host: str = "0.0.0.0"
     core_port: int = 8080
 
+    # Entity extraction (DESIGN.md §8). "fake" (deterministic, no models — tests/
+    # sim) or "spacy" (real NER, needs the `extraction` extra). GLiNER deferred.
+    extraction_provider: Literal["fake", "spacy"] = "fake"
+    spacy_model: str = "en_core_web_sm"
+    # Write-time conflict thresholds (DESIGN.md §8 Stage 3): cosine vs existing
+    # entities — ≥ merge → same entity; ≥ flag → create + mark for Dream State.
+    entity_merge_threshold: float = Field(default=0.9, ge=0.0, le=1.0)
+    entity_flag_threshold: float = Field(default=0.6, ge=0.0, le=1.0)
+
     # Enrichment mode (DESIGN.md §10)
     memory_mode: Literal["lite", "full"] = "lite"
 

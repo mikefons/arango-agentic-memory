@@ -14,10 +14,30 @@ from arango.database import StandardDatabase
 from arango.exceptions import IndexCreateError
 
 DOCUMENT_COLLECTIONS: tuple[str, ...] = ("episodes", "memories", "entities")
+EDGE_COLLECTIONS: tuple[str, ...] = ("mentions", "relates_to", "produced_by")
 
 SEARCH_VIEW = "memory_search_view"
 VECTOR_FIELD = "embedding"
 VECTOR_INDEX_NAME = "idx_vector"
+
+GRAPH_NAME = "memory_graph"
+_EDGE_DEFINITIONS = [
+    {
+        "edge_collection": "mentions",
+        "from_vertex_collections": ["memories"],
+        "to_vertex_collections": ["entities"],
+    },
+    {
+        "edge_collection": "relates_to",
+        "from_vertex_collections": ["entities"],
+        "to_vertex_collections": ["entities"],
+    },
+    {
+        "edge_collection": "produced_by",
+        "from_vertex_collections": ["entities"],
+        "to_vertex_collections": ["episodes"],
+    },
+]
 
 
 def ensure_schema(db: StandardDatabase) -> None:
@@ -25,6 +45,9 @@ def ensure_schema(db: StandardDatabase) -> None:
     for name in DOCUMENT_COLLECTIONS:
         if not db.has_collection(name):
             db.create_collection(name)
+    for name in EDGE_COLLECTIONS:
+        if not db.has_collection(name):
+            db.create_collection(name, edge=True)
 
     # Unique idempotency index on episodes + memories (DESIGN.md §5).
     for name in ("episodes", "memories"):
@@ -36,8 +59,19 @@ def ensure_schema(db: StandardDatabase) -> None:
                 "name": "idx_idempotency",
             }
         )
+    # Entity natural-key dedup for UPSERT (DESIGN.md §5, §8).
+    db.collection("entities").add_index(
+        {
+            "type": "persistent",
+            "fields": ["tenant_id", "name", "label"],
+            "unique": True,
+            "name": "idx_entity_natural_key",
+        }
+    )
 
     _ensure_search_view(db)
+    if not db.has_graph(GRAPH_NAME):
+        db.create_graph(GRAPH_NAME, edge_definitions=_EDGE_DEFINITIONS)
 
 
 def has_vector_index(db: StandardDatabase) -> bool:
