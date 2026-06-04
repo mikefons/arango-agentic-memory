@@ -20,7 +20,9 @@ from arango.database import StandardDatabase
 
 from ..config import settings
 from ..embedding import Embedder, get_embedder
+from ..generation import Generator, get_generator
 from ..schema.collections import SEARCH_VIEW, ensure_vector_index, has_vector_index
+from .enrich import QueryCache, hyde, should_skip_retrieval
 
 _BM25_QUERY = f"""
 FOR doc IN {SEARCH_VIEW}
@@ -185,14 +187,30 @@ def retrieve(
     k: int = 10,
     max_memory_tokens: int = 1500,
     embedder: Embedder | None = None,
-    mode: str = "lite",  # full-mode HyDE/adaptive gate land in Step 2b
+    mode: str = "lite",
     candidate_pool: int = 100,
     n_lists: int | None = None,
+    generator: Generator | None = None,
+    cache: QueryCache | None = None,
 ) -> RetrieveResult:
-    """BM25 (+ vector when trained) → RRF → MMR → tiered token-budget assembly."""
-    emb = embedder or get_embedder()
-    scope = {"tenant_id": tenant_id, "agent_id": agent_id, "pool": candidate_pool}
+    """BM25 (+ vector when trained) → RRF → MMR → tiered token-budget assembly.
 
+    Full mode adds the adaptive gate (may skip retrieval) and HyDE (embeds a
+    hypothetical answer instead of the raw query) ahead of the core stages (§9).
+    """
+    emb = embedder or get_embedder()
+
+    # Full-mode enrichment (§9 stages 1–2). The query vector is computed once
+    # here and reused for both vector search and MMR relevance.
+    if mode == "full":
+        gen = generator or get_generator()
+        if should_skip_retrieval(query, generator=gen, cache=cache):
+            return RetrieveResult()
+        query_vec = hyde(query, generator=gen, embedder=emb, cache=cache).embedding
+    else:
+        query_vec = emb.embed(query)
+
+    scope = {"tenant_id": tenant_id, "agent_id": agent_id, "pool": candidate_pool}
     bm25_rows = _run(db, _BM25_QUERY, {"query": query, **scope})
 
     ranked_lists = [bm25_rows]
@@ -204,8 +222,7 @@ def retrieve(
         db, dimensions=emb.dimensions, n_lists=n_lists or settings.vector_n_lists
     )
     if vector_ready:
-        qvec = emb.embed(query)
-        vector_rows = _run(db, _VECTOR_QUERY, {"qvec": qvec, **scope})
+        vector_rows = _run(db, _VECTOR_QUERY, {"qvec": query_vec, **scope})
         ranked_lists.append(vector_rows)
         names.append("vector")
 
@@ -213,8 +230,7 @@ def retrieve(
     if not fused:
         return RetrieveResult()
 
-    query_emb = emb.embed(query)
-    selected = _mmr(query_emb, fused, k)
+    selected = _mmr(query_vec, fused, k)
     context, tokens = _assemble_tiered(selected, max_memory_tokens)
 
     hits = [

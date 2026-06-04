@@ -41,6 +41,9 @@ class Settings(BaseSettings):
     # Background / extraction LLM
     anthropic_api_key: str | None = None
     background_model: str = "claude-haiku-4-5"
+    # "anthropic" (real) or "fake" (deterministic, no key — tests/sim). Used by
+    # full-mode enrichment (HyDE, adaptive gate). Default "fake" so dev/CI run keyless.
+    generation_provider: Literal["anthropic", "fake"] = "fake"
 
     # Core service
     core_host: str = "0.0.0.0"

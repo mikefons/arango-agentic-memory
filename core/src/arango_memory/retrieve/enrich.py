@@ -1,0 +1,81 @@
+"""Full-mode retrieval enrichment: adaptive gate + HyDE (DESIGN.md §9 stages 1–2).
+
+Both involve an LLM call and are cached per query so repeats are free (§9, §16).
+Lite mode skips this module entirely. The cache is in-process for now; a durable
+cache is an ops concern for later.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+from ..embedding import Embedder
+from ..generation import Generator
+
+_HYDE_SYSTEM = (
+    "Generate a concise, plausible answer to the user's question as if recalling it "
+    "from memory. Write 1-2 sentences. Do not hedge or add caveats; the text is used "
+    "only to retrieve relevant stored memories."
+)
+
+_GATE_SYSTEM = (
+    "Decide whether answering the user's message needs stored personal/contextual "
+    "memory. Reply with exactly 'SKIP' if it can be answered from general knowledge "
+    "alone, or 'RETRIEVE' if stored memory would help."
+)
+
+
+@dataclass(frozen=True)
+class HydeResult:
+    hypothetical: str
+    embedding: list[float]
+
+
+class QueryCache:
+    """In-process cache for HyDE results and adaptive-gate decisions, keyed by query."""
+
+    def __init__(self) -> None:
+        self._hyde: dict[str, HydeResult] = {}
+        self._gate: dict[str, bool] = {}
+
+    def get_hyde(self, query: str) -> HydeResult | None:
+        return self._hyde.get(query)
+
+    def set_hyde(self, query: str, result: HydeResult) -> None:
+        self._hyde[query] = result
+
+    def get_gate(self, query: str) -> bool | None:
+        return self._gate.get(query)
+
+    def set_gate(self, query: str, skip: bool) -> None:
+        self._gate[query] = skip
+
+
+def should_skip_retrieval(
+    query: str, *, generator: Generator, cache: QueryCache | None = None
+) -> bool:
+    """Adaptive gate: True if the model is confident no stored memory is needed."""
+    if cache is not None and (cached := cache.get_gate(query)) is not None:
+        return cached
+    verdict = generator.complete(query, system=_GATE_SYSTEM).strip().upper()
+    skip = verdict.startswith("SKIP")
+    if cache is not None:
+        cache.set_gate(query, skip)
+    return skip
+
+
+def hyde(
+    query: str, *, generator: Generator, embedder: Embedder, cache: QueryCache | None = None
+) -> HydeResult:
+    """Embed a hypothetical answer instead of the question (§9 stage 2).
+
+    If the generator returns nothing, fall back to embedding the raw query — so
+    full mode degrades gracefully to the lite vector path.
+    """
+    if cache is not None and (cached := cache.get_hyde(query)) is not None:
+        return cached
+    hypothetical = generator.complete(query, system=_HYDE_SYSTEM).strip() or query
+    result = HydeResult(hypothetical=hypothetical, embedding=embedder.embed(hypothetical))
+    if cache is not None:
+        cache.set_hyde(query, result)
+    return result
