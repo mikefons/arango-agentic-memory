@@ -1,7 +1,7 @@
 # ArangoDB Agentic Memory System — Design Specification
 
-> **Status:** Step 3b (graph expansion) implemented and verified. Authoritative reference.
-> **Last updated:** 2026-06-04 (rev 9 — post Step 3b)
+> **Status:** Step 3c (durable write path) implemented and verified. Authoritative reference.
+> **Last updated:** 2026-06-04 (rev 10 — post Step 3c)
 >
 > **Rev 2 decisions:** Python-first core with a thin TypeScript client · v1 scope is Vercel-only · build a walking skeleton first, then a test/eval harness, then thicken each layer.
 >
@@ -18,8 +18,8 @@
 > **Rev 8 updates (from Step 3a):** **Step 3 split into 3a (extraction → graph, done), 3b (graph expansion, next), 3c (durable write path), 3d (procedural + prospective indexing).** 3a added a **pluggable sync `Extractor`** (deterministic `FakeExtractor` for keyless CI · `SpacyExtractor` behind the extra; **GLiNER/torch + Haiku fallback deferred** to 3d) · edge collections `mentions`/`relates_to`/`produced_by` + the `memory_graph` named graph + a unique entity natural-key index · entity **UPSERT** (exact dedup + `mention_count`) with embeddings and idempotent edges (`relates_to` from co-occurrence) · **write-time conflict detection** (§8 Stage 3): cosine vs the tenant's entities → ≥0.9 merge / ≥0.6 flag `needs_review` for Dream State / else new · extraction runs only on the first store of a turn so replays don't double-count. The graph is now populated, unblocking graph expansion (§9 stage 4, Step 3b).
 >
 > **Rev 9 updates (from Step 3b):** **graph expansion is live** (§9 stage 4) — a traversal from the entities of the top lexical/vector hits (`mentions` → `relates_to` 0..`graph_hops` → `mentions`) surfaces connected memories, ranked by minimum hop distance and **fused into retrieval as a third RRF signal** (`source: graph`) alongside BM25 + vector. Tenant-scoped; a no-op when a turn produced no entities. The §9 retrieval pipeline is now complete (stages 1–6) bar deferred tuning. Next: Step 3c (durable write path).
-
----
+>
+> **Rev 10 updates (from Step 3c):** the **durable write path** (§15) is live — `/v1/store` now **enqueues** an idempotency-keyed `WriteIntent` and returns immediately (`{status:"queued", episode_id, memory_ids}`, deterministic from the key); a background `WriteWorker` (daemon thread, own DB connection) drains the queue via `store()` with exponential backoff and **dead-letters to `failed_writes`** on exhaustion, with `replay_failed()` to recover. The queue is an in-process `WriteQueue` Protocol (Redis/SQS slot in later). `store()` stays the commit function (worker + tests). **Naming deviation:** the dead-letter collection is `failed_writes`, not §15's `_failed_writes` — ArangoDB reserves `_*` for system collections. Next: Step 3d (procedural + prospective indexing).
 
 ## Table of Contents
 
@@ -595,7 +595,7 @@ Memory writes from the adapter are **asynchronous but durable**, not fire-and-fo
 
 - The adapter enqueues a write intent (idempotency-keyed) and returns immediately — the agent turn never blocks on memory.
 - A core-side worker drains the queue and commits to ArangoDB with retry + exponential backoff.
-- Persistent failures land in a **dead-letter** record (`_failed_writes`) for inspection/replay via `ops`.
+- Persistent failures land in a **dead-letter** record (`failed_writes`; the leading underscore from earlier revs is dropped — ArangoDB reserves `_*` for system collections) for inspection/replay via `ops`.
 - Because writes are idempotency-keyed, replays cannot duplicate.
 
 For the walking skeleton, the "queue" may be in-process; production uses a durable queue (e.g., Redis/SQS) — the interface is identical.
@@ -894,10 +894,15 @@ Pluggable extraction + entity/edge graph + write-time conflict detection. Delive
 - **Config:** `graph_hops` (default 2, max 3).
 - **Verified:** 48 tests green (3 graph-expansion + the prior 45) — connected-memory surfacing, tenant isolation, and the no-entity BM25 fallback.
 
-#### Step 3c — Durable write path ← NEXT
-In-process queue + worker + retry/backoff + dead-letter (`_failed_writes`) + graceful degradation (§15).
+#### Step 3c — Durable write path ✅ DONE
+Async, durable writes so memory failures never block or break the agent turn (§15). Delivered:
+- **Queue** (`queue.py`): `WriteIntent` (carries its idempotency `key`), `WriteQueue` Protocol, thread-safe `InProcessQueue` (the seam a Redis/SQS backend slots into later).
+- **Worker** (`worker.py`): `WriteWorker` commits via `store()` with exponential backoff (`write_max_retries`, `write_backoff_base`); dead-letters to `failed_writes` on exhaustion; `replay_failed()` re-enqueues. `drain()` (sync, tests) + `start()/stop()` (daemon thread, own DB connection).
+- **API**: `/v1/store` enqueues and returns `{status:"queued", episode_id, memory_ids}` (deterministic from the idempotency key; `entity_ids` resolved async). Worker starts/stops in the app lifespan.
+- **Naming:** dead-letter collection is `failed_writes` (not `_failed_writes`; ArangoDB reserves `_*`).
+- **Verified:** 55 tests (3 queue + 4 worker + the prior 48) — drain commits episode/memory/entities, retry-then-succeed, dead-letter on persistent failure, `replay_failed()`, and the async API round-trip.
 
-#### Step 3d — Procedural + prospective indexing
+#### Step 3d — Procedural + prospective indexing ← NEXT
 `steps` collection + `TOUCHED`/`TRANSITION` edges (procedural/tool-trace ingestion); prospective indexing (full mode, uses the Step 2b generator); GLiNER/GLiREL + Haiku extraction fallback (§8 Stage 2).
 
 ### Step 3.5 — Agentic simulation harness (real-data validation)
