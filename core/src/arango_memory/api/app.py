@@ -18,7 +18,9 @@ from ..client import ArangoMemoryClient
 from ..config import settings
 from ..embedding import Embedder, get_embedder
 from ..generation import Generator, get_generator
-from ..ingest.store import store
+from ..ingest.extract import get_extractor
+from ..ingest.queue import InProcessQueue, WriteIntent, WriteQueue
+from ..ingest.worker import WriteWorker
 from ..retrieve.enrich import QueryCache
 from ..retrieve.search import retrieve
 from ..schema.collections import ensure_schema
@@ -44,6 +46,11 @@ def get_cache_dep(request: Request) -> QueryCache:
     return request.app.state.cache  # type: ignore[no-any-return]
 
 
+def get_queue_dep(request: Request) -> WriteQueue:
+    """Resolve the shared write queue from app state."""
+    return request.app.state.queue  # type: ignore[no-any-return]
+
+
 # ── Shared models ─────────────────────────────────────────
 class AccessContext(BaseModel):
     tenant_id: str
@@ -67,9 +74,9 @@ class StoreRequest(BaseModel):
 
 
 class StoreResponse(BaseModel):
+    status: Literal["queued"] = "queued"
     episode_id: str | None = None
     memory_ids: list[str] = Field(default_factory=list)
-    entity_ids: list[str] = Field(default_factory=list)
 
 
 # ── /v1/retrieve ──────────────────────────────────────────
@@ -98,23 +105,20 @@ async def health(client: ArangoMemoryClient = Depends(get_client)) -> dict[str, 
 
 async def store_endpoint(
     req: StoreRequest,
-    client: ArangoMemoryClient = Depends(get_client),
-    embedder: Embedder = Depends(get_embedder_dep),
+    queue: WriteQueue = Depends(get_queue_dep),
 ) -> StoreResponse:
-    result = store(
-        client.db,
+    # Durable write path (§15): enqueue and return immediately; the worker
+    # commits asynchronously. Keys are deterministic from the idempotency key,
+    # so they're known without committing; entity_ids are resolved async.
+    intent = WriteIntent(
         content=req.content,
         tenant_id=req.ctx.tenant_id,
         agent_id=req.ctx.agent_id,
         session_id=req.ctx.session_id,
         turn_index=req.turn_index,
-        embedder=embedder,
     )
-    return StoreResponse(
-        episode_id=result.episode_id,
-        memory_ids=result.memory_ids,
-        entity_ids=result.entity_ids,
-    )
+    queue.enqueue(intent)
+    return StoreResponse(episode_id=intent.key, memory_ids=[f"{intent.key}-mem"])
 
 
 async def retrieve_endpoint(
@@ -151,21 +155,32 @@ def create_app(client: ArangoMemoryClient | None = None) -> FastAPI:
     `make dev` call with no argument and get the env-driven default.
     """
     mem_client = client or ArangoMemoryClient()
+    worker_client = ArangoMemoryClient(mem_client.config)  # own connection for the worker thread
     embedder = get_embedder()
     generator = get_generator()
+    extractor = get_extractor()
     cache = QueryCache()
+    queue = InProcessQueue()
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-        db = mem_client.connect()
-        ensure_schema(db)
-        yield
+        ensure_schema(mem_client.connect())
+        worker = WriteWorker(
+            queue, worker_client.connect(), embedder=embedder, extractor=extractor
+        )
+        worker.start()
+        app.state.worker = worker
+        try:
+            yield
+        finally:
+            worker.stop()
 
     app = FastAPI(title="arango-memory core", version="0.1.0", lifespan=lifespan)
     app.state.client = mem_client
     app.state.embedder = embedder
     app.state.generator = generator
     app.state.cache = cache
+    app.state.queue = queue
 
     app.add_api_route("/health", health, methods=["GET"])
     app.add_api_route("/v1/store", store_endpoint, methods=["POST"], response_model=StoreResponse)
