@@ -13,6 +13,8 @@ from arango.database import StandardDatabase
 
 from ..embedding import Embedder, get_embedder
 from ..models import idempotency_key, utcnow_iso
+from .entities import write_entities
+from .extract import Extractor, get_extractor
 
 
 @dataclass(frozen=True)
@@ -31,10 +33,13 @@ def store(
     session_id: str | None = None,
     turn_index: int = 0,
     embedder: Embedder | None = None,
+    extractor: Extractor | None = None,
 ) -> StoreResult:
-    """Persist one turn as an episode + episodic memory. Idempotent.
+    """Persist one turn as an episode + episodic memory, with extracted entities.
 
     The memory carries an embedding for vector retrieval (DESIGN.md §5, §9).
+    Entity/edge extraction runs only on the first store of a turn so idempotent
+    replays don't double-count mentions (DESIGN.md §8).
     """
     emb = embedder or get_embedder()
     now = utcnow_iso()
@@ -45,6 +50,7 @@ def store(
         content=content,
         turn_index=turn_index,
     )
+    is_new = not db.collection("episodes").has(key)
 
     episode = {
         "_key": key,
@@ -78,4 +84,17 @@ def store(
     }
     db.collection("memories").insert(memory, overwrite_mode="ignore", silent=True)
 
-    return StoreResult(episode_id=key, memory_ids=[mem_key], entity_ids=[])
+    entity_ids: list[str] = []
+    if is_new:
+        entity_ids = write_entities(
+            db,
+            memory_key=mem_key,
+            episode_key=key,
+            content=content,
+            tenant_id=tenant_id,
+            agent_id=agent_id,
+            extractor=extractor or get_extractor(),
+            embedder=emb,
+        )
+
+    return StoreResult(episode_id=key, memory_ids=[mem_key], entity_ids=entity_ids)

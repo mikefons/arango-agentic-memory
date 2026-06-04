@@ -1,7 +1,7 @@
 # ArangoDB Agentic Memory System — Design Specification
 
-> **Status:** Step 2b (full-mode enrichment) implemented and verified. Authoritative reference.
-> **Last updated:** 2026-06-04 (rev 7 — post Step 2b)
+> **Status:** Step 3a (extraction → graph) implemented and verified. Authoritative reference.
+> **Last updated:** 2026-06-04 (rev 8 — post Step 3a)
 >
 > **Rev 2 decisions:** Python-first core with a thin TypeScript client · v1 scope is Vercel-only · build a walking skeleton first, then a test/eval harness, then thicken each layer.
 >
@@ -14,6 +14,8 @@
 > **Rev 6 updates (from Step 2a):** **Step 2 split into 2a (core retrieval, done) and 2b (full-mode enrichment, next).** 2a delivered a **pluggable sync `Embedder`** (deterministic `FakeEmbedder` for keyless tests/sim · `OpenAIEmbedder`) — a sync deviation from §8's async sketch · write-time embeddings on `memories` · a **lazy Faiss IVF index** that trains only once the corpus ≥ `n_lists` (ArangoDB ERR 1555 otherwise), self-healing on the read path, with BM25 cold-start fallback (§7) · retrieval is now **BM25 + vector → RRF → MMR → tiered token budget**; MMR works in the BM25-only path since embeddings live on the docs · `mode` is threaded but inert until 2b · **graph expansion stays deferred to Step 3** (needs entities/edges).
 >
 > **Rev 7 updates (from Step 2b):** full-mode enrichment is live (§9 stages 1–2), so the **lite/full switch is now meaningful**. Added a **pluggable sync `Generator`** (deterministic `FakeGenerator` with a scriptable handler for keyless CI · `AnthropicGenerator` on `claude-haiku-4-5` with system-block prompt caching) · **adaptive gate** (`should_skip_retrieval` → memory-less turn when the model is confident) · **HyDE** (embeds a hypothetical answer; falls back to the raw query when generation is empty) · a per-query **`QueryCache`** for both (§16). With the default fake generator, full mode degrades to the lite vector path — a *meaningful* lite-vs-full quality comparison needs a real/scripted model and is the Step 3.5 sim harness's job.
+>
+> **Rev 8 updates (from Step 3a):** **Step 3 split into 3a (extraction → graph, done), 3b (graph expansion, next), 3c (durable write path), 3d (procedural + prospective indexing).** 3a added a **pluggable sync `Extractor`** (deterministic `FakeExtractor` for keyless CI · `SpacyExtractor` behind the extra; **GLiNER/torch + Haiku fallback deferred** to 3d) · edge collections `mentions`/`relates_to`/`produced_by` + the `memory_graph` named graph + a unique entity natural-key index · entity **UPSERT** (exact dedup + `mention_count`) with embeddings and idempotent edges (`relates_to` from co-occurrence) · **write-time conflict detection** (§8 Stage 3): cosine vs the tenant's entities → ≥0.9 merge / ≥0.6 flag `needs_review` for Dream State / else new · extraction runs only on the first store of a turn so replays don't double-count. The graph is now populated, unblocking graph expansion (§9 stage 4, Step 3b).
 
 ---
 
@@ -419,7 +421,7 @@ class Embedder(Protocol):
 
 ## 9. Retrieval Pipeline
 
-> **Step 2 status:** Stages 1 (adaptive gate) and 2 (HyDE) are implemented (full mode, Step 2b); stages 3 (vector + BM25), 5 (RRF + MMR), and 6 (tiered token budget) are implemented, with vector self-healing to BM25 on cold start (§7). Stage 4 (graph expansion) remains deferred to Step 3 (needs entities/edges).
+> **Step 2 status:** Stages 1 (adaptive gate) and 2 (HyDE) are implemented (full mode, Step 2b); stages 3 (vector + BM25), 5 (RRF + MMR), and 6 (tiered token budget) are implemented, with vector self-healing to BM25 on cold start (§7). Stage 4 (graph expansion) lands in Step 3b — Step 3a has now populated the entity/edge graph it traverses.
 
 Six stages. **Latency note:** stages 1–2 involve LLM calls and are part of the *augmented* latency budget, not the *core* retrieval budget (§23). Lite mode skips them entirely (§10).
 
@@ -871,8 +873,26 @@ HyDE, adaptive gate, query-hash caching — the lite/full switch is now meaningf
 - **Verified:** 34 tests green (4 generation + 6 enrich + 3 full-mode integration + the prior 21). CI stays deterministic via the fake generator (no key).
 - *Note:* a *meaningful* lite-vs-full quality comparison needs a real/scripted model → Step 3.5 sim harness.
 
-### Step 3 — Thicken ingestion ← NEXT
-Multi-stage extraction (spaCy → GLiNER2 → Haiku), prospective indexing, write-time conflict detection, idempotency keys, durable write path. **Unblocks graph expansion** (§9 stage 4) and procedural/tool-trace ingestion.
+### Step 3 — Thicken ingestion
+Split into four sub-steps (decided rev 8).
+
+#### Step 3a — Extraction → graph ✅ DONE
+Pluggable extraction + entity/edge graph + write-time conflict detection. Delivered:
+- **Pluggable extractor** (`extract.py`): sync `Extractor` Protocol; deterministic `FakeExtractor` (capitalized-span heuristic, keyless — tests/sim) and `SpacyExtractor` (behind the `extraction` extra). `get_extractor()` factory. **GLiNER/GLiREL + Haiku fallback deferred to 3d** (avoids torch in CI).
+- **Schema:** `mentions`/`relates_to`/`produced_by` edge collections, the `memory_graph` named graph, and a unique entity natural-key index `(tenant_id, name, label)`.
+- **Entity writes** (`entities.py`): AQL UPSERT (exact dedup + `mention_count`), entity embeddings, idempotent `mentions` (memory→entity) / `produced_by` (entity→episode) / `relates_to` (entity↔entity co-occurrence) edges.
+- **Write-time conflict detection** (§8 Stage 3): cosine vs the tenant's entities → ≥ `entity_merge_threshold` (0.9) merge / ≥ `entity_flag_threshold` (0.6) create + flag `needs_review` for Dream State (§13) / else create. Brute-force per turn for now (entity vector index is a later optimization).
+- **Idempotency:** extraction runs only on the first store of a turn, so replays don't double-count mentions.
+- **Verified:** 45 tests green (4 extract + 7 entities + the prior 34); conflict thresholds tested deterministically via a stub embedder. CI stays torch-free.
+
+#### Step 3b — Graph expansion ← NEXT
+1–2 hop traversal from seed entities over the now-populated graph, fused into retrieval (§9 stage 4).
+
+#### Step 3c — Durable write path
+In-process queue + worker + retry/backoff + dead-letter (`_failed_writes`) + graceful degradation (§15).
+
+#### Step 3d — Procedural + prospective indexing
+`steps` collection + `TOUCHED`/`TRANSITION` edges (procedural/tool-trace ingestion); prospective indexing (full mode, uses the Step 2b generator); GLiNER/GLiREL + Haiku extraction fallback (§8 Stage 2).
 
 ### Step 3.5 — Agentic simulation harness (real-data validation)
 Robust real-data validation of the end-to-end product — an agentic Vercel app using ArangoDB for both memory and actions (§22 "Agentic simulation harness"). Slotted here because it depends on full mode (Step 2), procedural/tool-trace ingestion, and the durable write path (Step 3). Two deliverables:
