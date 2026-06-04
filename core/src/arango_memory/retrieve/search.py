@@ -50,10 +50,30 @@ FOR doc IN memories
            embedding: doc.embedding, type: doc.type }
 """
 
+# Graph expansion (§9 stage 4): from seed memories → their entities → relates_to
+# neighbours (0..hops) → other memories mentioning those entities. Ranked by the
+# minimum relates_to hop distance (closer = stronger).
+_GRAPH_QUERY = """
+FOR start IN @seed_ids
+  FOR entity IN 1..1 OUTBOUND start mentions
+    FOR related, redge, p IN 0..@hops ANY entity relates_to
+      FOR mem IN 1..1 INBOUND related mentions
+        FILTER mem.tenant_id == @tenant_id
+           AND mem.agent_id == @agent_id
+           AND mem.invalid_at == null
+           AND mem._key NOT IN @seed_keys
+        COLLECT key = mem._key AGGREGATE hops = MIN(LENGTH(p.edges)) INTO rows = mem
+        SORT hops ASC
+        LIMIT @pool
+        RETURN { key: key, score: 1.0 / (1.0 + hops),
+                 text: rows[0].text, embedding: rows[0].embedding, type: rows[0].type }
+"""
+
 _ENCODER = tiktoken.get_encoding("cl100k_base")
 
 _RRF_K = 60
 _MMR_LAMBDA = 0.5
+_GRAPH_SEED_COUNT = 10
 
 # Tier token budget as fractions of max_memory_tokens (§9: 400/700/300/100 of 1500).
 _TIER_FRACTIONS = {"working": 0.267, "episodic": 0.467, "semantic": 0.20, "reasoning": 0.067}
@@ -104,6 +124,16 @@ def _cos(a: list[float], b: list[float]) -> float:
 def _run(db: StandardDatabase, query: str, bind_vars: dict[str, Any]) -> list[dict[str, Any]]:
     cursor = cast(Cursor, db.aql.execute(query, bind_vars=bind_vars))
     return [row for row in cursor]
+
+
+def _seed_keys(ranked_lists: list[list[dict[str, Any]]]) -> list[str]:
+    """Top memory keys across the lexical/vector lists, used as graph seeds."""
+    seeds: list[str] = []
+    for rows in ranked_lists:
+        for row in rows[:_GRAPH_SEED_COUNT]:
+            if row["key"] not in seeds:
+                seeds.append(row["key"])
+    return seeds
 
 
 def _rrf_fuse(ranked_lists: list[list[dict[str, Any]]], names: list[str]) -> list[_Candidate]:
@@ -190,6 +220,7 @@ def retrieve(
     mode: str = "lite",
     candidate_pool: int = 100,
     n_lists: int | None = None,
+    graph_hops: int | None = None,
     generator: Generator | None = None,
     cache: QueryCache | None = None,
 ) -> RetrieveResult:
@@ -225,6 +256,26 @@ def retrieve(
         vector_rows = _run(db, _VECTOR_QUERY, {"qvec": query_vec, **scope})
         ranked_lists.append(vector_rows)
         names.append("vector")
+
+    # Graph expansion (§9 stage 4): traverse from the entities of the top hits to
+    # surface connected memories that lexical/vector search alone would miss.
+    seed_keys = _seed_keys(ranked_lists)
+    if seed_keys:
+        graph_rows = _run(
+            db,
+            _GRAPH_QUERY,
+            {
+                "seed_ids": [f"memories/{k}" for k in seed_keys],
+                "seed_keys": seed_keys,
+                "tenant_id": tenant_id,
+                "agent_id": agent_id,
+                "hops": graph_hops if graph_hops is not None else settings.graph_hops,
+                "pool": candidate_pool,
+            },
+        )
+        if graph_rows:
+            ranked_lists.append(graph_rows)
+            names.append("graph")
 
     fused = _rrf_fuse(ranked_lists, names)
     if not fused:

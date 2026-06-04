@@ -67,6 +67,8 @@ class Settings(BaseSettings):
     k: int = Field(default=10, ge=1)
     # Faiss IVF training tier (DESIGN.md §7): index trains once corpus ≥ n_lists.
     vector_n_lists: int = Field(default=256, ge=1)
+    # Graph expansion (DESIGN.md §9 stage 4): relates_to hops from seed entities (3 max).
+    graph_hops: int = Field(default=2, ge=0, le=3)
 
 
 settings = Settings()
