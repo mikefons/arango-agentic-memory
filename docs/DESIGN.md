@@ -1,7 +1,7 @@
 # ArangoDB Agentic Memory System — Design Specification
 
-> **Status:** Step 3a (extraction → graph) implemented and verified. Authoritative reference.
-> **Last updated:** 2026-06-04 (rev 8 — post Step 3a)
+> **Status:** Step 3b (graph expansion) implemented and verified. Authoritative reference.
+> **Last updated:** 2026-06-04 (rev 9 — post Step 3b)
 >
 > **Rev 2 decisions:** Python-first core with a thin TypeScript client · v1 scope is Vercel-only · build a walking skeleton first, then a test/eval harness, then thicken each layer.
 >
@@ -16,6 +16,8 @@
 > **Rev 7 updates (from Step 2b):** full-mode enrichment is live (§9 stages 1–2), so the **lite/full switch is now meaningful**. Added a **pluggable sync `Generator`** (deterministic `FakeGenerator` with a scriptable handler for keyless CI · `AnthropicGenerator` on `claude-haiku-4-5` with system-block prompt caching) · **adaptive gate** (`should_skip_retrieval` → memory-less turn when the model is confident) · **HyDE** (embeds a hypothetical answer; falls back to the raw query when generation is empty) · a per-query **`QueryCache`** for both (§16). With the default fake generator, full mode degrades to the lite vector path — a *meaningful* lite-vs-full quality comparison needs a real/scripted model and is the Step 3.5 sim harness's job.
 >
 > **Rev 8 updates (from Step 3a):** **Step 3 split into 3a (extraction → graph, done), 3b (graph expansion, next), 3c (durable write path), 3d (procedural + prospective indexing).** 3a added a **pluggable sync `Extractor`** (deterministic `FakeExtractor` for keyless CI · `SpacyExtractor` behind the extra; **GLiNER/torch + Haiku fallback deferred** to 3d) · edge collections `mentions`/`relates_to`/`produced_by` + the `memory_graph` named graph + a unique entity natural-key index · entity **UPSERT** (exact dedup + `mention_count`) with embeddings and idempotent edges (`relates_to` from co-occurrence) · **write-time conflict detection** (§8 Stage 3): cosine vs the tenant's entities → ≥0.9 merge / ≥0.6 flag `needs_review` for Dream State / else new · extraction runs only on the first store of a turn so replays don't double-count. The graph is now populated, unblocking graph expansion (§9 stage 4, Step 3b).
+>
+> **Rev 9 updates (from Step 3b):** **graph expansion is live** (§9 stage 4) — a traversal from the entities of the top lexical/vector hits (`mentions` → `relates_to` 0..`graph_hops` → `mentions`) surfaces connected memories, ranked by minimum hop distance and **fused into retrieval as a third RRF signal** (`source: graph`) alongside BM25 + vector. Tenant-scoped; a no-op when a turn produced no entities. The §9 retrieval pipeline is now complete (stages 1–6) bar deferred tuning. Next: Step 3c (durable write path).
 
 ---
 
@@ -421,7 +423,7 @@ class Embedder(Protocol):
 
 ## 9. Retrieval Pipeline
 
-> **Step 2 status:** Stages 1 (adaptive gate) and 2 (HyDE) are implemented (full mode, Step 2b); stages 3 (vector + BM25), 5 (RRF + MMR), and 6 (tiered token budget) are implemented, with vector self-healing to BM25 on cold start (§7). Stage 4 (graph expansion) lands in Step 3b — Step 3a has now populated the entity/edge graph it traverses.
+> **Step 2 status:** Stages 1 (adaptive gate) and 2 (HyDE) are implemented (full mode, Step 2b); stages 3 (vector + BM25), 5 (RRF + MMR), and 6 (tiered token budget) are implemented, with vector self-healing to BM25 on cold start (§7). Stage 4 (graph expansion) is implemented (Step 3b): a relates_to traversal from the top hits' entities, fused as a third RRF signal.
 
 Six stages. **Latency note:** stages 1–2 involve LLM calls and are part of the *augmented* latency budget, not the *core* retrieval budget (§23). Lite mode skips them entirely (§10).
 
@@ -885,10 +887,14 @@ Pluggable extraction + entity/edge graph + write-time conflict detection. Delive
 - **Idempotency:** extraction runs only on the first store of a turn, so replays don't double-count mentions.
 - **Verified:** 45 tests green (4 extract + 7 entities + the prior 34); conflict thresholds tested deterministically via a stub embedder. CI stays torch-free.
 
-#### Step 3b — Graph expansion ← NEXT
-1–2 hop traversal from seed entities over the now-populated graph, fused into retrieval (§9 stage 4).
+#### Step 3b — Graph expansion ✅ DONE
+1–2 hop traversal from seed entities over the populated graph, fused into retrieval (§9 stage 4). Delivered:
+- **`_GRAPH_QUERY`:** seed memories → entities (`mentions`) → `relates_to` neighbours (0..`graph_hops`) → other memories mentioning them, ranked by minimum hop distance.
+- **Fusion:** joins BM25 + vector as a third RRF signal (`source: graph`); seeds are the top hits from the lexical/vector lists. Tenant-scoped; a no-op when a turn produced no entities.
+- **Config:** `graph_hops` (default 2, max 3).
+- **Verified:** 48 tests green (3 graph-expansion + the prior 45) — connected-memory surfacing, tenant isolation, and the no-entity BM25 fallback.
 
-#### Step 3c — Durable write path
+#### Step 3c — Durable write path ← NEXT
 In-process queue + worker + retry/backoff + dead-letter (`_failed_writes`) + graceful degradation (§15).
 
 #### Step 3d — Procedural + prospective indexing
