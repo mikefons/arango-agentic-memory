@@ -1,7 +1,7 @@
 # ArangoDB Agentic Memory System — Design Specification
 
-> **Status:** Step 2a (core retrieval) implemented and verified. Authoritative reference.
-> **Last updated:** 2026-06-04 (rev 6 — post Step 2a)
+> **Status:** Step 2b (full-mode enrichment) implemented and verified. Authoritative reference.
+> **Last updated:** 2026-06-04 (rev 7 — post Step 2b)
 >
 > **Rev 2 decisions:** Python-first core with a thin TypeScript client · v1 scope is Vercel-only · build a walking skeleton first, then a test/eval harness, then thicken each layer.
 >
@@ -12,6 +12,8 @@
 > **Rev 5 updates (requirement):** captured the **agentic simulation harness** as real-data validation of the end-to-end product (an agentic Vercel app using ArangoDB for memory *and* actions). Two parts — a deterministic CI harness (`sim/`) and a reference Next.js app (`examples/vercel-agent/`) — added to the monorepo (§3) and specified in §22; lands as **Step 3.5** (§24), after full mode + procedural ingestion + durable writes exist. Clarifies that the Step 1 smoke eval validates plumbing, not real-data quality.
 >
 > **Rev 6 updates (from Step 2a):** **Step 2 split into 2a (core retrieval, done) and 2b (full-mode enrichment, next).** 2a delivered a **pluggable sync `Embedder`** (deterministic `FakeEmbedder` for keyless tests/sim · `OpenAIEmbedder`) — a sync deviation from §8's async sketch · write-time embeddings on `memories` · a **lazy Faiss IVF index** that trains only once the corpus ≥ `n_lists` (ArangoDB ERR 1555 otherwise), self-healing on the read path, with BM25 cold-start fallback (§7) · retrieval is now **BM25 + vector → RRF → MMR → tiered token budget**; MMR works in the BM25-only path since embeddings live on the docs · `mode` is threaded but inert until 2b · **graph expansion stays deferred to Step 3** (needs entities/edges).
+>
+> **Rev 7 updates (from Step 2b):** full-mode enrichment is live (§9 stages 1–2), so the **lite/full switch is now meaningful**. Added a **pluggable sync `Generator`** (deterministic `FakeGenerator` with a scriptable handler for keyless CI · `AnthropicGenerator` on `claude-haiku-4-5` with system-block prompt caching) · **adaptive gate** (`should_skip_retrieval` → memory-less turn when the model is confident) · **HyDE** (embeds a hypothetical answer; falls back to the raw query when generation is empty) · a per-query **`QueryCache`** for both (§16). With the default fake generator, full mode degrades to the lite vector path — a *meaningful* lite-vs-full quality comparison needs a real/scripted model and is the Step 3.5 sim harness's job.
 
 ---
 
@@ -417,7 +419,7 @@ class Embedder(Protocol):
 
 ## 9. Retrieval Pipeline
 
-> **Step 2a status:** Stages 3 (vector + BM25), 5 (RRF + MMR), and 6 (tiered token budget) are implemented, with vector self-healing to BM25 on cold start (§7). Stage 4 (graph expansion) is deferred to Step 3 (needs entities/edges); stages 1–2 (adaptive gate, HyDE) are full-mode only and land in Step 2b.
+> **Step 2 status:** Stages 1 (adaptive gate) and 2 (HyDE) are implemented (full mode, Step 2b); stages 3 (vector + BM25), 5 (RRF + MMR), and 6 (tiered token budget) are implemented, with vector self-healing to BM25 on cold start (§7). Stage 4 (graph expansion) remains deferred to Step 3 (needs entities/edges).
 
 Six stages. **Latency note:** stages 1–2 involve LLM calls and are part of the *augmented* latency budget, not the *core* retrieval budget (§23). Lite mode skips them entirely (§10).
 
@@ -860,11 +862,17 @@ Vector + RRF + MMR + tiered token budget + mode threading. Delivered:
 - **Verified:** vector syntax (`add_index type:vector`, `APPROX_NEAR_COSINE`, ≥`nLists` training) probed empirically against 3.12.9.1; 21 tests green (5 embedding + 3 ranking + 2 vector + Step 1's 11).
 - *Deferred:* graph expansion → Step 3 (needs entities/edges); HyDE/adaptive gate/caching → Step 2b.
 
-### Step 2b — Full-mode enrichment ← NEXT
-HyDE, adaptive gate, query-hash caching (lite/full switch becomes meaningful here). Uses a stubbed/recorded model so CI stays deterministic.
+### Step 2b — Full-mode enrichment ✅ DONE
+HyDE, adaptive gate, query-hash caching — the lite/full switch is now meaningful. Delivered:
+- **Pluggable generator** (`generation.py`): sync `Generator` Protocol; deterministic `FakeGenerator` (scriptable `handler`, keyless — tests/sim) and `AnthropicGenerator` (`claude-haiku-4-5`, system-block prompt caching). `get_generator()` errors if `anthropic` is selected without a key.
+- **Adaptive gate** (`should_skip_retrieval`): a memory-less turn when the model is confident no stored context is needed (§9 stage 1).
+- **HyDE** (§9 stage 2): embeds a hypothetical answer instead of the raw question; falls back to the raw query when generation is empty, so full mode degrades gracefully to the lite vector path.
+- **`QueryCache`**: per-query caching of gate + HyDE results so repeats are free (§16). In-process for now; a durable cache is a later ops concern.
+- **Verified:** 34 tests green (4 generation + 6 enrich + 3 full-mode integration + the prior 21). CI stays deterministic via the fake generator (no key).
+- *Note:* a *meaningful* lite-vs-full quality comparison needs a real/scripted model → Step 3.5 sim harness.
 
-### Step 3 — Thicken ingestion
-Multi-stage extraction (spaCy → GLiNER2 → Haiku), prospective indexing, write-time conflict detection, idempotency keys, durable write path.
+### Step 3 — Thicken ingestion ← NEXT
+Multi-stage extraction (spaCy → GLiNER2 → Haiku), prospective indexing, write-time conflict detection, idempotency keys, durable write path. **Unblocks graph expansion** (§9 stage 4) and procedural/tool-trace ingestion.
 
 ### Step 3.5 — Agentic simulation harness (real-data validation)
 Robust real-data validation of the end-to-end product — an agentic Vercel app using ArangoDB for both memory and actions (§22 "Agentic simulation harness"). Slotted here because it depends on full mode (Step 2), procedural/tool-trace ingestion, and the durable write path (Step 3). Two deliverables:
