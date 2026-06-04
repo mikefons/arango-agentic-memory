@@ -1,13 +1,17 @@
 # ArangoDB Agentic Memory System — Design Specification
 
-> **Status:** Step 1 (test + eval harness) implemented and verified. Authoritative reference.
-> **Last updated:** 2026-06-02 (rev 4 — post Step 1)
+> **Status:** Step 2a (core retrieval) implemented and verified. Authoritative reference.
+> **Last updated:** 2026-06-04 (rev 6 — post Step 2a)
 >
 > **Rev 2 decisions:** Python-first core with a thin TypeScript client · v1 scope is Vercel-only · build a walking skeleton first, then a test/eval harness, then thicken each layer.
 >
 > **Rev 3 updates (from Step 0):** ArangoDB image is **Enterprise 3.12.9.1** (Community tops out at 3.12.4.3; runs in evaluation mode without a license) · vector-index flag renamed `--experimental-vector-index` → `--vector-index` · **two configurable connection targets** (local Docker + ArangoGraph) via `ARANGO_TARGET` + a `check` probe · Vercel middleware uses `LanguageModelV2Middleware` (`ai@5` + `@ai-sdk/provider@2`), not V4 · dev tooling/infra captured in §25 · build sequence Step 0 marked done.
 >
 > **Rev 4 updates (from Step 1):** FastAPI core is now an **app factory** (`create_app(client=None)` + a `get_client` dependency) so tests inject a client; the module-level `app = create_app()` still serves `make dev`/prod · tests use **testcontainers** (Enterprise 3.12.9.1, eval mode) with a **fresh per-test database** for isolation · HTTP contract tests pin the TS↔Python seam via `TestClient` · the **LoCoMo runner is lite/BM25-only** for now (Recall@k + token-F1), with lite-vs-full comparison deferred to Step 2 · CI (`.github/workflows/ci.yml`) runs `make ci` · build sequence Step 1 marked done.
+>
+> **Rev 5 updates (requirement):** captured the **agentic simulation harness** as real-data validation of the end-to-end product (an agentic Vercel app using ArangoDB for memory *and* actions). Two parts — a deterministic CI harness (`sim/`) and a reference Next.js app (`examples/vercel-agent/`) — added to the monorepo (§3) and specified in §22; lands as **Step 3.5** (§24), after full mode + procedural ingestion + durable writes exist. Clarifies that the Step 1 smoke eval validates plumbing, not real-data quality.
+>
+> **Rev 6 updates (from Step 2a):** **Step 2 split into 2a (core retrieval, done) and 2b (full-mode enrichment, next).** 2a delivered a **pluggable sync `Embedder`** (deterministic `FakeEmbedder` for keyless tests/sim · `OpenAIEmbedder`) — a sync deviation from §8's async sketch · write-time embeddings on `memories` · a **lazy Faiss IVF index** that trains only once the corpus ≥ `n_lists` (ArangoDB ERR 1555 otherwise), self-healing on the read path, with BM25 cold-start fallback (§7) · retrieval is now **BM25 + vector → RRF → MMR → tiered token budget**; MMR works in the BM25-only path since embeddings live on the docs · `mode` is threaded but inert until 2b · **graph expansion stays deferred to Step 3** (needs entities/edges).
 
 ---
 
@@ -131,7 +135,10 @@ arango-agentic-memory/
 ├── packages/
 │   └── vercel/            ← thin TypeScript client (LanguageModelV2Middleware)
 │       └── package.json   ← pnpm (npm in practice; pnpm not installed locally)
-├── .github/workflows/     ← gitleaks secret-scanning CI (§25)
+├── examples/
+│   └── vercel-agent/      ← reference Next.js agent app: demo + simulation SUT (§22)
+├── sim/                   ← deterministic agentic simulation harness (§22)
+├── .github/workflows/     ← gitleaks + core CI (lint/type/test) (§25)
 ├── docker-compose.yml     ← ArangoDB (Enterprise) + Python core sidecar for local dev
 ├── .env.example
 ├── .pre-commit-config.yaml ← gitleaks pre-commit hook (§25)
@@ -409,6 +416,8 @@ class Embedder(Protocol):
 ---
 
 ## 9. Retrieval Pipeline
+
+> **Step 2a status:** Stages 3 (vector + BM25), 5 (RRF + MMR), and 6 (tiered token budget) are implemented, with vector self-healing to BM25 on cold start (§7). Stage 4 (graph expansion) is deferred to Step 3 (needs entities/edges); stages 1–2 (adaptive gate, HyDE) are full-mode only and land in Step 2b.
 
 Six stages. **Latency note:** stages 1–2 involve LLM calls and are part of the *augmented* latency budget, not the *core* retrieval budget (§23). Lite mode skips them entirely (§10).
 
@@ -767,6 +776,23 @@ Not built in v1. The schema and core API are designed to support them without re
 - Minimal **LoCoMo-style** runner: load multi-session conversations, ingest, query, score F1 / Recall@k / Deducible Score.
 - Runs locally and in CI on a small fixed slice; full benchmark runs are manual/nightly.
 - Lite vs full mode compared on the same slice to quantify the quality/cost trade-off.
+- **Step 1 status:** the runner is implemented (`arango_memory.eval`) but **lite/BM25-only** and scored on a tiny hand-built smoke slice — it validates the ingest→index→retrieve→score *plumbing*, not real-data quality. Real-data quality is the job of the simulation harness below.
+
+### Agentic simulation harness (real-data validation) — *requirement; lands as a milestone after Step 3 (§24)*
+
+The smoke eval proves the pipeline runs; it does **not** prove the system serves a real agent well. The simulation harness is the robust, real-data validation of the end-to-end product: **an agentic application on Vercel that uses ArangoDB to capture both agentic *memory* and *actions*** (procedural tool traces), exercised over realistic multi-session workloads and scored against the §23 targets.
+
+It has **two components** (both built):
+
+1. **Deterministic simulation harness (`sim/`, CI-friendly).** Scripts realistic agent behavior — multi-session conversations *and* tool/action calls — directly against the Vercel adapter + Python core, with a **stubbed/recorded model** so runs are deterministic and need no API key. This is the regression gate that can run in CI on the real LoCoMo slice. Must assert:
+   - **Memory recall** on the real LoCoMo slice (F1 / Recall@k / Deducible Score vs §23 targets), lite **and** full mode.
+   - **Action/procedural memory**: tool traces are written as `steps` with `TOUCHED`/`TRANSITION` edges (§5, §11) and are retrievable/reused on later turns.
+   - **Graceful degradation** (§15): core down → memory-less turn still succeeds; embedder/vector failures fall back per the degradation table.
+   - **Multi-tenant isolation** holds under concurrent simulated agents.
+
+2. **Reference Vercel agent app (`examples/vercel-agent/`, manual/nightly).** A small real Next.js app wrapping a live model with `arangoMemory()` (§20), driving genuine `streamText` turns through adapter → core → ArangoDB. Doubles as the project demo and as the realistic (non-deterministic) end-to-end check; closes the Step 0 deferred item ("a live end-to-end `streamText` turn through the seam — needs an example app + model key").
+
+**Prerequisites** (why it's a post-Step-3 milestone): full mode (Step 2), procedural/tool-trace ingestion, and the durable write path (Step 3) must exist first. The full benchmark run completes at Step 7.
 
 ### CI
 - Lint + type (ruff/mypy for Python, eslint/tsc for TS) — locally via `make ci`
@@ -812,7 +838,7 @@ Thinnest end-to-end loop, no breadth. Delivered:
 - Vercel adapter: `arangoMemory()` middleware — retrieve+inject in `transformParams`, best-effort store in `wrapGenerate`/`wrapStream`, memory-less degradation on failure
 - Connection probe (`check.py`) and two targets (local + ArangoGraph, §6)
 - **Verified** vs real Enterprise 3.12.9.1: store→BM25 retrieve round-trip, idempotency (3 docs from 4 calls), tenant isolation, ruff+mypy clean, adapter typechecks+builds
-- *Deferred within Step 0:* LLM-only entity extraction (entities collection exists but is not yet populated); a live end-to-end `streamText` turn through the seam (both halves proven independently — needs an example app + model key)
+- *Deferred within Step 0:* LLM-only entity extraction (entities collection exists but is not yet populated); a live end-to-end `streamText` turn through the seam (both halves proven independently — needs an example app + model key → now owned by **Step 3.5**, the agentic simulation harness)
 - *Resolved along the way:* uv src-layout editable-install flakiness and iCloud `.venv` corruption (§25)
 
 ### Step 1 — Test + eval harness ✅ DONE
@@ -825,11 +851,27 @@ testcontainers (Enterprise 3.12.9.1), fixtures, core HTTP contract tests, minima
 - **CI:** `.github/workflows/ci.yml` runs `make ci` (lint + type + test) on a Docker-enabled runner.
 - *Resolved along the way:* migrated `add_persistent_index` → `add_index({"type": "persistent", …})` (the former is deprecated).
 
-### Step 2 — Thicken retrieval ← NEXT
-HyDE, RRF, MMR, graph expansion, tiered token budget, lite/full mode switch, caching.
+### Step 2a — Core retrieval ✅ DONE
+Vector + RRF + MMR + tiered token budget + mode threading. Delivered:
+- **Pluggable embedder** (`embedding.py`): sync `Embedder` Protocol; deterministic `FakeEmbedder` (keyless — tests/sim) and `OpenAIEmbedder`. `get_embedder()` errors if `openai` is selected without a key (no silent degradation).
+- **Write-time embeddings** on `memories` (`embedding`/`embedding_model`/`embedding_version`).
+- **Lazy Faiss IVF index** (`ensure_vector_index`/`has_vector_index`): builds only once the corpus ≥ `n_lists` (ArangoDB ERR 1555 otherwise; guarded by a doc-count pre-check to avoid a phantom index). Cold start degrades to BM25 (§7); retrieval **self-heals** — the first read after warm-up builds the index.
+- **Retrieval pipeline:** parallel BM25 + vector → **RRF fusion** → **MMR diversity** → **tiered token budget** (working/episodic/semantic/reasoning with roll-up). MMR applies in the BM25-only path too, since embeddings live on the docs.
+- **Verified:** vector syntax (`add_index type:vector`, `APPROX_NEAR_COSINE`, ≥`nLists` training) probed empirically against 3.12.9.1; 21 tests green (5 embedding + 3 ranking + 2 vector + Step 1's 11).
+- *Deferred:* graph expansion → Step 3 (needs entities/edges); HyDE/adaptive gate/caching → Step 2b.
+
+### Step 2b — Full-mode enrichment ← NEXT
+HyDE, adaptive gate, query-hash caching (lite/full switch becomes meaningful here). Uses a stubbed/recorded model so CI stays deterministic.
 
 ### Step 3 — Thicken ingestion
 Multi-stage extraction (spaCy → GLiNER2 → Haiku), prospective indexing, write-time conflict detection, idempotency keys, durable write path.
+
+### Step 3.5 — Agentic simulation harness (real-data validation)
+Robust real-data validation of the end-to-end product — an agentic Vercel app using ArangoDB for both memory and actions (§22 "Agentic simulation harness"). Slotted here because it depends on full mode (Step 2), procedural/tool-trace ingestion, and the durable write path (Step 3). Two deliverables:
+- **`sim/`** — deterministic, CI-friendly harness (stubbed/recorded model) scripting multi-session conversations + tool calls against the adapter+core; asserts recall on the real LoCoMo slice (lite **and** full), action/procedural-memory write+reuse, graceful degradation, and multi-tenant isolation.
+- **`examples/vercel-agent/`** — reference Next.js app driving live `streamText` turns through adapter → core → ArangoDB (manual/nightly); doubles as the demo and closes the Step 0 deferred live-turn item.
+
+The *full* benchmark run still completes at Step 7; this milestone establishes the harness and its regression gates.
 
 ### Step 4 — Lifecycle
 Decay (Ebbinghaus, TTL), Supersedes/bi-temporal, GAM consolidation trigger, Dream State worker + circuit breaker.
