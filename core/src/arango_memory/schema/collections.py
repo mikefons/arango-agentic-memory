@@ -13,8 +13,10 @@ from typing import Any, cast
 from arango.database import StandardDatabase
 from arango.exceptions import IndexCreateError
 
-DOCUMENT_COLLECTIONS: tuple[str, ...] = ("episodes", "memories", "entities")
-EDGE_COLLECTIONS: tuple[str, ...] = ("mentions", "relates_to", "produced_by")
+DOCUMENT_COLLECTIONS: tuple[str, ...] = ("episodes", "memories", "entities", "steps")
+EDGE_COLLECTIONS: tuple[str, ...] = (
+    "mentions", "relates_to", "produced_by", "TOUCHED", "TRANSITION",
+)
 
 # Dead-letter for writes that exhaust retries (DESIGN.md §15). Named without a
 # leading underscore (ArangoDB reserves "_*" for system collections).
@@ -40,6 +42,16 @@ _EDGE_DEFINITIONS = [
         "edge_collection": "produced_by",
         "from_vertex_collections": ["entities"],
         "to_vertex_collections": ["episodes"],
+    },
+    {
+        "edge_collection": "TOUCHED",
+        "from_vertex_collections": ["steps"],
+        "to_vertex_collections": ["memories"],
+    },
+    {
+        "edge_collection": "TRANSITION",
+        "from_vertex_collections": ["steps"],
+        "to_vertex_collections": ["steps"],
     },
 ]
 
@@ -70,6 +82,15 @@ def ensure_schema(db: StandardDatabase) -> None:
             "fields": ["tenant_id", "name", "label"],
             "unique": True,
             "name": "idx_entity_natural_key",
+        }
+    )
+    # Step natural-key dedup for UPSERT + use_count reuse (DESIGN.md §5, §11).
+    db.collection("steps").add_index(
+        {
+            "type": "persistent",
+            "fields": ["tenant_id", "agent_id", "tool_name", "outcome"],
+            "unique": True,
+            "name": "idx_step_natural_key",
         }
     )
 
@@ -126,6 +147,7 @@ def _ensure_search_view(db: StandardDatabase) -> None:
                 "memories": {
                     "fields": {
                         "text": {"analyzers": ["text_en"]},
+                        "prospective_queries": {"analyzers": ["text_en"]},
                         "tenant_id": {"analyzers": ["identity"]},
                         "agent_id": {"analyzers": ["identity"]},
                     },

@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from typing import Literal
+from typing import Any, Literal
 
 from fastapi import Depends, FastAPI, Request
 from pydantic import BaseModel, Field
@@ -19,7 +19,8 @@ from ..config import settings
 from ..embedding import Embedder, get_embedder
 from ..generation import Generator, get_generator
 from ..ingest.extract import get_extractor
-from ..ingest.queue import InProcessQueue, WriteIntent, WriteQueue
+from ..ingest.procedural import get_steps
+from ..ingest.queue import InProcessQueue, StepIntent, WriteIntent, WriteQueue
 from ..ingest.worker import WriteWorker
 from ..retrieve.enrich import QueryCache
 from ..retrieve.search import retrieve
@@ -98,6 +99,26 @@ class RetrieveResponse(BaseModel):
     tokens_injected: int = 0
 
 
+# ── /v1/step (procedural memory) ──────────────────────────
+class StepRequest(BaseModel):
+    tool_name: str
+    arguments: dict[str, Any] = Field(default_factory=dict)
+    outcome: Literal["success", "failure"]
+    ctx: AccessContext
+    pattern_summary: str = ""
+    source_memory_key: str | None = None
+    prev_step_key: str | None = None
+
+
+class StepResponse(BaseModel):
+    status: Literal["queued"] = "queued"
+    step_id: str
+
+
+class StepsResponse(BaseModel):
+    steps: list[dict[str, Any]] = Field(default_factory=list)
+
+
 # ── Route handlers ────────────────────────────────────────
 async def health(client: ArangoMemoryClient = Depends(get_client)) -> dict[str, object]:
     return {"status": "ok", "arango": client.ping(), "mode": settings.memory_mode}
@@ -119,6 +140,37 @@ async def store_endpoint(
     )
     queue.enqueue(intent)
     return StoreResponse(episode_id=intent.key, memory_ids=[f"{intent.key}-mem"])
+
+
+async def step_endpoint(
+    req: StepRequest,
+    queue: WriteQueue = Depends(get_queue_dep),
+) -> StepResponse:
+    intent = StepIntent(
+        tool_name=req.tool_name,
+        arguments=req.arguments,
+        outcome=req.outcome,
+        tenant_id=req.ctx.tenant_id,
+        agent_id=req.ctx.agent_id,
+        pattern_summary=req.pattern_summary,
+        source_memory_key=req.source_memory_key,
+        prev_step_key=req.prev_step_key,
+    )
+    queue.enqueue(intent)
+    return StepResponse(step_id=intent.key)
+
+
+async def steps_endpoint(
+    tenant_id: str,
+    agent_id: str,
+    tool_name: str | None = None,
+    limit: int = 20,
+    client: ArangoMemoryClient = Depends(get_client),
+) -> StepsResponse:
+    steps = get_steps(
+        client.db, tenant_id=tenant_id, agent_id=agent_id, tool_name=tool_name, limit=limit
+    )
+    return StepsResponse(steps=steps)
 
 
 async def retrieve_endpoint(
@@ -166,7 +218,8 @@ def create_app(client: ArangoMemoryClient | None = None) -> FastAPI:
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         ensure_schema(mem_client.connect())
         worker = WriteWorker(
-            queue, worker_client.connect(), embedder=embedder, extractor=extractor
+            queue, worker_client.connect(),
+            embedder=embedder, extractor=extractor, generator=generator,
         )
         worker.start()
         app.state.worker = worker
@@ -187,6 +240,8 @@ def create_app(client: ArangoMemoryClient | None = None) -> FastAPI:
     app.add_api_route(
         "/v1/retrieve", retrieve_endpoint, methods=["POST"], response_model=RetrieveResponse
     )
+    app.add_api_route("/v1/step", step_endpoint, methods=["POST"], response_model=StepResponse)
+    app.add_api_route("/v1/steps", steps_endpoint, methods=["GET"], response_model=StepsResponse)
     return app
 
 

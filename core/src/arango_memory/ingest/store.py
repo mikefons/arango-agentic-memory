@@ -12,9 +12,11 @@ from dataclasses import dataclass
 from arango.database import StandardDatabase
 
 from ..embedding import Embedder, get_embedder
+from ..generation import Generator, get_generator
 from ..models import idempotency_key, utcnow_iso
 from .entities import write_entities
 from .extract import Extractor, get_extractor
+from .prospective import generate_prospective
 
 
 @dataclass(frozen=True)
@@ -34,12 +36,14 @@ def store(
     turn_index: int = 0,
     embedder: Embedder | None = None,
     extractor: Extractor | None = None,
+    generator: Generator | None = None,
+    mode: str = "lite",
 ) -> StoreResult:
     """Persist one turn as an episode + episodic memory, with extracted entities.
 
     The memory carries an embedding for vector retrieval (DESIGN.md §5, §9).
-    Entity/edge extraction runs only on the first store of a turn so idempotent
-    replays don't double-count mentions (DESIGN.md §8).
+    Entity/edge extraction and prospective indexing (full mode) run only on the
+    first store of a turn so idempotent replays don't double-count (DESIGN.md §8).
     """
     emb = embedder or get_embedder()
     now = utcnow_iso()
@@ -51,6 +55,10 @@ def store(
         turn_index=turn_index,
     )
     is_new = not db.collection("episodes").has(key)
+
+    prospective: list[str] = []
+    if is_new and mode == "full":
+        prospective = generate_prospective(content, generator or get_generator())
 
     episode = {
         "_key": key,
@@ -81,6 +89,7 @@ def store(
         "embedding": emb.embed(content),
         "embedding_model": emb.model,
         "embedding_version": emb.version,
+        "prospective_queries": prospective,
     }
     db.collection("memories").insert(memory, overwrite_mode="ignore", silent=True)
 
