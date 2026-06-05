@@ -1,0 +1,55 @@
+{
+  "scenario_id": "sim_assistant_1",
+  "sessions": [
+    [
+      {
+        "speaker": "User",
+        "text": "I'm planning a backpacking trip to Patagonia next March.",
+        "tools": [
+          {"tool_name": "weather_lookup", "arguments": {"region": "Patagonia", "month": "March"}, "outcome": "success"}
+        ]
+      },
+      {"speaker": "Assistant", "text": "March is late summer in Patagonia, with mild days and cold nights."},
+      {"speaker": "User", "text": "Great. I'll be hiking the W Trek in Torres del Paine."}
+    ],
+    [
+      {
+        "speaker": "User",
+        "text": "Can you find a lightweight tent under two kilograms?",
+        "tools": [
+          {"tool_name": "product_search", "arguments": {"category": "tent", "max_weight_kg": 2}, "outcome": "success"}
+        ]
+      },
+      {"speaker": "Assistant", "text": "The Nimbus UL2 weighs 1.6 kilograms and suits the W Trek."},
+      {"speaker": "User", "text": "I also need to book the refugios along the route."}
+    ],
+    [
+      {
+        "speaker": "User",
+        "text": "Book the refugios for the W Trek dates.",
+        "tools": [
+          {"tool_name": "product_search", "arguments": {"category": "refugio", "trek": "W"}, "outcome": "success"},
+          {"tool_name": "booking_create", "arguments": {"trek": "W", "nights": 4}, "outcome": "success"}
+        ]
+      },
+      {"speaker": "Assistant", "text": "Booked 4 nights of refugios across the W Trek in Torres del Paine."}
+    ]
+  ],
+  "qa": [
+    {
+      "question": "Where is the user going backpacking?",
+      "answer": "Patagonia",
+      "gold_fact": "backpacking trip to Patagonia"
+    },
+    {
+      "question": "Which trek will the user hike?",
+      "answer": "the W Trek in Torres del Paine",
+      "gold_fact": "hiking the W Trek in Torres del Paine"
+    },
+    {
+      "question": "What tent did you recommend for the trek?",
+      "answer": "the Nimbus UL2",
+      "gold_fact": "Nimbus UL2 weighs 1.6 kilograms"
+    }
+  ]
+}

@@ -1,7 +1,7 @@
 # ArangoDB Agentic Memory System — Design Specification
 
-> **Status:** Step 3d (procedural + prospective) implemented and verified. Authoritative reference.
-> **Last updated:** 2026-06-04 (rev 11 — post Step 3d)
+> **Status:** Step 3.5a (deterministic sim harness) implemented and verified. Authoritative reference.
+> **Last updated:** 2026-06-04 (rev 12 — post Step 3.5a)
 >
 > **Rev 2 decisions:** Python-first core with a thin TypeScript client · v1 scope is Vercel-only · build a walking skeleton first, then a test/eval harness, then thicken each layer.
 >
@@ -22,6 +22,8 @@
 > **Rev 10 updates (from Step 3c):** the **durable write path** (§15) is live — `/v1/store` now **enqueues** an idempotency-keyed `WriteIntent` and returns immediately (`{status:"queued", episode_id, memory_ids}`, deterministic from the key); a background `WriteWorker` (daemon thread, own DB connection) drains the queue via `store()` with exponential backoff and **dead-letters to `failed_writes`** on exhaustion, with `replay_failed()` to recover. The queue is an in-process `WriteQueue` Protocol (Redis/SQS slot in later). `store()` stays the commit function (worker + tests). **Naming deviation:** the dead-letter collection is `failed_writes`, not §15's `_failed_writes` — ArangoDB reserves `_*` for system collections. Next: Step 3d (procedural + prospective indexing).
 >
 > **Rev 11 updates (from Step 3d):** **procedural memory + prospective indexing are live**, completing Step 3's ingestion thickening (3a–3d). Procedural (§5, §11): a `steps` collection + `TOUCHED` (step→memory) / `TRANSITION` (step→step) edges; `record_step` UPSERTs by `(tenant, agent, tool_name, outcome)` so a recurring pattern **increments `use_count`** (the reuse signal); `get_steps` lookup; a `StepIntent` rides the same durable queue (worker dispatches by type). API: `POST /v1/step`, `GET /v1/steps`. Prospective indexing (§8 Stage 4, full mode): `store()` generates hypothetical future questions (2b generator) into `memories.prospective_queries`, which the search view indexes so a memory is findable by a question it answers. **Procedural memory now exists → the Step 3.5 sim harness is unblocked.** The only remaining ingestion piece is **Step 3e** (GLiNER/GLiREL + Haiku extraction fallback — the torch tier). Next: Step 3.5 (agentic simulation harness).
+>
+> **Rev 12 updates (from Step 3.5a):** the **deterministic simulation harness** is live (`arango_memory/sim/`) — `run_scenario` plays a multi-session agent loop *with interleaved tool calls* against the core's HTTP surface (the endpoints the adapter calls) over a decoupled `HttpClient` Protocol, with stubbed models so it's reproducible and keyless. The CI gate (`test_sim.py`) asserts the four §22 categories: cross-session **recall** (lite + full), **procedural** memory + `use_count` reuse + `TOUCHED`/`TRANSITION` edges, graceful **write-failure degradation** (turn stays `queued`, retrieval degrades to memory-less), and tenant **isolation**. **Placement deviation:** the harness lives at `arango_memory/sim/` (mirroring `eval/`), not a standalone root `sim/` (§3), so it reuses the testcontainers fixtures and runs in the existing `make ci`. A *true* lite-vs-full quality delta still needs a real model → Step 3.5b. Next: Step 3.5b (reference Vercel app + adapter tool-trace capture).
 
 ## Table of Contents
 
@@ -916,9 +918,18 @@ Procedural memory (ingestion + retrieval/reuse) and full-mode prospective indexi
 GLiNER/GLiREL zero-shot NER + relation extraction and the Haiku extraction fallback (§8 Stage 2). Deferred from 3a/3d to keep CI torch-free; pulls torch + a model download. Slots behind the existing `Extractor` Protocol (no caller changes).
 
 ### Step 3.5 — Agentic simulation harness (real-data validation)
-Robust real-data validation of the end-to-end product — an agentic Vercel app using ArangoDB for both memory and actions (§22 "Agentic simulation harness"). Slotted here because it depends on full mode (Step 2), procedural/tool-trace ingestion, and the durable write path (Step 3). Two deliverables:
-- **`sim/`** — deterministic, CI-friendly harness (stubbed/recorded model) scripting multi-session conversations + tool calls against the adapter+core; asserts recall on the real LoCoMo slice (lite **and** full), action/procedural-memory write+reuse, graceful degradation, and multi-tenant isolation.
-- **`examples/vercel-agent/`** — reference Next.js app driving live `streamText` turns through adapter → core → ArangoDB (manual/nightly); doubles as the demo and closes the Step 0 deferred live-turn item.
+Robust real-data validation of the end-to-end product — an agentic Vercel app using ArangoDB for both memory and actions (§22 "Agentic simulation harness"). Split into 3.5a (deterministic harness) and 3.5b (reference app).
+
+#### Step 3.5a — Deterministic sim harness ✅ DONE
+CI-friendly, keyless regression gate (`arango_memory/sim/`). Delivered:
+- **Runner** (`runner.py`): `run_scenario` plays a multi-session agent loop with interleaved tool calls against the core's HTTP surface (`/v1/store`, `/v1/step`, `/v1/retrieve`) over a decoupled `HttpClient` Protocol (FastAPI `TestClient` satisfies it). Stubbed models → deterministic. Scoring reuses `eval` metrics.
+- **Scenario** (`scenario.py` + `tests/data/sim_scenario.json`): multi-session conversation + tool calls + cross-session QA.
+- **Gate** (`tests/test_sim.py`): asserts cross-session **recall** (lite + full), **procedural** memory + `use_count` reuse + `TOUCHED`/`TRANSITION`, graceful **write-failure degradation** (§15), and tenant **isolation**.
+- **Placement deviation:** lives at `arango_memory/sim/` (mirroring `eval/`), not root `sim/` (§3), reusing the testcontainers fixtures; runs in the existing `make ci`.
+- *Boundary:* a true lite-vs-full quality delta needs a real model → 3.5b.
+
+#### Step 3.5b — Reference Vercel app + adapter tool-trace capture ← NEXT
+Update `@arango-memory/vercel` to capture tool traces → `POST /v1/step` (the adapter currently does store/retrieve only), then a small `examples/vercel-agent/` Next.js app driving live `streamText` turns through adapter → core → ArangoDB (manual/nightly; needs a model key). Doubles as the demo and closes the Step 0 deferred live-turn item.
 
 The *full* benchmark run still completes at Step 7; this milestone establishes the harness and its regression gates.
 
