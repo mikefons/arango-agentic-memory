@@ -26,7 +26,8 @@ from .enrich import QueryCache, hyde, should_skip_retrieval
 
 _BM25_QUERY = f"""
 FOR doc IN {SEARCH_VIEW}
-  SEARCH ANALYZER(doc.text IN TOKENS(@query, "text_en"), "text_en")
+  SEARCH ANALYZER(doc.text IN TOKENS(@query, "text_en")
+                  OR doc.prospective_queries IN TOKENS(@query, "text_en"), "text_en")
      AND doc.tenant_id == @tenant_id
      AND doc.agent_id == @agent_id
   FILTER doc.invalid_at == null

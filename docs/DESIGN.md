@@ -1,7 +1,7 @@
 # ArangoDB Agentic Memory System — Design Specification
 
-> **Status:** Step 3c (durable write path) implemented and verified. Authoritative reference.
-> **Last updated:** 2026-06-04 (rev 10 — post Step 3c)
+> **Status:** Step 3d (procedural + prospective) implemented and verified. Authoritative reference.
+> **Last updated:** 2026-06-04 (rev 11 — post Step 3d)
 >
 > **Rev 2 decisions:** Python-first core with a thin TypeScript client · v1 scope is Vercel-only · build a walking skeleton first, then a test/eval harness, then thicken each layer.
 >
@@ -20,6 +20,8 @@
 > **Rev 9 updates (from Step 3b):** **graph expansion is live** (§9 stage 4) — a traversal from the entities of the top lexical/vector hits (`mentions` → `relates_to` 0..`graph_hops` → `mentions`) surfaces connected memories, ranked by minimum hop distance and **fused into retrieval as a third RRF signal** (`source: graph`) alongside BM25 + vector. Tenant-scoped; a no-op when a turn produced no entities. The §9 retrieval pipeline is now complete (stages 1–6) bar deferred tuning. Next: Step 3c (durable write path).
 >
 > **Rev 10 updates (from Step 3c):** the **durable write path** (§15) is live — `/v1/store` now **enqueues** an idempotency-keyed `WriteIntent` and returns immediately (`{status:"queued", episode_id, memory_ids}`, deterministic from the key); a background `WriteWorker` (daemon thread, own DB connection) drains the queue via `store()` with exponential backoff and **dead-letters to `failed_writes`** on exhaustion, with `replay_failed()` to recover. The queue is an in-process `WriteQueue` Protocol (Redis/SQS slot in later). `store()` stays the commit function (worker + tests). **Naming deviation:** the dead-letter collection is `failed_writes`, not §15's `_failed_writes` — ArangoDB reserves `_*` for system collections. Next: Step 3d (procedural + prospective indexing).
+>
+> **Rev 11 updates (from Step 3d):** **procedural memory + prospective indexing are live**, completing Step 3's ingestion thickening (3a–3d). Procedural (§5, §11): a `steps` collection + `TOUCHED` (step→memory) / `TRANSITION` (step→step) edges; `record_step` UPSERTs by `(tenant, agent, tool_name, outcome)` so a recurring pattern **increments `use_count`** (the reuse signal); `get_steps` lookup; a `StepIntent` rides the same durable queue (worker dispatches by type). API: `POST /v1/step`, `GET /v1/steps`. Prospective indexing (§8 Stage 4, full mode): `store()` generates hypothetical future questions (2b generator) into `memories.prospective_queries`, which the search view indexes so a memory is findable by a question it answers. **Procedural memory now exists → the Step 3.5 sim harness is unblocked.** The only remaining ingestion piece is **Step 3e** (GLiNER/GLiREL + Haiku extraction fallback — the torch tier). Next: Step 3.5 (agentic simulation harness).
 
 ## Table of Contents
 
@@ -902,8 +904,16 @@ Async, durable writes so memory failures never block or break the agent turn (§
 - **Naming:** dead-letter collection is `failed_writes` (not `_failed_writes`; ArangoDB reserves `_*`).
 - **Verified:** 55 tests (3 queue + 4 worker + the prior 48) — drain commits episode/memory/entities, retry-then-succeed, dead-letter on persistent failure, `replay_failed()`, and the async API round-trip.
 
-#### Step 3d — Procedural + prospective indexing ← NEXT
-`steps` collection + `TOUCHED`/`TRANSITION` edges (procedural/tool-trace ingestion); prospective indexing (full mode, uses the Step 2b generator); GLiNER/GLiREL + Haiku extraction fallback (§8 Stage 2).
+#### Step 3d — Procedural + prospective indexing ✅ DONE
+Procedural memory (ingestion + retrieval/reuse) and full-mode prospective indexing. Delivered:
+- **Procedural** (`procedural.py`): `steps` collection + `TOUCHED` (step→memory) / `TRANSITION` (step→step) edges in `memory_graph` + a step natural-key index. `record_step` UPSERTs by `(tenant, agent, tool_name, outcome)` so a recurring pattern increments `use_count` (the reuse signal), writing `TOUCHED`/`TRANSITION`; `get_steps` lookup (tenant/agent-scoped, most-reused first).
+- **Async path**: `StepIntent` joins `WriteIntent` on the durable queue; the worker dispatches by type (dead-letter/replay handle both).
+- **Prospective** (`prospective.py`): full-mode `store()` generates hypothetical future questions (Step 2b generator) into `memories.prospective_queries`; the search view indexes the field and BM25 matches it — a memory becomes findable by a question it answers.
+- **API**: `POST /v1/step`, `GET /v1/steps`.
+- **Verified**: 62 tests (4 procedural + 2 prospective + 1 API step + the prior 55) — reuse/use_count, `TOUCHED`/`TRANSITION`, tenant scope, prospective findability, async step round-trip.
+
+#### Step 3e — Heavy extraction tier
+GLiNER/GLiREL zero-shot NER + relation extraction and the Haiku extraction fallback (§8 Stage 2). Deferred from 3a/3d to keep CI torch-free; pulls torch + a model download. Slots behind the existing `Extractor` Protocol (no caller changes).
 
 ### Step 3.5 — Agentic simulation harness (real-data validation)
 Robust real-data validation of the end-to-end product — an agentic Vercel app using ArangoDB for both memory and actions (§22 "Agentic simulation harness"). Slotted here because it depends on full mode (Step 2), procedural/tool-trace ingestion, and the durable write path (Step 3). Two deliverables:

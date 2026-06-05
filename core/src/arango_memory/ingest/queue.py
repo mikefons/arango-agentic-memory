@@ -8,10 +8,11 @@ is in-process for now — the `WriteQueue` Protocol is the seam a durable backen
 
 from __future__ import annotations
 
+import hashlib
 import threading
 from collections import deque
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Any, Protocol
 
 from ..models import idempotency_key
 
@@ -49,9 +50,31 @@ class WriteIntent:
         )
 
 
+@dataclass(frozen=True)
+class StepIntent:
+    """A queued procedural-memory (tool-trace) write (DESIGN.md §5, §11)."""
+
+    tool_name: str
+    arguments: dict[str, Any]
+    outcome: str
+    tenant_id: str
+    agent_id: str
+    pattern_summary: str = ""
+    source_memory_key: str | None = None
+    prev_step_key: str | None = None
+
+    @property
+    def key(self) -> str:
+        raw = f"{self.tenant_id}\x1f{self.agent_id}\x1f{self.tool_name}\x1f{self.outcome}"
+        return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+Intent = WriteIntent | StepIntent
+
+
 class WriteQueue(Protocol):
-    def enqueue(self, intent: WriteIntent) -> None: ...
-    def pop(self) -> WriteIntent | None: ...
+    def enqueue(self, intent: Intent) -> None: ...
+    def pop(self) -> Intent | None: ...
     def __len__(self) -> int: ...
 
 
@@ -59,14 +82,14 @@ class InProcessQueue:
     """Thread-safe FIFO queue backed by a deque."""
 
     def __init__(self) -> None:
-        self._items: deque[WriteIntent] = deque()
+        self._items: deque[Intent] = deque()
         self._lock = threading.Lock()
 
-    def enqueue(self, intent: WriteIntent) -> None:
+    def enqueue(self, intent: Intent) -> None:
         with self._lock:
             self._items.append(intent)
 
-    def pop(self) -> WriteIntent | None:
+    def pop(self) -> Intent | None:
         with self._lock:
             return self._items.popleft() if self._items else None
 
