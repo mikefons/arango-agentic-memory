@@ -1,0 +1,21 @@
+{
+  "name": "vercel-agent-example",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Minimal reference agent: Vercel AI SDK + arangoMemory middleware → core → ArangoDB",
+  "scripts": {
+    "start": "tsx src/run.ts"
+  },
+  "dependencies": {
+    "@ai-sdk/anthropic": "^2.0.0",
+    "@arango-memory/vercel": "file:../../packages/vercel",
+    "ai": "^5.0.0",
+    "zod": "^3.23.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.6.0"
+  }
+}

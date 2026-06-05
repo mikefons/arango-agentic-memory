@@ -1,7 +1,7 @@
 # ArangoDB Agentic Memory System — Design Specification
 
-> **Status:** Step 3.5a (deterministic sim harness) implemented and verified. Authoritative reference.
-> **Last updated:** 2026-06-04 (rev 12 — post Step 3.5a)
+> **Status:** Step 3.5b (reference app + adapter capture) implemented and verified. Authoritative reference.
+> **Last updated:** 2026-06-04 (rev 13 — post Step 3.5b)
 >
 > **Rev 2 decisions:** Python-first core with a thin TypeScript client · v1 scope is Vercel-only · build a walking skeleton first, then a test/eval harness, then thicken each layer.
 >
@@ -24,6 +24,8 @@
 > **Rev 11 updates (from Step 3d):** **procedural memory + prospective indexing are live**, completing Step 3's ingestion thickening (3a–3d). Procedural (§5, §11): a `steps` collection + `TOUCHED` (step→memory) / `TRANSITION` (step→step) edges; `record_step` UPSERTs by `(tenant, agent, tool_name, outcome)` so a recurring pattern **increments `use_count`** (the reuse signal); `get_steps` lookup; a `StepIntent` rides the same durable queue (worker dispatches by type). API: `POST /v1/step`, `GET /v1/steps`. Prospective indexing (§8 Stage 4, full mode): `store()` generates hypothetical future questions (2b generator) into `memories.prospective_queries`, which the search view indexes so a memory is findable by a question it answers. **Procedural memory now exists → the Step 3.5 sim harness is unblocked.** The only remaining ingestion piece is **Step 3e** (GLiNER/GLiREL + Haiku extraction fallback — the torch tier). Next: Step 3.5 (agentic simulation harness).
 >
 > **Rev 12 updates (from Step 3.5a):** the **deterministic simulation harness** is live (`arango_memory/sim/`) — `run_scenario` plays a multi-session agent loop *with interleaved tool calls* against the core's HTTP surface (the endpoints the adapter calls) over a decoupled `HttpClient` Protocol, with stubbed models so it's reproducible and keyless. The CI gate (`test_sim.py`) asserts the four §22 categories: cross-session **recall** (lite + full), **procedural** memory + `use_count` reuse + `TOUCHED`/`TRANSITION` edges, graceful **write-failure degradation** (turn stays `queued`, retrieval degrades to memory-less), and tenant **isolation**. **Placement deviation:** the harness lives at `arango_memory/sim/` (mirroring `eval/`), not a standalone root `sim/` (§3), so it reuses the testcontainers fixtures and runs in the existing `make ci`. A *true* lite-vs-full quality delta still needs a real model → Step 3.5b. Next: Step 3.5b (reference Vercel app + adapter tool-trace capture).
+>
+> **Rev 13 updates (from Step 3.5b):** the **Vercel adapter now captures procedural memory** and there's a **runnable reference agent**. The adapter pairs `tool-call` + `tool-result` parts from the prompt history (deduped by `toolCallId`, chained via `prev_step_key`) → `POST /v1/step`; outcome comes from the result's output type (`error-*` → failure). Best-effort and non-blocking, with an inherent one-turn lag (a LanguageModel middleware only sees a tool's outcome on the *next* turn). **vitest** unit tests (mocked fetch + fake model) cover retrieve/inject, memory-less degradation, store, and tool capture (success/failure, dedup, chaining); a new **`adapter` CI job** (typecheck + build + test) runs alongside `core`. **`examples/vercel-agent/`** is a minimal `generateText` loop wrapping `arangoMemory` with a tool — the manual/nightly end-to-end check (adapter → core → ArangoDB), typechecked against `ai@5` + `@ai-sdk/anthropic@2`. The full Next.js chat UI is deferred to **Step 3.5c**. Next: Step 3e or Step 4.
 
 ## Table of Contents
 
@@ -928,8 +930,15 @@ CI-friendly, keyless regression gate (`arango_memory/sim/`). Delivered:
 - **Placement deviation:** lives at `arango_memory/sim/` (mirroring `eval/`), not root `sim/` (§3), reusing the testcontainers fixtures; runs in the existing `make ci`.
 - *Boundary:* a true lite-vs-full quality delta needs a real model → 3.5b.
 
-#### Step 3.5b — Reference Vercel app + adapter tool-trace capture ← NEXT
-Update `@arango-memory/vercel` to capture tool traces → `POST /v1/step` (the adapter currently does store/retrieve only), then a small `examples/vercel-agent/` Next.js app driving live `streamText` turns through adapter → core → ArangoDB (manual/nightly; needs a model key). Doubles as the demo and closes the Step 0 deferred live-turn item.
+#### Step 3.5b — Reference app + adapter tool-trace capture ✅ DONE
+Adapter procedural capture + a runnable reference agent. Delivered:
+- **Adapter** (`@arango-memory/vercel`): captures completed tool calls — pairs `tool-call` + `tool-result` parts from the prompt history (deduped by `toolCallId`, chained via `prev_step_key`) → `POST /v1/step`; outcome from the result output type (`error-*` → failure). Best-effort/non-blocking; one-turn lag is inherent to the LanguageModel middleware layer.
+- **vitest** unit tests (mocked fetch + fake model): retrieve/inject, memory-less degradation, store, tool capture (success/failure, dedup, chaining).
+- **CI**: new `adapter` job (typecheck + build + test) alongside `core`.
+- **`examples/vercel-agent/`**: a minimal `generateText` loop wrapping `arangoMemory` with a `weather` tool — the manual/nightly end-to-end check (adapter → core → ArangoDB), typechecked against `ai@5` + `@ai-sdk/anthropic@2`. Closes the Step 0 deferred live-turn item.
+
+#### Step 3.5c — Full Next.js chat UI (roadmap)
+A polished chat UI on top of the reference loop (graph view, evolution review, etc.). Demo polish; not blocking core work.
 
 The *full* benchmark run still completes at Step 7; this milestone establishes the harness and its regression gates.
 
