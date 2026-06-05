@@ -15,9 +15,11 @@ from collections.abc import Callable, Iterator
 import pytest
 from arango import ArangoClient
 from arango.database import StandardDatabase
+from fastapi.testclient import TestClient
 from testcontainers.core.container import DockerContainer
 from testcontainers.core.waiting_utils import wait_for_logs
 
+from arango_memory.api.app import create_app
 from arango_memory.client import ArangoMemoryClient
 from arango_memory.config import Settings
 from arango_memory.retrieve.search import RetrieveResult, retrieve
@@ -84,6 +86,13 @@ def db(client: ArangoMemoryClient) -> StandardDatabase:
 def ctx() -> dict[str, str]:
     """A default tenant/agent context for store/retrieve calls."""
     return {"tenant_id": "tenant_a", "agent_id": "agent_1"}
+
+
+@pytest.fixture
+def api(client: ArangoMemoryClient) -> Iterator[TestClient]:
+    """A TestClient over the factory app (runs the lifespan + write worker)."""
+    with TestClient(create_app(client)) as test_client:
+        yield test_client
 
 
 @pytest.fixture

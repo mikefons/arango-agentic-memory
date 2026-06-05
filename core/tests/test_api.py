@@ -7,20 +7,8 @@ container, pinning the request/response shapes the Vercel adapter depends on.
 from __future__ import annotations
 
 import time
-from collections.abc import Iterator
 
-import pytest
 from fastapi.testclient import TestClient
-
-from arango_memory.api.app import create_app
-from arango_memory.client import ArangoMemoryClient
-
-
-@pytest.fixture
-def api(client: ArangoMemoryClient) -> Iterator[TestClient]:
-    # `with` triggers the lifespan (connect + ensure_schema) against the test db.
-    with TestClient(create_app(client)) as test_client:
-        yield test_client
 
 
 def test_health(api: TestClient) -> None:
