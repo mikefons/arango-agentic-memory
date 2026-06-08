@@ -73,6 +73,10 @@ class Settings(BaseSettings):
     vector_n_lists: int = Field(default=256, ge=1)
     # Graph expansion (DESIGN.md §9 stage 4): relates_to hops from seed entities (3 max).
     graph_hops: int = Field(default=2, ge=0, le=3)
+    # Episodic decay (DESIGN.md §11): effective_strength = strength · exp(-λ · Δdays).
+    # The sweep soft-deprecates memories whose effective strength drops below floor.
+    decay_lambda: float = Field(default=0.02, ge=0.0)
+    decay_floor: float = Field(default=0.1, ge=0.0, le=1.0)
 
 
 settings = Settings()
