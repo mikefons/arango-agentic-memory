@@ -1,7 +1,7 @@
 # ArangoDB Agentic Memory System — Design Specification
 
-> **Status:** Step 3.5b (reference app + adapter capture) implemented and verified. Authoritative reference.
-> **Last updated:** 2026-06-04 (rev 13 — post Step 3.5b)
+> **Status:** Step 4a (memory decay) implemented and verified. Authoritative reference.
+> **Last updated:** 2026-06-04 (rev 14 — post Step 4a)
 >
 > **Rev 2 decisions:** Python-first core with a thin TypeScript client · v1 scope is Vercel-only · build a walking skeleton first, then a test/eval harness, then thicken each layer.
 >
@@ -26,6 +26,8 @@
 > **Rev 12 updates (from Step 3.5a):** the **deterministic simulation harness** is live (`arango_memory/sim/`) — `run_scenario` plays a multi-session agent loop *with interleaved tool calls* against the core's HTTP surface (the endpoints the adapter calls) over a decoupled `HttpClient` Protocol, with stubbed models so it's reproducible and keyless. The CI gate (`test_sim.py`) asserts the four §22 categories: cross-session **recall** (lite + full), **procedural** memory + `use_count` reuse + `TOUCHED`/`TRANSITION` edges, graceful **write-failure degradation** (turn stays `queued`, retrieval degrades to memory-less), and tenant **isolation**. **Placement deviation:** the harness lives at `arango_memory/sim/` (mirroring `eval/`), not a standalone root `sim/` (§3), so it reuses the testcontainers fixtures and runs in the existing `make ci`. A *true* lite-vs-full quality delta still needs a real model → Step 3.5b. Next: Step 3.5b (reference Vercel app + adapter tool-trace capture).
 >
 > **Rev 13 updates (from Step 3.5b):** the **Vercel adapter now captures procedural memory** and there's a **runnable reference agent**. The adapter pairs `tool-call` + `tool-result` parts from the prompt history (deduped by `toolCallId`, chained via `prev_step_key`) → `POST /v1/step`; outcome comes from the result's output type (`error-*` → failure). Best-effort and non-blocking, with an inherent one-turn lag (a LanguageModel middleware only sees a tool's outcome on the *next* turn). **vitest** unit tests (mocked fetch + fake model) cover retrieve/inject, memory-less degradation, store, and tool capture (success/failure, dedup, chaining); a new **`adapter` CI job** (typecheck + build + test) runs alongside `core`. **`examples/vercel-agent/`** is a minimal `generateText` loop wrapping `arangoMemory` with a tool — the manual/nightly end-to-end check (adapter → core → ArangoDB), typechecked against `ai@5` + `@ai-sdk/anthropic@2`. The full Next.js chat UI is deferred to **Step 3.5c**. Next: Step 3e or Step 4.
+>
+> **Rev 14 updates (from Step 4a):** **episodic decay is live** (§11), split as the rev-4 decision: **lazy** at query time + a **scheduled sweep**. `lifecycle/decay.py` provides `effective_strength` (`strength·exp(-λ·Δdays)`), `decay_sweep` (soft-deprecates memories below `decay_floor` via `invalid_at`; never deletes), and `reset_access` (spaced repetition). Retrieval multiplies each candidate's fused score by `effective_strength` (the §9 stage-5 recency/access boost) and refreshes `accessed_at`/`access_count` on surfaced memories. AQL gotchas recorded: `lambda` is reserved, and unary minus on a bind param mis-parses. Working-memory TTL/SCM deferred; sweep scheduling is an ops concern (Step 7). Next: Step 4b (bi-temporal + Supersedes + conflict resolution).
 
 ## Table of Contents
 
@@ -943,7 +945,21 @@ A polished chat UI on top of the reference loop (graph view, evolution review, e
 The *full* benchmark run still completes at Step 7; this milestone establishes the harness and its regression gates.
 
 ### Step 4 — Lifecycle
-Decay (Ebbinghaus, TTL), Supersedes/bi-temporal, GAM consolidation trigger, Dream State worker + circuit breaker.
+Split into three sub-steps (decided rev 14).
+
+#### Step 4a — Memory decay ✅ DONE
+Episodic decay + spaced repetition (`lifecycle/decay.py`). Delivered:
+- **Lazy decay**: `effective_strength = strength · exp(-λ · Δdays)` applied as a ranking multiplier in retrieval (recency/access boost, §9 stage 5) — always fresh, no batch.
+- **Scheduled sweep**: `decay_sweep` soft-deprecates memories below `decay_floor` (`invalid_at`; never deletes). Callable now; scheduling is an ops concern (Step 7).
+- **Spaced repetition**: surfaced memories get `accessed_at` reset + `access_count++` (Δt → 0).
+- **Config**: `decay_lambda`, `decay_floor`. **Verified**: 70 tests (3 decay + prior 67) — recency ranking, access refresh, sweep soft-deprecation.
+- *Deferred*: working-memory type + session TTL + SCM 7-item cap (separable feature).
+
+#### Step 4b — Bi-temporal + Supersedes + conflict resolution ← NEXT
+Add `valid_time`/`valid_time_explicit`/`invalid_at` to entities + edges; the `Supersedes` edge (new→old); consume the `needs_review` flags from 3a's write-time conflict detection → soft-deprecate contradicted entities (§12).
+
+#### Step 4c — Consolidation + Dream State
+GAM semantic-boundary trigger (session topic embedding) + consolidation check (`mention_count` threshold) + the async Dream State worker (Haiku review → promote/distill/supersede) + circuit breaker (§13).
 
 ### Step 5 — Security
 PII redaction, ABAC, cascade delete, embedding encryption, WORM enforcement.
