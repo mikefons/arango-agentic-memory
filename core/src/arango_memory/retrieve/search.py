@@ -21,6 +21,8 @@ from arango.database import StandardDatabase
 from ..config import settings
 from ..embedding import Embedder, get_embedder
 from ..generation import Generator, get_generator
+from ..lifecycle.decay import effective_strength, reset_access
+from ..models import utcnow_iso
 from ..schema.collections import SEARCH_VIEW, ensure_vector_index, has_vector_index
 from .enrich import QueryCache, hyde, should_skip_retrieval
 
@@ -34,7 +36,8 @@ FOR doc IN {SEARCH_VIEW}
   SORT BM25(doc) DESC
   LIMIT @pool
   RETURN {{ key: doc._key, text: doc.text, score: BM25(doc),
-            embedding: doc.embedding, type: doc.type }}
+            embedding: doc.embedding, type: doc.type,
+            strength: doc.strength, accessed_at: doc.accessed_at }}
 """
 
 # APPROX_NEAR_COSINE requires the vector index; tenant/agent scoping is applied
@@ -48,7 +51,8 @@ FOR doc IN memories
   SORT score DESC
   LIMIT @pool
   RETURN { key: doc._key, text: doc.text, score: score,
-           embedding: doc.embedding, type: doc.type }
+           embedding: doc.embedding, type: doc.type,
+           strength: doc.strength, accessed_at: doc.accessed_at }
 """
 
 # Graph expansion (§9 stage 4): from seed memories → their entities → relates_to
@@ -67,7 +71,8 @@ FOR start IN @seed_ids
         SORT hops ASC
         LIMIT @pool
         RETURN { key: key, score: 1.0 / (1.0 + hops),
-                 text: rows[0].text, embedding: rows[0].embedding, type: rows[0].type }
+                 text: rows[0].text, embedding: rows[0].embedding, type: rows[0].type,
+                 strength: rows[0].strength, accessed_at: rows[0].accessed_at }
 """
 
 _ENCODER = tiktoken.get_encoding("cl100k_base")
@@ -105,6 +110,8 @@ class _Candidate:
     type: str
     signals: set[str] = field(default_factory=set)
     fused_score: float = 0.0
+    strength: float = 1.0
+    accessed_at: str = ""
 
 
 def _count_tokens(text: str) -> int:
@@ -150,6 +157,8 @@ def _rrf_fuse(ranked_lists: list[list[dict[str, Any]]], names: list[str]) -> lis
                     text=row["text"],
                     embedding=row.get("embedding") or [],
                     type=row.get("type") or "episodic",
+                    strength=row.get("strength", 1.0) or 1.0,
+                    accessed_at=row.get("accessed_at") or "",
                 )
                 by_key[key] = cand
             cand.signals.add(name)
@@ -282,8 +291,20 @@ def retrieve(
     if not fused:
         return RetrieveResult()
 
+    # Recency/access boost (§9 stage 5, §11): decay the fused score by time since
+    # last access, so stale memories sink in ranking and token-budget priority.
+    now = utcnow_iso()
+    for cand in fused:
+        cand.fused_score *= effective_strength(
+            cand.strength, cand.accessed_at or now, now, settings.decay_lambda
+        )
+
     selected = _mmr(query_vec, fused, k)
+    selected.sort(key=lambda c: -c.fused_score)
     context, tokens = _assemble_tiered(selected, max_memory_tokens)
+
+    # Spaced repetition (§11): refresh the memories actually surfaced (Δt → 0).
+    reset_access(db, [c.key for c in selected])
 
     hits = [
         MemoryHit(text=c.text, score=round(c.fused_score, 6), source="+".join(sorted(c.signals)))

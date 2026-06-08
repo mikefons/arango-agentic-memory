@@ -79,6 +79,7 @@ def store(
         "text": content,
         "type": "episodic",
         "strength": 1.0,
+        "access_count": 1,
         "created_at": now,
         "accessed_at": now,
         "invalid_at": None,
