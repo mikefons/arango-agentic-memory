@@ -53,10 +53,24 @@ class Settings(BaseSettings):
     write_max_retries: int = Field(default=5, ge=1)
     write_backoff_base: float = Field(default=0.5, ge=0.0)
 
-    # Entity extraction (DESIGN.md §8). "fake" (deterministic, no models — tests/
-    # sim) or "spacy" (real NER, needs the `extraction` extra). GLiNER deferred.
-    extraction_provider: Literal["fake", "spacy"] = "fake"
+    # Entity extraction (DESIGN.md §8 Stage 2). Tiers behind the `Extractor`
+    # Protocol: "fake" (deterministic, no models — tests/sim), "spacy" (NER, the
+    # `extraction` extra), "gliner" (GLiNER NER + GLiREL typed relations, torch),
+    # "haiku" (LLM via the generator), "layered" (spaCy→GLiNER→Haiku chain).
+    extraction_provider: Literal["fake", "spacy", "gliner", "haiku", "layered"] = "fake"
     spacy_model: str = "en_core_web_sm"
+    gliner_model: str = "urchade/gliner_mediumv2.1"
+    # Candidate entity labels GLiNER scores against, and the relation labels
+    # GLiREL/Haiku may emit (coerced into the §5 enum at write time).
+    gliner_entity_labels: tuple[str, ...] = (
+        "Person", "Organization", "Location", "Event", "Object", "Concept",
+    )
+    relation_labels: tuple[str, ...] = (
+        "caused_by", "occurred_during", "subtopic_of", "associated_with",
+    )
+    # LayeredExtractor escalates to the Haiku tier only when the cheaper tiers
+    # (spaCy + GLiNER) yield fewer than this many entities (0 disables escalation).
+    extraction_escalate_below: int = Field(default=1, ge=0)
     # Write-time conflict thresholds (DESIGN.md §8 Stage 3): cosine vs existing
     # entities — ≥ merge → same entity; ≥ flag → create + mark for Dream State.
     entity_merge_threshold: float = Field(default=0.9, ge=0.0, le=1.0)

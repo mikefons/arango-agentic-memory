@@ -23,7 +23,7 @@ v1 ships the core + Vercel adapter. v2 adds three in-process adapters (the core 
 
 ## What's implemented
 
-- **Ingestion** — PII redaction (§17), pluggable entity extraction → entity/edge knowledge graph, write-time conflict detection, prospective indexing (full mode), idempotency-keyed **durable async write path** (queue + worker + dead-letter).
+- **Ingestion** — PII redaction (§17), pluggable entity + **typed-relation** extraction → entity/edge knowledge graph (spaCy / GLiNER+GLiREL / Haiku tiers, layered with escalation), explicit `valid_time` parsing, write-time conflict detection, prospective indexing (full mode), idempotency-keyed **durable async write path** (queue + worker + dead-letter).
 - **Retrieval** — BM25 + Faiss vector + graph expansion, fused via RRF → MMR → tiered token budget; HyDE + adaptive gate (full mode); recency/decay ranking. Degrades to a memory-less turn on any fault (never breaks the agent).
 - **Lifecycle** — Ebbinghaus decay + spaced repetition + soft-deprecation sweep; bi-temporal edges + `Supersedes`; Dream State consolidation (conflict confirmation + summary distillation + circuit breaker).
 - **Security** — PII redaction, WORM episodes, right-to-be-forgotten (soft-delete + purge), ABAC (read/write).
@@ -31,7 +31,7 @@ v1 ships the core + Vercel adapter. v2 adds three in-process adapters (the core 
 
 HTTP surface: `/health`, `/v1/store`, `/v1/retrieve`, `/v1/step`, `/v1/steps`, `/v1/forget`, `/v1/stats`.
 
-Deferred: GLiNER/GLiREL + Haiku extraction tier (Step 3e), full Next.js chat UI (Step 3.5c), Step 7 ops tooling.
+Deferred: full Next.js chat UI (Step 3.5c).
 
 ## Quick start (local dev)
 
