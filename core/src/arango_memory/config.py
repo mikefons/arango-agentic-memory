@@ -65,6 +65,9 @@ class Settings(BaseSettings):
     consolidation_mention_threshold: int = Field(default=5, ge=1)
     dream_breaker_threshold: float = Field(default=0.5, ge=0.0, le=1.0)
 
+    # Security (DESIGN.md §17): redact PII at ingestion before anything is persisted.
+    redact_pii: bool = True
+
     # Enrichment mode (DESIGN.md §10)
     memory_mode: Literal["lite", "full"] = "lite"
 

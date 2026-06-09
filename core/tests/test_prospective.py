@@ -16,10 +16,16 @@ def test_prospective_query_makes_memory_findable(
     wait_for_searchable: Callable[..., RetrieveResult],
 ) -> None:
     ctx = {"tenant_id": "t_pros", "agent_id": "a"}
-    # The hypothetical questions share no words with the stored text.
-    gen = FakeGenerator(
-        handler=lambda p, s: "what is the user's favorite color\nwhich color do they prefer"
-    )
+
+    # Full mode calls the generator twice (redaction + prospective), so the stub
+    # is system-aware: leave the text unchanged for redaction, emit hypothetical
+    # questions (sharing no words with the text) for prospective indexing.
+    def handler(prompt: str, system: str | None) -> str:
+        if system and "Redact" in system:
+            return prompt
+        return "what is the user's favorite color\nwhich color do they prefer"
+
+    gen = FakeGenerator(handler=handler)
     store(db, content="The sky was a deep shade today", mode="full", generator=gen, **ctx)
 
     # Query matches a prospective question, not the original text.
