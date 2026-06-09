@@ -1,7 +1,7 @@
 # ArangoDB Agentic Memory System — Design Specification
 
-> **Status:** Step 4 (lifecycle) complete — 4c (Dream State) implemented and verified. Authoritative reference.
-> **Last updated:** 2026-06-04 (rev 16 — post Step 4c)
+> **Status:** Step 5a (PII redaction + WORM) implemented and verified. Authoritative reference.
+> **Last updated:** 2026-06-04 (rev 17 — post Step 5a)
 >
 > **Rev 2 decisions:** Python-first core with a thin TypeScript client · v1 scope is Vercel-only · build a walking skeleton first, then a test/eval harness, then thicken each layer.
 >
@@ -32,6 +32,8 @@
 > **Rev 15 updates (from Step 4b):** **bi-temporal foundations + the Supersedes mechanism** are in (§5, §12). Entities and all edges now carry `valid_time` (= ingestion_time), `valid_time_explicit` (false), `invalid_at` (null); edges also carry `weight` (1.0). New `Supersedes` edge collection + `lifecycle/conflict.py:supersede(new_key, old_key)` — writes `Supersedes` (new→old) and soft-deprecates `old` (`invalid_at`), idempotent. Graph traversal now filters `entity.invalid_at`/`related.invalid_at`, so a superseded entity stops bridging the graph. Decided **machinery-only**: `needs_review` stays written-but-unconsumed; the *decision* to supersede (confirm an ambiguous conflict) is Dream State's job in 4c. Explicit temporal parsing deferred to 3e; EWA `weight` deferred. Next: Step 4c (consolidation + Dream State worker + circuit breaker).
 >
 > **Rev 16 updates (from Step 4c — Step 4 complete):** **consolidation / Dream State** is in (§13). `lifecycle/dream.py:run_dream_state(db, tenant_id, generator)` is a threshold-driven pass over flagged (`needs_review`) + well-attested (`mention_count ≥ threshold`) entities, two-phase (decide → circuit-breaker → apply). It **finally consumes the `needs_review` flags**: Haiku confirms a flagged entity vs its `conflict_with` target → `CONTRADICTS` ⇒ `supersede()` + clear; `DISTINCT` ⇒ clear. Well-attested entities get a distilled one-sentence `summary` + `consolidated_at` (new entity fields). A **circuit breaker** halts the whole run (applies nothing) if planned supersessions exceed `dream_breaker_threshold` — a poisoning safeguard. GAM session-topic trigger deferred (separable subsystem); callable pass, scheduling → ops/Step 7. **Step 4 (lifecycle) is now complete (4a/4b/4c).** Next: Step 5 (security).
+>
+> **Rev 17 updates (from Step 5a):** **write-path security** is in (§17). New `security/` package: `redact.py` (regex redactor for email/SSN/card/API-keys/bearer → typed placeholders, conservative so prose/numbers pass through; plus a full-mode generator pass for contextual PII) and `worm.py` (`worm_guard` / `WORM_COLLECTIONS` / `WormViolation` — the client-layer enforcement primitive for the insert-only `episodes`). `store()` redacts `content` **first**, so the idempotency key, episode, memory, embedding, and entity extraction all operate on redacted text — the original is never persisted. Note: full mode now makes **two** generator calls (redaction + prospective), so stubbed generators must be system-aware. `redact_pii` config (default true). **Embedding encryption-at-rest is a DB-deployment concern** (ArangoDB Enterprise storage encryption), not app code, since field-level encryption would break vector search. Next: Step 5b (right-to-be-forgotten + ABAC).
 
 ## Table of Contents
 
@@ -974,8 +976,18 @@ Threshold-driven consolidation pass (§13) — completes Step 4. Delivered:
 - **Circuit breaker**: halts the whole run (applies nothing) if planned supersessions exceed `dream_breaker_threshold` (poisoning safeguard).
 - **Verified**: 78 tests (4 + prior 74). *Deferred*: GAM session-topic trigger (separable); callable pass — scheduling → ops/Step 7; multi-tenant = caller iterates.
 
-### Step 5 — Security ← NEXT
-PII redaction, ABAC, cascade delete, embedding encryption, WORM enforcement.
+### Step 5 — Security
+Split into two sub-steps (decided rev 17).
+
+#### Step 5a — PII redaction + WORM ✅ DONE
+Write-path security (§17). Delivered:
+- **PII redaction** (`security/redact.py`): conservative regex for email/SSN/card/API-keys/bearer → typed placeholders, always on; a full-mode generator pass for contextual PII. Applied in `store()` **before** anything is hashed/persisted, so the original is never stored.
+- **WORM** (`security/worm.py`): `worm_guard`/`WORM_COLLECTIONS`/`WormViolation` — client-layer enforcement primitive for insert-only `episodes`.
+- **Config**: `redact_pii`. **Verified**: 84 tests (6 + prior 78).
+- *Note*: embedding encryption-at-rest is a DB-deployment concern (would break vector search if app-level), not built here.
+
+#### Step 5b — Right-to-be-forgotten + ABAC ← NEXT
+`forget(tenant_id, agent_id?)`: immediate soft-delete (set `invalid_at` across the subject's docs) + async physical purge (hard-delete incl. WORM episodes — the sanctioned exception — and edges). ABAC: enforce `access_level` (read/write) at the API boundary.
 
 ### Step 6 — Observability
 OTEL spans + metrics, MemoryMetrics emitter, degradation counters.
