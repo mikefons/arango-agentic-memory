@@ -19,7 +19,7 @@ Persistent, relational memory for AI agents — built on ArangoDB (graph + vecto
 - **Thin TypeScript client** (`packages/vercel/`) — a `LanguageModelV2Middleware` (`ai@5`) that retrieves-and-injects before a turn, durably stores after, and captures tool calls as procedural memory. No memory logic of its own.
 - **Reference app** (`examples/vercel-agent/`) — a minimal real `generateText` loop wiring the adapter to the core.
 
-v1 ships the core + Vercel adapter. v2 adds an **MCP server** (`arango_memory/mcp/`, 9 tools) and an in-process **LangChain/LangGraph adapter** (`arango_memory/langchain/` — `ArangoMemoryRetriever`, `ArangoChatMessageHistory`, `ArangoMemoryNode`); the CrewAI adapter is still deferred (the core API is kept adapter-neutral so they're additive).
+v1 ships the core + Vercel adapter. v2 adds three in-process adapters (the core API is adapter-neutral, so they're additive): an **MCP server** (`arango_memory/mcp/`, 9 tools), a **LangChain/LangGraph adapter** (`arango_memory/langchain/` — `ArangoMemoryRetriever`, `ArangoChatMessageHistory`, `ArangoMemoryNode`), and a **CrewAI adapter** (`arango_memory/crewai/` — `ArangoCrewStorage` + `crew_memory()` G-Memory 3-tier + `to_crewai_storage()` shim).
 
 ## What's implemented
 
