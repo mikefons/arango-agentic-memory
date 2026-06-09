@@ -2,23 +2,36 @@
 
 Persistent, relational memory for AI agents — built on ArangoDB (graph + vector + full-text in one engine), with a Python core and a thin Vercel AI SDK adapter.
 
-> **Status:** Pre-implementation scaffold (Step 0 — walking skeleton). See [`docs/DESIGN.md`](docs/DESIGN.md) for the full design specification.
+> **Status:** Steps 0–6 implemented (ingestion, retrieval, lifecycle, security, observability). Step 7 (hardening + ops) is next. See [`docs/DESIGN.md`](docs/DESIGN.md) — the authoritative spec (rev 20).
 
 ## Architecture (v1)
 
 ```
-┌─────────────────────┐     HTTP      ┌──────────────────────────┐     AQL     ┌───────────┐
-│  Vercel AI SDK app  │ ────────────▶ │   Python core (FastAPI)  │ ──────────▶ │ ArangoDB  │
-│  @arango-memory/    │   /v1/store   │   ingest · retrieve ·    │             │ graph +   │
-│  vercel middleware  │   /v1/retrieve│   lifecycle · telemetry  │             │ vector +  │
-└─────────────────────┘               └──────────────────────────┘             │ BM25      │
-                                                                                └───────────┘
+┌─────────────────────┐     HTTP       ┌──────────────────────────┐     AQL     ┌───────────┐
+│  Vercel AI SDK app  │ ─────────────▶ │   Python core (FastAPI)  │ ──────────▶ │ ArangoDB  │
+│  @arango-memory/    │  /v1/store     │  ingest · retrieve ·     │             │ graph +   │
+│  vercel middleware  │  /v1/retrieve  │  lifecycle · security ·  │             │ vector +  │
+│  (LanguageModelV2)  │  /v1/step …    │  telemetry               │             │ BM25      │
+└─────────────────────┘                └──────────────────────────┘             └───────────┘
 ```
 
-- **Python-first core** (`core/`) — all memory intelligence: schema, ingestion, retrieval, consolidation, decay.
-- **Thin TypeScript client** (`packages/vercel/`) — a `LanguageModelV4Middleware` that retrieves-and-injects before a turn and durably stores after. No memory logic.
+- **Python-first core** (`core/`) — all memory intelligence: schema, ingestion, retrieval, lifecycle, security, telemetry.
+- **Thin TypeScript client** (`packages/vercel/`) — a `LanguageModelV2Middleware` (`ai@5`) that retrieves-and-injects before a turn, durably stores after, and captures tool calls as procedural memory. No memory logic of its own.
+- **Reference app** (`examples/vercel-agent/`) — a minimal real `generateText` loop wiring the adapter to the core.
 
 v1 ships the core + Vercel adapter only. MCP, LangChain/LangGraph, and CrewAI adapters are deferred to v2 (the core API is kept adapter-neutral so they're additive).
+
+## What's implemented
+
+- **Ingestion** — PII redaction (§17), pluggable entity extraction → entity/edge knowledge graph, write-time conflict detection, prospective indexing (full mode), idempotency-keyed **durable async write path** (queue + worker + dead-letter).
+- **Retrieval** — BM25 + Faiss vector + graph expansion, fused via RRF → MMR → tiered token budget; HyDE + adaptive gate (full mode); recency/decay ranking. Degrades to a memory-less turn on any fault (never breaks the agent).
+- **Lifecycle** — Ebbinghaus decay + spaced repetition + soft-deprecation sweep; bi-temporal edges + `Supersedes`; Dream State consolidation (conflict confirmation + summary distillation + circuit breaker).
+- **Security** — PII redaction, WORM episodes, right-to-be-forgotten (soft-delete + purge), ABAC (read/write).
+- **Observability** — OpenTelemetry spans (no-op without a configured backend) + a `MemoryMetrics` event emitter; `GET /v1/stats`.
+
+HTTP surface: `/health`, `/v1/store`, `/v1/retrieve`, `/v1/step`, `/v1/steps`, `/v1/forget`, `/v1/stats`.
+
+Deferred: GLiNER/GLiREL + Haiku extraction tier (Step 3e), full Next.js chat UI (Step 3.5c), Step 7 ops tooling.
 
 ## Quick start (local dev)
 
@@ -30,7 +43,8 @@ docker compose up -d          # ArangoDB (Enterprise) + Python core sidecar
 
 > Uses the ArangoDB **Enterprise** image (`arangodb/enterprise:3.12.9.1`) for
 > vector-index auto-training. Set `ARANGO_LICENSE_KEY` in `.env`; it runs in
-> evaluation mode without one.
+> evaluation mode without one. Defaults are keyless: extraction/generation use
+> deterministic fakes unless you configure `openai`/`anthropic` providers.
 
 ### Secret-scanning hook (one-time per clone)
 
@@ -47,25 +61,45 @@ Manual scan: `gitleaks dir . --redact`
 
 ```bash
 cd core
-uv sync
-uv run uvicorn arango_memory.api.app:app --reload --port 8080
+make sync     # install deps into the relocated venv
+make dev      # run the core API with autoreload on :8080
+make ci       # lint (ruff) + type (mypy --strict) + test (pytest/testcontainers)
 ```
 
-### Vercel adapter (TypeScript, pnpm)
+See [`core/README.md`](core/README.md) for the Makefile rationale and connection targets.
+
+### Vercel adapter (TypeScript, npm)
 
 ```bash
 cd packages/vercel
-pnpm install
-pnpm build
+npm install
+npm run typecheck && npm run build && npm test
 ```
+
+### Reference agent
+
+```bash
+cd examples/vercel-agent   # see its README: needs the core running + an Anthropic key
+```
+
+## Testing & CI
+
+Two CI jobs run on every push/PR:
+- **Core** — `make ci`: ruff + mypy --strict + pytest. Integration tests spin a real ArangoDB Enterprise container via **testcontainers** (evaluation mode, no license); deterministic and keyless (fake embedder/generator/extractor).
+- **Adapter** — `npm` typecheck + build + vitest.
+
+Plus a **deterministic simulation harness** (`core/src/arango_memory/sim/`) that drives the core's HTTP surface through a multi-session agent loop with tool calls — the real-data regression gate for memory *and* actions.
 
 ## Repository layout
 
 ```
-docs/DESIGN.md         Authoritative design spec (rev 2)
-core/                  Python core (uv)
-packages/vercel/       Thin TS client middleware (pnpm)
-docker-compose.yml     ArangoDB + core for local dev
+docs/DESIGN.md         Authoritative design spec (rev 20)
+core/                  Python core (uv): ingest · retrieve · lifecycle ·
+                       security · telemetry · sim · eval
+packages/vercel/       Thin TS client middleware (npm) + vitest
+examples/vercel-agent/ Minimal reference agent (adapter → core → ArangoDB)
+docker-compose.yml     ArangoDB (Enterprise) + core for local dev
+.github/workflows/     CI (core + adapter) + gitleaks
 ```
 
 ## License

@@ -11,14 +11,20 @@ See [`../docs/DESIGN.md`](../docs/DESIGN.md) for the authoritative spec.
 
 ```
 src/arango_memory/
-  client.py     ArangoDB client + connection abstraction
-  config.py     Settings (env-driven)
-  schema/       Collection / view / index definitions + migrations
-  ingest/       PII redaction, extraction, prospective indexing, writes
-  retrieve/     HyDE, hybrid search, fusion, reranking, token budget
-  lifecycle/    Decay, consolidation, Dream State worker
-  api/          FastAPI service — the boundary (/v1/*)
-  telemetry/    OpenTelemetry instrumentation
+  client.py       ArangoDB client + connection abstraction
+  config.py       Settings (env-driven)
+  embedding.py    Pluggable embedder (fake / OpenAI)
+  generation.py   Pluggable generator (fake / Anthropic)
+  stats.py        Per-tenant graph health counts
+  schema/         Collection / view / index definitions
+  ingest/         Extraction, conflict detection, prospective, durable write queue + worker
+  retrieve/       HyDE, hybrid search (BM25 + vector + graph), RRF/MMR, token budget
+  lifecycle/      Decay, bi-temporal/Supersedes, Dream State consolidation
+  security/       PII redaction, WORM, right-to-be-forgotten
+  telemetry/      OpenTelemetry spans + MemoryMetrics emitter
+  api/            FastAPI service — the boundary (/v1/*)
+  eval/           LoCoMo-style eval runner
+  sim/            Deterministic agentic simulation harness
 ```
 
 ## Develop
