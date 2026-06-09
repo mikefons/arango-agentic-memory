@@ -1,7 +1,7 @@
 # ArangoDB Agentic Memory System — Design Specification
 
-> **Status:** Step 6a (telemetry facade + core instrumentation) implemented and verified. Authoritative reference.
-> **Last updated:** 2026-06-04 (rev 19 — post Step 6a)
+> **Status:** Step 6 (observability) complete — 6b (lifecycle metrics) implemented and verified. Authoritative reference.
+> **Last updated:** 2026-06-04 (rev 20 — post Step 6b)
 >
 > **Rev 2 decisions:** Python-first core with a thin TypeScript client · v1 scope is Vercel-only · build a walking skeleton first, then a test/eval harness, then thicken each layer.
 >
@@ -38,6 +38,8 @@
 > **Rev 18 updates (from Step 5b — Step 5 complete):** **right-to-be-forgotten + ABAC** are in (§17). `security/forget.py`: `forget()` soft-deletes (sets `invalid_at` on the subject's memories + entities → out of every retrieval surface at once); `purge()` is the ops-triggered hard-delete (vertices + touching edges, episodes via the sanctioned WORM bypass, then drops the vector index so retrieval self-heals). Both tenant-scoped, optionally agent-scoped. `POST /v1/forget` exposes soft-delete (write-only); `purge` stays an ops callable. **ABAC**: `store`/`step`/`forget` require `access_level == "write"` (else `403`); `retrieve` allows read — the Vercel adapter already declares `write`/`read` correctly (3.5b). **Step 5 (security) is now complete (5a/5b).** Next: Step 6 (observability).
 >
 > **Rev 19 updates (from Step 6a):** **observability facade + core instrumentation** (§18). `telemetry/`: a `MemoryMetrics` event emitter (`on`/`emit`/`clear` + singleton `metrics`) and `span(name, **attrs)` — an OTEL span via the otel-api, **no-op without a configured provider** (CI needs no collector). `retrieve()` emits a `memory.retrieve` span + `retrieval` event (`duration_ms`/`results_k`/`tokens_injected`/`mode`) and **wraps the impl in try/except → empty result + `degraded` event** (this completes the core-side §15 read-degradation the API lacked — a memory fault never breaks the turn). `store()` emits a `memory.write` span + `write` event; the worker emits `write{dead_lettered:true}`. OTEL *meter instruments* deferred (span attributes + emitter payloads carry values). Next: Step 6b (lifecycle metrics: decay/consolidation/conflict + cache-hit-rate + graph gauges).
+>
+> **Rev 20 updates (from Step 6b — Step 6 complete):** the remaining §18 metrics are wired through the 6a facade. Counters: `decay_sweep` → `decay{pruned}`, `run_dream_state` → `consolidation{promoted,superseded,cleared,breaker_tripped}`, write-time detection → `conflict{detected}`. `QueryCache` now tracks hits/lookups + `hit_rate` and emits `cache{hit,hit_rate}` (a dedicated *embedding* cache + its hit rate remains a future feature). New `stats(db, tenant_id)` returns per-tenant counts + emits a `graph` gauge, exposed via `GET /v1/stats` — which also implements the **§19 `stats`** contract that was never built. **Step 6 (observability) is now complete (6a/6b).** Next: Step 7 (hardening + ops).
 
 ## Table of Contents
 
@@ -1007,10 +1009,14 @@ OTEL spans (no-op default) + `MemoryMetrics` emitter (§18). Delivered:
 - **Verified**: 95 tests (5 + prior 90), incl. an OTEL span asserted via an in-memory exporter.
 - *Deferred*: OTEL meter instruments (span attrs + emitter carry values).
 
-#### Step 6b — Lifecycle metrics ← NEXT
-Emit/instrument the remaining §18 metrics: `decay.pruned_count` (sweep), `consolidation.promoted_count` + conflict counts (Dream State), `conflict.detected_count` (write-time), `embedding.cache_hit_rate`, and graph gauges (`entity_count`/`episode_count`).
+#### Step 6b — Lifecycle metrics ✅ DONE
+Remaining §18 metrics via the 6a facade — completes Step 6. Delivered:
+- **Counters**: `decay{pruned}` (sweep), `consolidation{promoted,superseded,cleared,breaker_tripped}` (Dream State), `conflict{detected}` (write-time detection).
+- **Cache hit-rate**: `QueryCache` tracks hits/lookups + `hit_rate`, emits `cache{hit,hit_rate}`. (Dedicated *embedding* cache + its hit rate = future feature.)
+- **Graph gauge + stats**: `stats(db, tenant_id)` per-tenant counts + `graph` gauge; `GET /v1/stats` (implements the §19 `stats` contract).
+- **Verified**: 101 tests (6 + prior 95).
 
-### Step 7 — Hardening + ops
+### Step 7 — Hardening + ops ← NEXT
 Migration runner, `vector:rebuild`, `embeddings:migrate`, dead-letter replay, full benchmark run.
 
 ### v2 (post-v1)
