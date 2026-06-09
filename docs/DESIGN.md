@@ -1,7 +1,7 @@
 # ArangoDB Agentic Memory System — Design Specification
 
-> **Status:** Step 7b (ops CLI) implemented and verified. Authoritative reference.
-> **Last updated:** 2026-06-04 (rev 22 — post Step 7b)
+> **Status:** ✅ **v1 build sequence complete (Steps 0–7).** Authoritative reference.
+> **Last updated:** 2026-06-04 (rev 23 — post Step 7c, v1 complete)
 >
 > **Rev 2 decisions:** Python-first core with a thin TypeScript client · v1 scope is Vercel-only · build a walking skeleton first, then a test/eval harness, then thicken each layer.
 >
@@ -44,6 +44,8 @@
 > **Rev 21 updates (from Step 7a):** the **schema migration runner** is in (§6 startup step 2). `schema/migrations.py`: `Migration(version, name, apply)` + a `MIGRATIONS` registry + `run_migrations(db)` — ensures a `meta` collection, reads the applied `schema_version`, applies pending migrations in version order exactly once, and records the new version. `ensure_schema` runs migrations after the idempotent baseline. **Architecture:** `ensure_schema` stays the idempotent baseline; the runner owns versioned deltas going forward (matching how the schema actually evolved — additively). `MIGRATIONS` is empty at v1; future schema changes register a `Migration`. (`meta` collection named without the leading underscore — ArangoDB reserves `_*`, as with `failed_writes`.) Next: Step 7b (ops CLI: vector:rebuild, embeddings:migrate, dead-letter replay).
 >
 > **Rev 22 updates (from Step 7b):** the **ops CLI** is in (`python -m arango_memory.ops <cmd>`) — admin/destructive maintenance kept off the HTTP API. Importable functions + a thin argparse dispatch (env-driven connection, like `check.py`): `vector-rebuild` (`rebuild_vector_index` = drop + recreate the Faiss index), `embeddings-migrate` (`migrate_embeddings` = re-embed only docs whose `embedding_version` is stale across memories + entities, then rebuild — idempotent), `replay` (`replay_dead_letters` = re-enqueue + drain `failed_writes`). Next: Step 7c (full LoCoMo benchmark runner).
+>
+> **Rev 23 updates (from Step 7c — v1 COMPLETE):** the **full benchmark runner** is in (`eval/benchmark.py`). `run_benchmark` aggregates per-sample evals into overall + per-category metrics — Recall@k, mean token-F1, mean tokens-injected, and a per-category (**Deducible**) breakdown — and `_evaluate_targets` compares them to the §23 targets (token-F1 ≥ 0.65, tokens/turn ≤ 1500, recall floor). CLI `python -m arango_memory.eval.benchmark <dataset> [--mode] [--k]` prints a report and **exits nonzero below targets** (nightly-gate-capable). Real LoCoMo data is a manual BYO run (large/externally-licensed); tested on the smoke slice. Hallucination Rate / Noise Reduction Rate need a generated-answer + judge harness — out of scope (future). **This completes the v1 build sequence (Steps 0–7).** Remaining items are roadmap/deferred only: Step 3e (GLiNER/Haiku extraction tier), Step 3.5c (full Next.js chat UI), and the v2 adapters (§21).
 
 ## Table of Contents
 
@@ -1036,8 +1038,16 @@ Versioned schema migrations on top of the idempotent baseline (§6). Delivered:
 - `replay` (`replay_dead_letters`): re-enqueue + drain `failed_writes`.
 - Importable functions + thin argparse dispatch (env-driven connection). **Verified**: 109 tests (4 + prior 105).
 
-#### Step 7c — Full benchmark runner ← NEXT
-LoCoMo benchmark runner/CLI: load a dataset → ingest → query → score F1 / Recall@k / Deducible vs §23 targets. The real LoCoMo data is a manual/nightly BYO run (large, externally licensed); tested on the smoke slice.
+#### Step 7c — Full benchmark runner ✅ DONE
+LoCoMo benchmark runner/CLI (`eval/benchmark.py`) — completes Step 7 and the v1 sequence. Delivered:
+- `run_benchmark` aggregates per-sample evals → overall Recall@k / mean token-F1 / mean tokens-injected + a per-category (**Deducible**) breakdown; `_evaluate_targets` compares to §23 (F1 ≥ 0.65, tokens/turn ≤ 1500, recall floor).
+- CLI `python -m arango_memory.eval.benchmark <dataset> [--mode] [--k]` prints a report and exits nonzero below targets.
+- Real LoCoMo data = manual/nightly BYO run; tested on the smoke slice. Hallucination/Noise-Reduction (answer + judge) out of scope.
+- **Verified**: 113 tests (4 + prior 109).
+
+---
+
+> ✅ **v1 build sequence complete (Steps 0–7).** Remaining work is roadmap/deferred: **Step 3e** (GLiNER/GLiREL + Haiku extraction tier), **Step 3.5c** (full Next.js chat UI), and the **v2 adapters** — MCP server, LangChain/LangGraph, CrewAI (§21).
 
 ### v2 (post-v1)
 MCP server, LangChain/LangGraph adapter, CrewAI adapter + G-Memory tiers.

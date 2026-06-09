@@ -30,6 +30,7 @@ class QA:
     question: str
     answer: str
     gold_fact: str  # substring expected to appear in a retrieved memory
+    category: str | None = None  # e.g. single-hop | multi-hop | temporal (LoCoMo)
 
 
 @dataclass(frozen=True)
@@ -44,6 +45,8 @@ class QuestionScore:
     question: str
     recall_hit: bool
     f1: float
+    category: str | None = None
+    tokens_injected: int = 0
 
 
 @dataclass
@@ -108,6 +111,7 @@ def run_eval(
     sample: Sample,
     *,
     agent_id: str = "assistant",
+    mode: str = "lite",
     k: int = 10,
     max_memory_tokens: int = 1500,
     consistency_attempts: int = 30,
@@ -137,6 +141,7 @@ def run_eval(
             query=qa.question,
             tenant_id=sample.sample_id,
             agent_id=agent_id,
+            mode=mode,
             k=k,
             max_memory_tokens=max_memory_tokens,
         )
@@ -147,6 +152,8 @@ def run_eval(
                 question=qa.question,
                 recall_hit=_recall_hit(hit_texts, qa.gold_fact),
                 f1=_token_f1(top, qa.answer),
+                category=qa.category,
+                tokens_injected=retrieved.tokens_injected,
             )
         )
     return result
