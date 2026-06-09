@@ -11,9 +11,11 @@ from dataclasses import dataclass
 
 from arango.database import StandardDatabase
 
+from ..config import settings
 from ..embedding import Embedder, get_embedder
 from ..generation import Generator, get_generator
 from ..models import idempotency_key, utcnow_iso
+from ..security.redact import redact
 from .entities import write_entities
 from .extract import Extractor, get_extractor
 from .prospective import generate_prospective
@@ -46,6 +48,14 @@ def store(
     first store of a turn so idempotent replays don't double-count (DESIGN.md §8).
     """
     emb = embedder or get_embedder()
+    # Redact PII before anything is persisted or hashed — the original is never
+    # stored (§17). Everything below operates on the redacted content.
+    if settings.redact_pii:
+        content = redact(
+            content,
+            mode=mode,
+            generator=(generator or get_generator()) if mode == "full" else None,
+        )
     now = utcnow_iso()
     key = idempotency_key(
         tenant_id=tenant_id,
