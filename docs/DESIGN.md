@@ -1,7 +1,7 @@
 # ArangoDB Agentic Memory System — Design Specification
 
-> **Status:** Step 7a (migration runner) implemented and verified. Authoritative reference.
-> **Last updated:** 2026-06-04 (rev 21 — post Step 7a)
+> **Status:** Step 7b (ops CLI) implemented and verified. Authoritative reference.
+> **Last updated:** 2026-06-04 (rev 22 — post Step 7b)
 >
 > **Rev 2 decisions:** Python-first core with a thin TypeScript client · v1 scope is Vercel-only · build a walking skeleton first, then a test/eval harness, then thicken each layer.
 >
@@ -42,6 +42,8 @@
 > **Rev 20 updates (from Step 6b — Step 6 complete):** the remaining §18 metrics are wired through the 6a facade. Counters: `decay_sweep` → `decay{pruned}`, `run_dream_state` → `consolidation{promoted,superseded,cleared,breaker_tripped}`, write-time detection → `conflict{detected}`. `QueryCache` now tracks hits/lookups + `hit_rate` and emits `cache{hit,hit_rate}` (a dedicated *embedding* cache + its hit rate remains a future feature). New `stats(db, tenant_id)` returns per-tenant counts + emits a `graph` gauge, exposed via `GET /v1/stats` — which also implements the **§19 `stats`** contract that was never built. **Step 6 (observability) is now complete (6a/6b).** Next: Step 7 (hardening + ops).
 >
 > **Rev 21 updates (from Step 7a):** the **schema migration runner** is in (§6 startup step 2). `schema/migrations.py`: `Migration(version, name, apply)` + a `MIGRATIONS` registry + `run_migrations(db)` — ensures a `meta` collection, reads the applied `schema_version`, applies pending migrations in version order exactly once, and records the new version. `ensure_schema` runs migrations after the idempotent baseline. **Architecture:** `ensure_schema` stays the idempotent baseline; the runner owns versioned deltas going forward (matching how the schema actually evolved — additively). `MIGRATIONS` is empty at v1; future schema changes register a `Migration`. (`meta` collection named without the leading underscore — ArangoDB reserves `_*`, as with `failed_writes`.) Next: Step 7b (ops CLI: vector:rebuild, embeddings:migrate, dead-letter replay).
+>
+> **Rev 22 updates (from Step 7b):** the **ops CLI** is in (`python -m arango_memory.ops <cmd>`) — admin/destructive maintenance kept off the HTTP API. Importable functions + a thin argparse dispatch (env-driven connection, like `check.py`): `vector-rebuild` (`rebuild_vector_index` = drop + recreate the Faiss index), `embeddings-migrate` (`migrate_embeddings` = re-embed only docs whose `embedding_version` is stale across memories + entities, then rebuild — idempotent), `replay` (`replay_dead_letters` = re-enqueue + drain `failed_writes`). Next: Step 7c (full LoCoMo benchmark runner).
 
 ## Table of Contents
 
@@ -1027,10 +1029,14 @@ Versioned schema migrations on top of the idempotent baseline (§6). Delivered:
 - **Wiring**: `ensure_schema` runs migrations after the baseline. `MIGRATIONS` empty at v1; future changes register a `Migration`.
 - **Verified**: 105 tests (4 + prior 101).
 
-#### Step 7b — Ops CLI ← NEXT
-`python -m arango_memory.ops <cmd>`: `vector:rebuild` (drop + recreate the Faiss index), `embeddings:migrate` (re-embed on model change + rebuild), `replay` (re-enqueue dead-letters via `replay_failed`). Admin/destructive — CLI only, off the HTTP API.
+#### Step 7b — Ops CLI ✅ DONE
+`python -m arango_memory.ops <cmd>` (`ops.py`) — admin/destructive, off the HTTP API. Delivered:
+- `vector-rebuild` (`rebuild_vector_index`): drop + recreate the Faiss index.
+- `embeddings-migrate` (`migrate_embeddings`): re-embed only stale docs (`embedding_version != current`) across memories + entities, then rebuild — idempotent.
+- `replay` (`replay_dead_letters`): re-enqueue + drain `failed_writes`.
+- Importable functions + thin argparse dispatch (env-driven connection). **Verified**: 109 tests (4 + prior 105).
 
-#### Step 7c — Full benchmark runner
+#### Step 7c — Full benchmark runner ← NEXT
 LoCoMo benchmark runner/CLI: load a dataset → ingest → query → score F1 / Recall@k / Deducible vs §23 targets. The real LoCoMo data is a manual/nightly BYO run (large, externally licensed); tested on the smoke slice.
 
 ### v2 (post-v1)
