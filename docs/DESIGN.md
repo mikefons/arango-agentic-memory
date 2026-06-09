@@ -1,7 +1,7 @@
 # ArangoDB Agentic Memory System — Design Specification
 
-> **Status:** Step 4b (bi-temporal + Supersedes) implemented and verified. Authoritative reference.
-> **Last updated:** 2026-06-04 (rev 15 — post Step 4b)
+> **Status:** Step 4 (lifecycle) complete — 4c (Dream State) implemented and verified. Authoritative reference.
+> **Last updated:** 2026-06-04 (rev 16 — post Step 4c)
 >
 > **Rev 2 decisions:** Python-first core with a thin TypeScript client · v1 scope is Vercel-only · build a walking skeleton first, then a test/eval harness, then thicken each layer.
 >
@@ -30,6 +30,8 @@
 > **Rev 14 updates (from Step 4a):** **episodic decay is live** (§11), split as the rev-4 decision: **lazy** at query time + a **scheduled sweep**. `lifecycle/decay.py` provides `effective_strength` (`strength·exp(-λ·Δdays)`), `decay_sweep` (soft-deprecates memories below `decay_floor` via `invalid_at`; never deletes), and `reset_access` (spaced repetition). Retrieval multiplies each candidate's fused score by `effective_strength` (the §9 stage-5 recency/access boost) and refreshes `accessed_at`/`access_count` on surfaced memories. AQL gotchas recorded: `lambda` is reserved, and unary minus on a bind param mis-parses. Working-memory TTL/SCM deferred; sweep scheduling is an ops concern (Step 7). Next: Step 4b (bi-temporal + Supersedes + conflict resolution).
 >
 > **Rev 15 updates (from Step 4b):** **bi-temporal foundations + the Supersedes mechanism** are in (§5, §12). Entities and all edges now carry `valid_time` (= ingestion_time), `valid_time_explicit` (false), `invalid_at` (null); edges also carry `weight` (1.0). New `Supersedes` edge collection + `lifecycle/conflict.py:supersede(new_key, old_key)` — writes `Supersedes` (new→old) and soft-deprecates `old` (`invalid_at`), idempotent. Graph traversal now filters `entity.invalid_at`/`related.invalid_at`, so a superseded entity stops bridging the graph. Decided **machinery-only**: `needs_review` stays written-but-unconsumed; the *decision* to supersede (confirm an ambiguous conflict) is Dream State's job in 4c. Explicit temporal parsing deferred to 3e; EWA `weight` deferred. Next: Step 4c (consolidation + Dream State worker + circuit breaker).
+>
+> **Rev 16 updates (from Step 4c — Step 4 complete):** **consolidation / Dream State** is in (§13). `lifecycle/dream.py:run_dream_state(db, tenant_id, generator)` is a threshold-driven pass over flagged (`needs_review`) + well-attested (`mention_count ≥ threshold`) entities, two-phase (decide → circuit-breaker → apply). It **finally consumes the `needs_review` flags**: Haiku confirms a flagged entity vs its `conflict_with` target → `CONTRADICTS` ⇒ `supersede()` + clear; `DISTINCT` ⇒ clear. Well-attested entities get a distilled one-sentence `summary` + `consolidated_at` (new entity fields). A **circuit breaker** halts the whole run (applies nothing) if planned supersessions exceed `dream_breaker_threshold` — a poisoning safeguard. GAM session-topic trigger deferred (separable subsystem); callable pass, scheduling → ops/Step 7. **Step 4 (lifecycle) is now complete (4a/4b/4c).** Next: Step 5 (security).
 
 ## Table of Contents
 
@@ -964,10 +966,15 @@ Conflict-resolution foundations (§5, §12), machinery-only. Delivered:
 - **Conflict-aware traversal**: graph expansion filters `entity.invalid_at`/`related.invalid_at`, so a superseded entity no longer bridges the graph.
 - **Verified**: 74 tests (4 + prior 70). *Deferred*: `needs_review` consumption → 4c (with confirmation); explicit temporal parsing → 3e; EWA `weight` → later.
 
-#### Step 4c — Consolidation + Dream State ← NEXT
-GAM semantic-boundary trigger (session topic embedding) + consolidation check (`mention_count` threshold) + the async Dream State worker (Haiku review → promote/distill/supersede, **consuming the `needs_review` flags**) + circuit breaker (§13).
+#### Step 4c — Consolidation + Dream State ✅ DONE
+Threshold-driven consolidation pass (§13) — completes Step 4. Delivered:
+- **`lifecycle/dream.py:run_dream_state`**: reviews flagged (`needs_review`) + well-attested (`mention_count ≥ threshold`) entities; two-phase (decide → circuit-breaker → apply).
+- **Conflict confirmation** (consumes `needs_review`): Haiku reviews the flagged entity vs its `conflict_with` target → `CONTRADICTS` ⇒ `supersede()` + clear; `DISTINCT` ⇒ clear.
+- **Distillation**: well-attested entities get a one-sentence `summary` + `consolidated_at` (new entity fields).
+- **Circuit breaker**: halts the whole run (applies nothing) if planned supersessions exceed `dream_breaker_threshold` (poisoning safeguard).
+- **Verified**: 78 tests (4 + prior 74). *Deferred*: GAM session-topic trigger (separable); callable pass — scheduling → ops/Step 7; multi-tenant = caller iterates.
 
-### Step 5 — Security
+### Step 5 — Security ← NEXT
 PII redaction, ABAC, cascade delete, embedding encryption, WORM enforcement.
 
 ### Step 6 — Observability

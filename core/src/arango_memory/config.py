@@ -61,6 +61,9 @@ class Settings(BaseSettings):
     # entities — ≥ merge → same entity; ≥ flag → create + mark for Dream State.
     entity_merge_threshold: float = Field(default=0.9, ge=0.0, le=1.0)
     entity_flag_threshold: float = Field(default=0.6, ge=0.0, le=1.0)
+    # Consolidation / Dream State (DESIGN.md §13).
+    consolidation_mention_threshold: int = Field(default=5, ge=1)
+    dream_breaker_threshold: float = Field(default=0.5, ge=0.0, le=1.0)
 
     # Enrichment mode (DESIGN.md §10)
     memory_mode: Literal["lite", "full"] = "lite"
