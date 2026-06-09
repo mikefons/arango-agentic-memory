@@ -17,6 +17,7 @@ from pydantic import BaseModel, Field
 from ..client import ArangoMemoryClient
 from ..config import settings
 from ..embedding import Embedder, get_embedder
+from ..entity_api import get_entity, list_entities, seed
 from ..generation import Generator, get_generator
 from ..ingest.extract import get_extractor
 from ..ingest.procedural import get_steps
@@ -144,6 +145,26 @@ class StatsResponse(BaseModel):
     counts: dict[str, int] = Field(default_factory=dict)
 
 
+# ── /v1/entity, /v1/entities, /v1/seed (semantic memory) ──
+class EntityResponse(BaseModel):
+    entity: dict[str, Any]
+    related: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class EntitiesResponse(BaseModel):
+    entities: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class SeedRequest(BaseModel):
+    profile: dict[str, Any]
+    ctx: AccessContext
+
+
+class SeedResponse(BaseModel):
+    status: Literal["seeded"] = "seeded"
+    entity_ids: list[str] = Field(default_factory=list)
+
+
 # ── Route handlers ────────────────────────────────────────
 async def health(client: ArangoMemoryClient = Depends(get_client)) -> dict[str, object]:
     return {"status": "ok", "arango": client.ping(), "mode": settings.memory_mode}
@@ -216,6 +237,46 @@ async def stats_endpoint(
     client: ArangoMemoryClient = Depends(get_client),
 ) -> StatsResponse:
     return StatsResponse(counts=stats(client.db, tenant_id=tenant_id))
+
+
+async def entity_endpoint(
+    entity_id: str,
+    tenant_id: str,
+    client: ArangoMemoryClient = Depends(get_client),
+) -> EntityResponse:
+    found = get_entity(client.db, entity_id=entity_id, tenant_id=tenant_id)
+    if found is None:
+        raise HTTPException(status_code=404, detail="entity not found")
+    return EntityResponse(entity=found["entity"], related=found["related"])
+
+
+async def entities_endpoint(
+    tenant_id: str,
+    agent_id: str | None = None,
+    label: str | None = None,
+    limit: int = 50,
+    client: ArangoMemoryClient = Depends(get_client),
+) -> EntitiesResponse:
+    rows = list_entities(
+        client.db, tenant_id=tenant_id, agent_id=agent_id, label=label, limit=limit
+    )
+    return EntitiesResponse(entities=rows)
+
+
+async def seed_endpoint(
+    req: SeedRequest,
+    client: ArangoMemoryClient = Depends(get_client),
+    embedder: Embedder = Depends(get_embedder_dep),
+) -> SeedResponse:
+    _require_write(req.ctx)
+    ids = seed(
+        client.db,
+        profile=req.profile,
+        tenant_id=req.ctx.tenant_id,
+        agent_id=req.ctx.agent_id,
+        embedder=embedder,
+    )
+    return SeedResponse(entity_ids=ids)
 
 
 async def retrieve_endpoint(
@@ -291,6 +352,11 @@ def create_app(client: ArangoMemoryClient | None = None) -> FastAPI:
         "/v1/forget", forget_endpoint, methods=["POST"], response_model=ForgetResponse
     )
     app.add_api_route("/v1/stats", stats_endpoint, methods=["GET"], response_model=StatsResponse)
+    app.add_api_route("/v1/entity", entity_endpoint, methods=["GET"], response_model=EntityResponse)
+    app.add_api_route(
+        "/v1/entities", entities_endpoint, methods=["GET"], response_model=EntitiesResponse
+    )
+    app.add_api_route("/v1/seed", seed_endpoint, methods=["POST"], response_model=SeedResponse)
     return app
 
 

@@ -67,6 +67,21 @@ def build_server(client: CoreClient | None = None) -> FastMCP:
         """Per-tenant graph health counts."""
         return tools.graph_stats(http, tenant_id=tenant_id)
 
+    @server.tool()
+    def get_entity(entity_id: str, tenant_id: str) -> Any:
+        """Fetch a semantic entity (by id) plus its related entities."""
+        return tools.get_entity(http, entity_id=entity_id, tenant_id=tenant_id)
+
+    @server.tool()
+    def list_entities(tenant_id: str, agent_id: str | None = None, label: str | None = None) -> Any:
+        """List a tenant's semantic entities (optionally filtered by agent/label)."""
+        return tools.list_entities(http, tenant_id=tenant_id, agent_id=agent_id, label=label)
+
+    @server.tool()
+    def seed(profile: dict[str, Any], tenant_id: str, agent_id: str) -> Any:
+        """Cold-start seed: pre-populate semantic memory from a profile."""
+        return tools.seed_profile(http, profile=profile, tenant_id=tenant_id, agent_id=agent_id)
+
     return server
 
 
