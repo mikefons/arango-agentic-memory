@@ -179,6 +179,8 @@ def _entity_doc(
         "mention_count": 1,
         "confidence": 1.0,
         "source": "observed",
+        "summary": "",              # distilled by Dream State (§13)
+        "consolidated_at": None,
         "ingestion_time": now,
         "valid_time": now,          # defaults to ingestion_time (§4; explicit parse → 3e)
         "valid_time_explicit": False,
