@@ -74,7 +74,18 @@ def _best_match(
 def _edge(
     db: StandardDatabase, collection: str, key: str, from_id: str, to_id: str, **extra: Any
 ) -> None:
-    doc = {"_key": key, "_from": from_id, "_to": to_id, "ingestion_time": utcnow_iso(), **extra}
+    now = utcnow_iso()
+    doc = {
+        "_key": key,
+        "_from": from_id,
+        "_to": to_id,
+        "ingestion_time": now,
+        "valid_time": now,          # defaults to ingestion_time (§4; explicit parse → 3e)
+        "valid_time_explicit": False,
+        "invalid_at": None,
+        "weight": 1.0,              # EWA computation deferred (§12)
+        **extra,
+    }
     db.collection(collection).insert(doc, overwrite_mode="ignore", silent=True)
 
 
@@ -169,6 +180,9 @@ def _entity_doc(
         "confidence": 1.0,
         "source": "observed",
         "ingestion_time": now,
+        "valid_time": now,          # defaults to ingestion_time (§4; explicit parse → 3e)
+        "valid_time_explicit": False,
+        "invalid_at": None,         # soft-deprecation marker (set by supersede, §12)
         "created_at": now,
         "accessed_at": now,
         "needs_review": needs_review,
