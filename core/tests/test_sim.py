@@ -71,7 +71,7 @@ def test_sim_write_failure_is_isolated(api: TestClient, monkeypatch: MonkeyPatch
         raise RuntimeError("db unreachable")
 
     monkeypatch.setattr(worker_mod, "store", boom)
-    ctx = {"tenant_id": "t_deg", "agent_id": "a"}
+    ctx = {"tenant_id": "t_deg", "agent_id": "a", "access_level": "write"}
 
     stored = api.post("/v1/store", json={"content": "an important fact", "ctx": ctx})
     assert stored.status_code == 200
@@ -86,8 +86,10 @@ def test_sim_write_failure_is_isolated(api: TestClient, monkeypatch: MonkeyPatch
 def test_sim_tenant_isolation(api: TestClient) -> None:
     a = {"tenant_id": "iso_a", "agent_id": "x"}
     b = {"tenant_id": "iso_b", "agent_id": "x"}
-    api.post("/v1/store", json={"content": "alpha amber falcon", "ctx": a})
-    api.post("/v1/store", json={"content": "beta zephyr marker", "ctx": b})
+    wa = {**a, "access_level": "write"}
+    wb = {**b, "access_level": "write"}
+    api.post("/v1/store", json={"content": "alpha amber falcon", "ctx": wa})
+    api.post("/v1/store", json={"content": "beta zephyr marker", "ctx": wb})
 
     assert _poll_hits(api, "zephyr marker", b)  # present for its own tenant
     cross = api.post("/v1/retrieve", json={"query": "zephyr marker", "ctx": a})

@@ -43,6 +43,7 @@ def _ctx(scenario: Scenario, agent_id: str) -> dict[str, str]:
 
 def _play_sessions(client: HttpClient, scenario: Scenario, ctx: dict[str, str]) -> int:
     """Store every turn and record its tool calls. Returns steps issued."""
+    write_ctx = {**ctx, "access_level": "write"}  # mutating endpoints require write (§17)
     steps = 0
     turn_index = 0
     prev_step_key: str | None = None
@@ -50,7 +51,7 @@ def _play_sessions(client: HttpClient, scenario: Scenario, ctx: dict[str, str]) 
         for turn in session:
             store = client.post(
                 "/v1/store",
-                json={"content": f"{turn.speaker}: {turn.text}", "ctx": ctx,
+                json={"content": f"{turn.speaker}: {turn.text}", "ctx": write_ctx,
                       "turn_index": turn_index},
             )
             memory_key = store.json()["memory_ids"][0]
@@ -62,7 +63,7 @@ def _play_sessions(client: HttpClient, scenario: Scenario, ctx: dict[str, str]) 
                         "tool_name": tool.tool_name,
                         "arguments": tool.arguments,
                         "outcome": tool.outcome,
-                        "ctx": ctx,
+                        "ctx": write_ctx,
                         "source_memory_key": memory_key,
                         "prev_step_key": prev_step_key,
                     },

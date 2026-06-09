@@ -11,7 +11,7 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import Any, Literal
 
-from fastapi import Depends, FastAPI, Request
+from fastapi import Depends, FastAPI, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from ..client import ArangoMemoryClient
@@ -25,6 +25,7 @@ from ..ingest.worker import WriteWorker
 from ..retrieve.enrich import QueryCache
 from ..retrieve.search import retrieve
 from ..schema.collections import ensure_schema
+from ..security.forget import forget
 
 
 def get_client(request: Request) -> ArangoMemoryClient:
@@ -58,6 +59,12 @@ class AccessContext(BaseModel):
     agent_id: str
     session_id: str | None = None
     access_level: Literal["read", "write"] = "read"
+
+
+def _require_write(ctx: AccessContext) -> None:
+    """ABAC (§17): mutating endpoints require write access."""
+    if ctx.access_level != "write":
+        raise HTTPException(status_code=403, detail="write access required")
 
 
 class RetrieveOptions(BaseModel):
@@ -119,6 +126,18 @@ class StepsResponse(BaseModel):
     steps: list[dict[str, Any]] = Field(default_factory=list)
 
 
+# ── /v1/forget (right to be forgotten) ────────────────────
+class ForgetRequest(BaseModel):
+    tenant_id: str
+    agent_id: str | None = None  # None → whole tenant
+    access_level: Literal["read", "write"] = "read"
+
+
+class ForgetResponse(BaseModel):
+    status: Literal["forgotten"] = "forgotten"
+    counts: dict[str, int] = Field(default_factory=dict)
+
+
 # ── Route handlers ────────────────────────────────────────
 async def health(client: ArangoMemoryClient = Depends(get_client)) -> dict[str, object]:
     return {"status": "ok", "arango": client.ping(), "mode": settings.memory_mode}
@@ -128,6 +147,7 @@ async def store_endpoint(
     req: StoreRequest,
     queue: WriteQueue = Depends(get_queue_dep),
 ) -> StoreResponse:
+    _require_write(req.ctx)
     # Durable write path (§15): enqueue and return immediately; the worker
     # commits asynchronously. Keys are deterministic from the idempotency key,
     # so they're known without committing; entity_ids are resolved async.
@@ -146,6 +166,7 @@ async def step_endpoint(
     req: StepRequest,
     queue: WriteQueue = Depends(get_queue_dep),
 ) -> StepResponse:
+    _require_write(req.ctx)
     intent = StepIntent(
         tool_name=req.tool_name,
         arguments=req.arguments,
@@ -171,6 +192,17 @@ async def steps_endpoint(
         client.db, tenant_id=tenant_id, agent_id=agent_id, tool_name=tool_name, limit=limit
     )
     return StepsResponse(steps=steps)
+
+
+async def forget_endpoint(
+    req: ForgetRequest,
+    client: ArangoMemoryClient = Depends(get_client),
+) -> ForgetResponse:
+    # Right to be forgotten (§17) — destructive, so requires write access.
+    if req.access_level != "write":
+        raise HTTPException(status_code=403, detail="write access required")
+    counts = forget(client.db, tenant_id=req.tenant_id, agent_id=req.agent_id)
+    return ForgetResponse(counts=counts)
 
 
 async def retrieve_endpoint(
@@ -242,6 +274,9 @@ def create_app(client: ArangoMemoryClient | None = None) -> FastAPI:
     )
     app.add_api_route("/v1/step", step_endpoint, methods=["POST"], response_model=StepResponse)
     app.add_api_route("/v1/steps", steps_endpoint, methods=["GET"], response_model=StepsResponse)
+    app.add_api_route(
+        "/v1/forget", forget_endpoint, methods=["POST"], response_model=ForgetResponse
+    )
     return app
 
 

@@ -23,7 +23,10 @@ def test_health(api: TestClient) -> None:
 def test_store_response_shape(api: TestClient) -> None:
     resp = api.post(
         "/v1/store",
-        json={"content": "alpha bravo charlie", "ctx": {"tenant_id": "t1", "agent_id": "a1"}},
+        json={
+            "content": "alpha bravo charlie",
+            "ctx": {"tenant_id": "t1", "agent_id": "a1", "access_level": "write"},
+        },
     )
     assert resp.status_code == 200
     body = resp.json()
@@ -34,7 +37,8 @@ def test_store_response_shape(api: TestClient) -> None:
 
 def test_store_then_retrieve_over_http(api: TestClient) -> None:
     ctx = {"tenant_id": "t_http", "agent_id": "a_http"}
-    api.post("/v1/store", json={"content": "delta echo foxtrot", "ctx": ctx})
+    write_ctx = {**ctx, "access_level": "write"}
+    api.post("/v1/store", json={"content": "delta echo foxtrot", "ctx": write_ctx})
 
     body: dict[str, object] = {}
     for _ in range(20):
@@ -71,7 +75,7 @@ def test_store_validation_error(api: TestClient) -> None:
 
 
 def test_step_queue_then_lookup(api: TestClient) -> None:
-    ctx = {"tenant_id": "t_step_api", "agent_id": "a"}
+    ctx = {"tenant_id": "t_step_api", "agent_id": "a", "access_level": "write"}
     resp = api.post(
         "/v1/step",
         json={"tool_name": "search", "arguments": {"q": "x"}, "outcome": "success", "ctx": ctx},
