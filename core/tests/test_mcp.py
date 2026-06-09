@@ -48,7 +48,23 @@ def test_stats_and_forget(api: TestClient) -> None:
     assert forgotten["status"] == "forgotten"
 
 
+def test_seed_and_entity_tools(api: TestClient) -> None:
+    seeded = tools.seed_profile(
+        api, profile={"role": "analyst", "preferences": ["sql"]}, tenant_id="mcp4", agent_id="a"
+    )
+    assert seeded["status"] == "seeded"
+
+    entities = tools.list_entities(api, tenant_id="mcp4")["entities"]
+    assert {"analyst", "sql"} <= {e["name"] for e in entities}
+
+    one = tools.get_entity(api, entity_id=entities[0]["id"], tenant_id="mcp4")
+    assert one["entity"]["id"] == entities[0]["id"]
+
+
 async def test_server_registers_expected_tools() -> None:
     server = build_server()
     names = {tool.name for tool in await server.list_tools()}
-    assert names == {"store", "search", "record_step", "list_steps", "forget", "stats"}
+    assert names == {
+        "store", "search", "record_step", "list_steps", "forget", "stats",
+        "get_entity", "list_entities", "seed",
+    }

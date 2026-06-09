@@ -1,7 +1,7 @@
 # ArangoDB Agentic Memory System — Design Specification
 
-> **Status:** ✅ **v1 build sequence complete (Steps 0–7).** v2 in progress: **MCP server done** (§21). Authoritative reference.
-> **Last updated:** 2026-06-04 (rev 24 — post MCP server)
+> **Status:** ✅ **v1 build sequence complete (Steps 0–7).** v2 in progress: **MCP server + full §19 entity API done**. Authoritative reference.
+> **Last updated:** 2026-06-04 (rev 25 — post entity API + MCP extension)
 >
 > **Rev 2 decisions:** Python-first core with a thin TypeScript client · v1 scope is Vercel-only · build a walking skeleton first, then a test/eval harness, then thicken each layer.
 >
@@ -48,6 +48,8 @@
 > **Rev 23 updates (from Step 7c — v1 COMPLETE):** the **full benchmark runner** is in (`eval/benchmark.py`). `run_benchmark` aggregates per-sample evals into overall + per-category metrics — Recall@k, mean token-F1, mean tokens-injected, and a per-category (**Deducible**) breakdown — and `_evaluate_targets` compares them to the §23 targets (token-F1 ≥ 0.65, tokens/turn ≤ 1500, recall floor). CLI `python -m arango_memory.eval.benchmark <dataset> [--mode] [--k]` prints a report and **exits nonzero below targets** (nightly-gate-capable). Real LoCoMo data is a manual BYO run (large/externally-licensed); tested on the smoke slice. Hallucination Rate / Noise Reduction Rate need a generated-answer + judge harness — out of scope (future). **This completes the v1 build sequence (Steps 0–7).** Remaining items are roadmap/deferred only: Step 3e (GLiNER/Haiku extraction tier), Step 3.5c (full Next.js chat UI), and the v2 adapters (§21).
 >
 > **Rev 24 updates (v2 — MCP server):** the first v2 adapter (§21) is in — a Python **FastMCP** server in the core package (`arango_memory/mcp/`) wrapping the core's `/v1` HTTP API as MCP tools (`store`/`search`/`record_step`/`list_steps`/`forget`/`stats`) for Claude Desktop / Cursor / Windsurf. Tool logic (`tools.py`) is `mcp`-free and tested against the core via a `TestClient`; `server.py` registers tools on a FastMCP app with an httpx client to `ARANGO_MEMORY_CORE_URL`; run via `python -m arango_memory.mcp` (stdio). `mcp` is an optional extra (+ dev for CI). `get_entity`/`list_entities`/`seed` tools remain future roadmap (need new core endpoints). Next (your call): LangChain/CrewAI adapters, Step 3e, or Step 3.5c.
+>
+> **Rev 25 updates (v2 — full §19 entity API):** the previously-unbuilt §19 operations are in. `entity_api.py`: `get_entity(entity_id, tenant)` → entity + `relates_to` neighbours; `list_entities(tenant, agent?, label?)`; `seed(profile {role, domain, preferences})` → one seed entity per item via UPSERT (source=`seed`, confidence 0.6) that **never clobbers observed facts** (§11). All projections **exclude embeddings** (§17). Endpoints: `GET /v1/entity`, `GET /v1/entities`, `POST /v1/seed` (write-only). The **MCP server gains the matching `get_entity`/`list_entities`/`seed` tools** (now 9) — closing the §21 tool-surface gap. Next (your call): LangChain/CrewAI adapters, Step 3e, or Step 3.5c.
 
 ## Table of Contents
 
@@ -790,7 +792,7 @@ The adapter holds **no memory logic** — all intelligence lives in the Python c
 
 The schema and core API are designed to support these without refactor.
 
-- **MCP server** ✅ **DONE** — implemented as a Python FastMCP server in the core package (`arango_memory/mcp/`, not `packages/mcp`), wrapping the core's `/v1` HTTP API. Tools: `store` / `search` / `record_step` / `list_steps` / `forget` / `stats` (the implemented endpoints). Run via `python -m arango_memory.mcp` (stdio); core URL from `ARANGO_MEMORY_CORE_URL`. *Future:* `get_entity` / `list_entities` / `seed` tools (§19/§21 wish-list) need new core endpoints first.
+- **MCP server** ✅ **DONE** — implemented as a Python FastMCP server in the core package (`arango_memory/mcp/`, not `packages/mcp`), wrapping the core's `/v1` HTTP API. Tools (9): `store` / `search` / `record_step` / `list_steps` / `forget` / `stats` / `get_entity` / `list_entities` / `seed` — the full §19 surface. Run via `python -m arango_memory.mcp` (stdio); core URL from `ARANGO_MEMORY_CORE_URL`.
 - **LangChain / LangGraph** (`adapters/langchain`) — `BaseMemory` + `ArangoMemoryNode` for `StateGraph`. In-process Python (no HTTP hop needed). *Not built.*
 - **CrewAI** (`adapters/crewai`) — shared crew memory store exercising the G-Memory 3-tier (§14). In-process Python. *Not built.*
 

@@ -69,3 +69,28 @@ def forget_memory(client: CoreClient, *, tenant_id: str, agent_id: str | None = 
 def graph_stats(client: CoreClient, *, tenant_id: str) -> Any:
     """Per-tenant graph health counts."""
     return client.get("/v1/stats", params={"tenant_id": tenant_id}).json()
+
+
+def get_entity(client: CoreClient, *, entity_id: str, tenant_id: str) -> Any:
+    """Fetch a semantic entity (by id) plus its related entities."""
+    return client.get("/v1/entity", params={"entity_id": entity_id, "tenant_id": tenant_id}).json()
+
+
+def list_entities(
+    client: CoreClient, *, tenant_id: str, agent_id: str | None = None, label: str | None = None
+) -> Any:
+    """List a tenant's semantic entities (optionally filtered by agent/label)."""
+    params: dict[str, Any] = {"tenant_id": tenant_id}
+    if agent_id is not None:
+        params["agent_id"] = agent_id
+    if label is not None:
+        params["label"] = label
+    return client.get("/v1/entities", params=params).json()
+
+
+def seed_profile(
+    client: CoreClient, *, profile: dict[str, Any], tenant_id: str, agent_id: str
+) -> Any:
+    """Cold-start seed: pre-populate semantic memory from a profile."""
+    ctx = {"tenant_id": tenant_id, "agent_id": agent_id, "access_level": "write"}
+    return client.post("/v1/seed", json={"profile": profile, "ctx": ctx}).json()
