@@ -20,6 +20,7 @@ from arango.cursor import Cursor
 from arango.database import StandardDatabase
 
 from ..models import utcnow_iso
+from ..telemetry import metrics
 
 
 def _age_days(accessed_at: str, now: str) -> float:
@@ -53,7 +54,9 @@ def decay_sweep(
     now = utcnow_iso()
     bind_vars: dict[str, Any] = {"now": now, "neg_lam": -lambda_per_day, "floor": floor}
     cursor = cast(Cursor, db.aql.execute(_SWEEP, bind_vars=bind_vars))
-    return len(list(cursor))
+    pruned = len(list(cursor))
+    metrics.emit("decay", pruned=pruned)
+    return pruned
 
 
 def reset_access(db: StandardDatabase, memory_keys: list[str]) -> None:

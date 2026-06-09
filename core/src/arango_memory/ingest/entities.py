@@ -25,6 +25,7 @@ from arango.database import StandardDatabase
 from ..config import settings
 from ..embedding import Embedder
 from ..models import utcnow_iso
+from ..telemetry import metrics
 from .extract import ExtractedEntity, Extractor, cooccurring_pairs
 
 _UPSERT_ENTITY = """
@@ -109,6 +110,7 @@ def write_entities(
     existing = list(cursor)
     now = utcnow_iso()
     key_by_entity: dict[tuple[str, str], str] = {}
+    detected = 0
 
     for ent in extracted:
         vec = embedder.embed(ent.name)
@@ -120,6 +122,7 @@ def write_entities(
             key = cast(str, match["key"])
         else:
             needs_review = match is not None and sim >= settings.entity_flag_threshold
+            detected += int(needs_review)
             doc = _entity_doc(ent, vec, tenant_id, agent_id, embedder, now, needs_review, match)
             cursor = cast(
                 Cursor,
@@ -153,6 +156,9 @@ def write_entities(
             db, "relates_to", f"{lo}__{hi}", f"entities/{lo}", f"entities/{hi}",
             relationship="associated_with",
         )
+
+    if detected:
+        metrics.emit("conflict", detected=detected)
 
     # Preserve extraction order, de-duplicated.
     return list(dict.fromkeys(key_by_entity.values()))

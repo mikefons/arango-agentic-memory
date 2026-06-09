@@ -26,6 +26,7 @@ from ..retrieve.enrich import QueryCache
 from ..retrieve.search import retrieve
 from ..schema.collections import ensure_schema
 from ..security.forget import forget
+from ..stats import stats
 
 
 def get_client(request: Request) -> ArangoMemoryClient:
@@ -138,6 +139,11 @@ class ForgetResponse(BaseModel):
     counts: dict[str, int] = Field(default_factory=dict)
 
 
+# ── /v1/stats (graph health) ──────────────────────────────
+class StatsResponse(BaseModel):
+    counts: dict[str, int] = Field(default_factory=dict)
+
+
 # ── Route handlers ────────────────────────────────────────
 async def health(client: ArangoMemoryClient = Depends(get_client)) -> dict[str, object]:
     return {"status": "ok", "arango": client.ping(), "mode": settings.memory_mode}
@@ -203,6 +209,13 @@ async def forget_endpoint(
         raise HTTPException(status_code=403, detail="write access required")
     counts = forget(client.db, tenant_id=req.tenant_id, agent_id=req.agent_id)
     return ForgetResponse(counts=counts)
+
+
+async def stats_endpoint(
+    tenant_id: str,
+    client: ArangoMemoryClient = Depends(get_client),
+) -> StatsResponse:
+    return StatsResponse(counts=stats(client.db, tenant_id=tenant_id))
 
 
 async def retrieve_endpoint(
@@ -277,6 +290,7 @@ def create_app(client: ArangoMemoryClient | None = None) -> FastAPI:
     app.add_api_route(
         "/v1/forget", forget_endpoint, methods=["POST"], response_model=ForgetResponse
     )
+    app.add_api_route("/v1/stats", stats_endpoint, methods=["GET"], response_model=StatsResponse)
     return app
 
 
