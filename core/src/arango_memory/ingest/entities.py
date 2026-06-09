@@ -27,6 +27,7 @@ from ..embedding import Embedder
 from ..models import utcnow_iso
 from ..telemetry import metrics
 from .extract import ExtractedEntity, Extractor, cooccurring_pairs
+from .temporal import parse_explicit_time
 
 _UPSERT_ENTITY = """
 UPSERT { tenant_id: @tenant_id, name: @name, label: @label }
@@ -109,7 +110,9 @@ def write_entities(
     cursor = cast(Cursor, db.aql.execute(_FETCH_EXISTING, bind_vars={"tenant_id": tenant_id}))
     existing = list(cursor)
     now = utcnow_iso()
+    explicit_vt = parse_explicit_time(content)  # when the fact holds (§4)
     key_by_entity: dict[tuple[str, str], str] = {}
+    key_by_name: dict[str, str] = {}
     detected = 0
 
     for ent in extracted:
@@ -123,7 +126,9 @@ def write_entities(
         else:
             needs_review = match is not None and sim >= settings.entity_flag_threshold
             detected += int(needs_review)
-            doc = _entity_doc(ent, vec, tenant_id, agent_id, embedder, now, needs_review, match)
+            doc = _entity_doc(
+                ent, vec, tenant_id, agent_id, embedder, now, needs_review, match, explicit_vt
+            )
             cursor = cast(
                 Cursor,
                 db.aql.execute(
@@ -140,10 +145,26 @@ def write_entities(
             key = cast(str, next(iter(cursor)))
 
         key_by_entity[(ent.name, ent.label)] = key
+        key_by_name.setdefault(ent.name, key)
         _edge(db, "mentions", f"{memory_key}__{key}", f"memories/{memory_key}", f"entities/{key}")
         _edge(
             db, "produced_by", f"{key}__{episode_key}",
             f"entities/{key}", f"episodes/{episode_key}",
+        )
+
+    # Typed relations (GLiREL/Haiku) win; written first so the co-occurrence pass
+    # below (same edge key, overwrite_mode="ignore") only fills untyped pairs (§5).
+    vt_extra: dict[str, Any] = (
+        {"valid_time": explicit_vt, "valid_time_explicit": True} if explicit_vt else {}
+    )
+    for rel in extractor.extract_relations(content, extracted):
+        ka, kb = key_by_name.get(rel.source), key_by_name.get(rel.target)
+        if not ka or not kb or ka == kb:
+            continue
+        lo, hi = sorted((ka, kb))
+        _edge(
+            db, "relates_to", f"{lo}__{hi}", f"entities/{lo}", f"entities/{hi}",
+            relationship=rel.relationship, **vt_extra,
         )
 
     for left, right in cooccurring_pairs(extracted):
@@ -154,7 +175,7 @@ def write_entities(
         lo, hi = sorted((ka, kb))
         _edge(
             db, "relates_to", f"{lo}__{hi}", f"entities/{lo}", f"entities/{hi}",
-            relationship="associated_with",
+            relationship="associated_with", **vt_extra,
         )
 
     if detected:
@@ -173,6 +194,7 @@ def _entity_doc(
     now: str,
     needs_review: bool,
     match: dict[str, Any] | None,
+    valid_time: str | None = None,
 ) -> dict[str, Any]:
     return {
         "name": ent.name,
@@ -188,8 +210,10 @@ def _entity_doc(
         "summary": "",              # distilled by Dream State (§13)
         "consolidated_at": None,
         "ingestion_time": now,
-        "valid_time": now,          # defaults to ingestion_time (§4; explicit parse → 3e)
-        "valid_time_explicit": False,
+        # valid_time = when the fact holds (§4): an explicit date parsed from the
+        # text if present (3e), else ingestion_time.
+        "valid_time": valid_time or now,
+        "valid_time_explicit": valid_time is not None,
         "invalid_at": None,         # soft-deprecation marker (set by supersede, §12)
         "created_at": now,
         "accessed_at": now,

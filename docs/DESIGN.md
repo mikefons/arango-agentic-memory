@@ -1,7 +1,7 @@
 # ArangoDB Agentic Memory System — Design Specification
 
-> **Status:** ✅ **v1 build sequence complete (Steps 0–7).** v2 in progress: **MCP server + full §19 entity API + LangChain/LangGraph + CrewAI adapters done** — all §21 adapters shipped. Authoritative reference.
-> **Last updated:** 2026-06-09 (rev 27 — post CrewAI adapter)
+> **Status:** ✅ **v1 build sequence complete (Steps 0–7).** v2: all §21 adapters shipped (MCP, LangChain/LangGraph, CrewAI) + full §19 entity API + **Step 3e heavy extraction tier done**. Authoritative reference.
+> **Last updated:** 2026-06-09 (rev 28 — post Step 3e heavy extraction tier)
 >
 > **Rev 2 decisions:** Python-first core with a thin TypeScript client · v1 scope is Vercel-only · build a walking skeleton first, then a test/eval harness, then thicken each layer.
 >
@@ -54,6 +54,8 @@
 > **Rev 26 updates (v2 — LangChain/LangGraph adapter):** the second v2 adapter (§21) is in — **in-process Python** (no HTTP hop, unlike the Vercel TS client), living in the core package at `arango_memory/langchain/` (a documented deviation from the spec's `adapters/langchain` path, mirroring the MCP placement). Three primitives over `retrieve`/`store`/`record_step`: **`ArangoMemoryRetriever`** (`BaseRetriever` → relevant memory as `Document`s + `assemble_context()` for the token-budgeted block); **`ArangoChatMessageHistory`** (`BaseChatMessageHistory` — persists a session transcript through the durable core and rebuilds it on read; `clear()` soft-deletes via `invalid_at`, preserving episode WORM); **`ArangoMemoryNode`** (LangGraph `recall`/`remember` nodes — retrieve+inject a `[MEMORY CONTEXT]` `SystemMessage`, then store turns + capture completed `tool_call`/`ToolMessage` pairs as procedural memory, deduped + chained via `prev_step_key`). All projections **exclude embeddings** (§17). One small **additive** core change: `store(message_type=…)` tags the episode with the chat role (default `None`; never touches redaction/hashing/embedding) so the transcript reconstructs faithfully. New `langchain` optional extra (`langchain-core` + `langgraph`, also in `dev`); tests exercise the real classes + a live `StateGraph` against testcontainers with the Fake providers (keyless). Next (your call): CrewAI adapter, Step 3e, or Step 3.5c.
 >
 > **Rev 27 updates (v2 — CrewAI adapter):** the last §21 adapter is in — in-process Python at `arango_memory/crewai/`, a **shared-crew memory store** realising the **G-Memory 3-tier (§14) purely via `agent_id` namespacing** (no core change): `interaction` (an agent's private memory), `query` (`<crew_id>::query`, shared read/write across the crew), `insight` (`<crew_id>::insight`, shared + read-only here — only the Dream State path writes it). **`ArangoCrewStorage`** speaks the stable text-based contract — `save(value, metadata)` / `search(query, limit, score_threshold)` / `reset()` — mapping straight onto the core's hybrid `retrieve()` (raw text in, so BM25/graph fusion is preserved); `reset()` is a `forget` soft-delete; results **exclude embeddings** (§17). **`crew_memory(...)`** builds all three tiers for one agent. Per the chosen strategy the logic is **crewai-free and tested directly** (testcontainers + Fakes, keyless); **`to_crewai_storage()`** is a thin `crewai.Storage` shim (lazy `crewai` import) wired via `Crew(external_memory=ExternalMemory(storage=…))`, tested against a stubbed `crewai` module so CI stays light. New `crewai` optional extra (**not** in `dev` — deliberately out of CI). **All §21 adapters (MCP, LangChain/LangGraph, CrewAI) are now shipped.** Remaining roadmap: Step 3e, Step 3.5c.
+>
+> **Rev 28 updates (Step 3e — heavy extraction tier):** the deferred §8 Stage 2 tiers are in, all behind the existing `Extractor` Protocol (additively extended with `extract_relations`). **`GlinerExtractor`** (tier B) — GLiNER zero-shot NER + GLiREL **typed relations**, with the NER model and relation function **injectable** so the logic is tested with deterministic fakes (torch stays out of CI). **`HaikuExtractor`** (tier C) — entities + typed relations as JSON via a `Generator`, **keyless in CI via `FakeGenerator`**, one cached LLM call serving both `extract`/`extract_relations` (§16). **`LayeredExtractor`** — the A→B→C chain: spaCy → GLiNER fill → escalate to Haiku **only** when the cheaper tiers yield `< extraction_escalate_below` entities. **Typed relations now populate the graph:** `write_entities` writes the typed `relates_to` label where an extractor produced one, **falling back to co-occurrence `associated_with`** for untyped pairs (typed written first; same idempotent edge key). **Explicit `valid_time`** (closing the Step 4→3e deferral): a deterministic, keyless regex parser (`ingest/temporal.py` — ISO dates, "Month [DD,] YYYY", bare years) sets `valid_time`/`valid_time_explicit=True` on entities + their typed edges when the text states *when* a fact holds (§4). New config: `extraction_provider` gains `gliner|haiku|layered`, plus `gliner_model`/`gliner_entity_labels`/`relation_labels`/`extraction_escalate_below`. `glirel` added to the `extraction` extra (**not** `dev` — CI stays torch-free); 10 keyless tests. **Remaining roadmap: Step 3.5c only.**
 
 ## Table of Contents
 
@@ -511,7 +513,7 @@ A single `mode` setting controls which expensive enrichments run. This is the pr
 | Adaptive gate (draft LLM call) | ❌ | ✅ |
 | HyDE (hypothetical answer LLM call) | ❌ | ✅ |
 | Prospective indexing (write-time LLM calls) | ❌ | ✅ |
-| Haiku extraction fallback | ❌ (spaCy/GLiNER2 only) | ✅ |
+| Haiku extraction fallback | ❌ (spaCy/GLiNER2 only) | ✅ (LayeredExtractor, Step 3e) |
 | Vector + BM25 + graph + RRF + MMR | ✅ | ✅ |
 | Tiered token budget | ✅ | ✅ |
 
@@ -944,8 +946,14 @@ Procedural memory (ingestion + retrieval/reuse) and full-mode prospective indexi
 - **API**: `POST /v1/step`, `GET /v1/steps`.
 - **Verified**: 62 tests (4 procedural + 2 prospective + 1 API step + the prior 55) — reuse/use_count, `TOUCHED`/`TRANSITION`, tenant scope, prospective findability, async step round-trip.
 
-#### Step 3e — Heavy extraction tier
-GLiNER/GLiREL zero-shot NER + relation extraction and the Haiku extraction fallback (§8 Stage 2). Deferred from 3a/3d to keep CI torch-free; pulls torch + a model download. Slots behind the existing `Extractor` Protocol (no caller changes).
+#### Step 3e — Heavy extraction tier ✅ DONE
+GLiNER/GLiREL zero-shot NER + typed relation extraction and the Haiku fallback (§8 Stage 2), all behind the `Extractor` Protocol (extended additively with `extract_relations`). Delivered:
+- **`GlinerExtractor`** (tier B): GLiNER NER + GLiREL typed relations; NER model + relation function injectable → tested with deterministic fakes (torch stays out of CI, behind the `extraction` extra).
+- **`HaikuExtractor`** (tier C): entities + typed relations as JSON via a `Generator`; keyless in CI via `FakeGenerator`; one cached LLM call serves both `extract`/`extract_relations` (§16).
+- **`LayeredExtractor`**: the A→B→C chain — spaCy → GLiNER fill → escalate to Haiku only when the cheap tiers yield `< extraction_escalate_below` entities.
+- **Typed relations in the graph**: `write_entities` writes the typed `relates_to` label when present, else co-occurrence `associated_with` (typed written first; idempotent edge key).
+- **Explicit `valid_time`** (`ingest/temporal.py`): deterministic keyless date parsing → `valid_time`/`valid_time_explicit` on entities + typed edges (closes the Step 4→3e deferral).
+- New config (`extraction_provider` += `gliner|haiku|layered`, label/threshold knobs); `glirel` in the `extraction` extra (not `dev`); 10 keyless, torch-free tests.
 
 ### Step 3.5 — Agentic simulation harness (real-data validation)
 Robust real-data validation of the end-to-end product — an agentic Vercel app using ArangoDB for both memory and actions (§22 "Agentic simulation harness"). Split into 3.5a (deterministic harness) and 3.5b (reference app).
@@ -986,7 +994,7 @@ Conflict-resolution foundations (§5, §12), machinery-only. Delivered:
 - **Bi-temporal fields**: entities + all edges carry `valid_time` (= ingestion_time), `valid_time_explicit` (false), `invalid_at` (null); edges also carry `weight` (1.0).
 - **Supersedes**: new edge collection + `lifecycle/conflict.py:supersede(new_key, old_key)` — writes `Supersedes` (new→old) + soft-deprecates `old` (`invalid_at`), idempotent.
 - **Conflict-aware traversal**: graph expansion filters `entity.invalid_at`/`related.invalid_at`, so a superseded entity no longer bridges the graph.
-- **Verified**: 74 tests (4 + prior 70). *Deferred*: `needs_review` consumption → 4c (with confirmation); explicit temporal parsing → 3e; EWA `weight` → later.
+- **Verified**: 74 tests (4 + prior 70). *Deferred*: `needs_review` consumption → 4c (with confirmation); explicit temporal parsing → 3e (**done**, Rev 28); EWA `weight` → later.
 
 #### Step 4c — Consolidation + Dream State ✅ DONE
 Threshold-driven consolidation pass (§13) — completes Step 4. Delivered:
@@ -1055,7 +1063,7 @@ LoCoMo benchmark runner/CLI (`eval/benchmark.py`) — completes Step 7 and the v
 
 ---
 
-> ✅ **v1 build sequence complete (Steps 0–7).** v2: **all §21 adapters shipped** — MCP server, LangChain/LangGraph, and CrewAI. Remaining roadmap/deferred: **Step 3e** (GLiNER/GLiREL + Haiku extraction tier) and **Step 3.5c** (full Next.js chat UI).
+> ✅ **v1 build sequence complete (Steps 0–7).** v2: **all §21 adapters shipped** — MCP server, LangChain/LangGraph, and CrewAI — plus **Step 3e** (heavy extraction tier). Remaining roadmap/deferred: **Step 3.5c** (full Next.js chat UI) only.
 
 ### v2 (post-v1)
 MCP server, LangChain/LangGraph adapter, CrewAI adapter + G-Memory tiers.
