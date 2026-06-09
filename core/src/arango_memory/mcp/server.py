@@ -4,8 +4,8 @@ A thin wrapper over the core's /v1 HTTP API for Claude Desktop / Cursor /
 Windsurf. Run with `python -m arango_memory.mcp` (stdio). The core URL comes
 from `ARANGO_MEMORY_CORE_URL` (default http://localhost:8080).
 
-Tool surface maps to the implemented endpoints; `get_entity`/`list_entities`/
-`seed` (§19/§21 wish-list) need new core endpoints and are future roadmap.
+Exposes the full §19 surface as 9 tools (store/search/record_step/list_steps/
+forget/stats/get_entity/list_entities/seed).
 """
 
 from __future__ import annotations

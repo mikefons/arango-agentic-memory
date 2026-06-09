@@ -1,7 +1,7 @@
 # ArangoDB Agentic Memory System — Design Specification
 
-> **Status:** ✅ **v1 build sequence complete (Steps 0–7).** v2 in progress: **MCP server + full §19 entity API done**. Authoritative reference.
-> **Last updated:** 2026-06-04 (rev 25 — post entity API + MCP extension)
+> **Status:** ✅ **v1 build sequence complete (Steps 0–7).** v2 in progress: **MCP server + full §19 entity API + LangChain/LangGraph adapter done**. Authoritative reference.
+> **Last updated:** 2026-06-09 (rev 26 — post LangChain/LangGraph adapter)
 >
 > **Rev 2 decisions:** Python-first core with a thin TypeScript client · v1 scope is Vercel-only · build a walking skeleton first, then a test/eval harness, then thicken each layer.
 >
@@ -50,6 +50,8 @@
 > **Rev 24 updates (v2 — MCP server):** the first v2 adapter (§21) is in — a Python **FastMCP** server in the core package (`arango_memory/mcp/`) wrapping the core's `/v1` HTTP API as MCP tools (`store`/`search`/`record_step`/`list_steps`/`forget`/`stats`) for Claude Desktop / Cursor / Windsurf. Tool logic (`tools.py`) is `mcp`-free and tested against the core via a `TestClient`; `server.py` registers tools on a FastMCP app with an httpx client to `ARANGO_MEMORY_CORE_URL`; run via `python -m arango_memory.mcp` (stdio). `mcp` is an optional extra (+ dev for CI). `get_entity`/`list_entities`/`seed` tools remain future roadmap (need new core endpoints). Next (your call): LangChain/CrewAI adapters, Step 3e, or Step 3.5c.
 >
 > **Rev 25 updates (v2 — full §19 entity API):** the previously-unbuilt §19 operations are in. `entity_api.py`: `get_entity(entity_id, tenant)` → entity + `relates_to` neighbours; `list_entities(tenant, agent?, label?)`; `seed(profile {role, domain, preferences})` → one seed entity per item via UPSERT (source=`seed`, confidence 0.6) that **never clobbers observed facts** (§11). All projections **exclude embeddings** (§17). Endpoints: `GET /v1/entity`, `GET /v1/entities`, `POST /v1/seed` (write-only). The **MCP server gains the matching `get_entity`/`list_entities`/`seed` tools** (now 9) — closing the §21 tool-surface gap. Next (your call): LangChain/CrewAI adapters, Step 3e, or Step 3.5c.
+>
+> **Rev 26 updates (v2 — LangChain/LangGraph adapter):** the second v2 adapter (§21) is in — **in-process Python** (no HTTP hop, unlike the Vercel TS client), living in the core package at `arango_memory/langchain/` (a documented deviation from the spec's `adapters/langchain` path, mirroring the MCP placement). Three primitives over `retrieve`/`store`/`record_step`: **`ArangoMemoryRetriever`** (`BaseRetriever` → relevant memory as `Document`s + `assemble_context()` for the token-budgeted block); **`ArangoChatMessageHistory`** (`BaseChatMessageHistory` — persists a session transcript through the durable core and rebuilds it on read; `clear()` soft-deletes via `invalid_at`, preserving episode WORM); **`ArangoMemoryNode`** (LangGraph `recall`/`remember` nodes — retrieve+inject a `[MEMORY CONTEXT]` `SystemMessage`, then store turns + capture completed `tool_call`/`ToolMessage` pairs as procedural memory, deduped + chained via `prev_step_key`). All projections **exclude embeddings** (§17). One small **additive** core change: `store(message_type=…)` tags the episode with the chat role (default `None`; never touches redaction/hashing/embedding) so the transcript reconstructs faithfully. New `langchain` optional extra (`langchain-core` + `langgraph`, also in `dev`); tests exercise the real classes + a live `StateGraph` against testcontainers with the Fake providers (keyless). Next (your call): CrewAI adapter, Step 3e, or Step 3.5c.
 
 ## Table of Contents
 
@@ -793,7 +795,7 @@ The adapter holds **no memory logic** — all intelligence lives in the Python c
 The schema and core API are designed to support these without refactor.
 
 - **MCP server** ✅ **DONE** — implemented as a Python FastMCP server in the core package (`arango_memory/mcp/`, not `packages/mcp`), wrapping the core's `/v1` HTTP API. Tools (9): `store` / `search` / `record_step` / `list_steps` / `forget` / `stats` / `get_entity` / `list_entities` / `seed` — the full §19 surface. Run via `python -m arango_memory.mcp` (stdio); core URL from `ARANGO_MEMORY_CORE_URL`.
-- **LangChain / LangGraph** (`adapters/langchain`) — `BaseMemory` + `ArangoMemoryNode` for `StateGraph`. In-process Python (no HTTP hop needed). *Not built.*
+- **LangChain / LangGraph** ✅ **DONE** — implemented in-process (no HTTP hop) in the core package at `arango_memory/langchain/` (not `adapters/langchain` — mirrors the MCP placement). Three primitives over the core: `ArangoMemoryRetriever` (`BaseRetriever`), `ArangoChatMessageHistory` (`BaseChatMessageHistory`, durable + WORM-preserving `clear()`), and `ArangoMemoryNode` (LangGraph `recall`/`remember` nodes — retrieve+inject, store turns, capture tool steps). The modern surface replaces the deprecated `BaseMemory`. Requires the `langchain` extra (`langchain-core` + `langgraph`).
 - **CrewAI** (`adapters/crewai`) — shared crew memory store exercising the G-Memory 3-tier (§14). In-process Python. *Not built.*
 
 ---
@@ -1051,7 +1053,7 @@ LoCoMo benchmark runner/CLI (`eval/benchmark.py`) — completes Step 7 and the v
 
 ---
 
-> ✅ **v1 build sequence complete (Steps 0–7).** v2 in progress: **MCP server done** (§21). Remaining roadmap/deferred: **Step 3e** (GLiNER/GLiREL + Haiku extraction tier), **Step 3.5c** (full Next.js chat UI), and the remaining **v2 adapters** — LangChain/LangGraph, CrewAI (§21).
+> ✅ **v1 build sequence complete (Steps 0–7).** v2 in progress: **MCP server + LangChain/LangGraph adapter done** (§21). Remaining roadmap/deferred: **Step 3e** (GLiNER/GLiREL + Haiku extraction tier), **Step 3.5c** (full Next.js chat UI), and the remaining **v2 adapter** — CrewAI (§21).
 
 ### v2 (post-v1)
 MCP server, LangChain/LangGraph adapter, CrewAI adapter + G-Memory tiers.

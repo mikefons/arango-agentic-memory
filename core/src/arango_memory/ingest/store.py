@@ -42,8 +42,13 @@ def store(
     extractor: Extractor | None = None,
     generator: Generator | None = None,
     mode: str = "lite",
+    message_type: str | None = None,
 ) -> StoreResult:
     """Instrumented write (DESIGN.md §18): `memory.write` span + `write` metric.
+
+    `message_type` (optional) tags the episode with the originating chat role
+    (e.g. "human"/"ai") for adapters that reconstruct a transcript; it never
+    affects redaction, hashing, or the embedded text.
 
     Exceptions propagate to the durable worker (retry/dead-letter, §15).
     """
@@ -60,6 +65,7 @@ def store(
             extractor=extractor,
             generator=generator,
             mode=mode,
+            message_type=message_type,
         )
     metrics.emit("write", duration_ms=(time.perf_counter() - started) * 1000.0)
     return result
@@ -77,6 +83,7 @@ def _store_impl(
     extractor: Extractor | None = None,
     generator: Generator | None = None,
     mode: str = "lite",
+    message_type: str | None = None,
 ) -> StoreResult:
     """Persist one turn as an episode + episodic memory, with extracted entities.
 
@@ -115,6 +122,7 @@ def _store_impl(
         "agent_id": agent_id,
         "tenant_id": tenant_id,
         "session_id": session_id,
+        "message_type": message_type,
         "ingested_at": now,
     }
     db.collection("episodes").insert(episode, overwrite_mode="ignore", silent=True)
