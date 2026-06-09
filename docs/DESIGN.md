@@ -1,7 +1,7 @@
 # ArangoDB Agentic Memory System — Design Specification
 
-> **Status:** Step 5a (PII redaction + WORM) implemented and verified. Authoritative reference.
-> **Last updated:** 2026-06-04 (rev 17 — post Step 5a)
+> **Status:** Step 5 (security) complete — 5b (forget + ABAC) implemented and verified. Authoritative reference.
+> **Last updated:** 2026-06-04 (rev 18 — post Step 5b)
 >
 > **Rev 2 decisions:** Python-first core with a thin TypeScript client · v1 scope is Vercel-only · build a walking skeleton first, then a test/eval harness, then thicken each layer.
 >
@@ -34,6 +34,8 @@
 > **Rev 16 updates (from Step 4c — Step 4 complete):** **consolidation / Dream State** is in (§13). `lifecycle/dream.py:run_dream_state(db, tenant_id, generator)` is a threshold-driven pass over flagged (`needs_review`) + well-attested (`mention_count ≥ threshold`) entities, two-phase (decide → circuit-breaker → apply). It **finally consumes the `needs_review` flags**: Haiku confirms a flagged entity vs its `conflict_with` target → `CONTRADICTS` ⇒ `supersede()` + clear; `DISTINCT` ⇒ clear. Well-attested entities get a distilled one-sentence `summary` + `consolidated_at` (new entity fields). A **circuit breaker** halts the whole run (applies nothing) if planned supersessions exceed `dream_breaker_threshold` — a poisoning safeguard. GAM session-topic trigger deferred (separable subsystem); callable pass, scheduling → ops/Step 7. **Step 4 (lifecycle) is now complete (4a/4b/4c).** Next: Step 5 (security).
 >
 > **Rev 17 updates (from Step 5a):** **write-path security** is in (§17). New `security/` package: `redact.py` (regex redactor for email/SSN/card/API-keys/bearer → typed placeholders, conservative so prose/numbers pass through; plus a full-mode generator pass for contextual PII) and `worm.py` (`worm_guard` / `WORM_COLLECTIONS` / `WormViolation` — the client-layer enforcement primitive for the insert-only `episodes`). `store()` redacts `content` **first**, so the idempotency key, episode, memory, embedding, and entity extraction all operate on redacted text — the original is never persisted. Note: full mode now makes **two** generator calls (redaction + prospective), so stubbed generators must be system-aware. `redact_pii` config (default true). **Embedding encryption-at-rest is a DB-deployment concern** (ArangoDB Enterprise storage encryption), not app code, since field-level encryption would break vector search. Next: Step 5b (right-to-be-forgotten + ABAC).
+>
+> **Rev 18 updates (from Step 5b — Step 5 complete):** **right-to-be-forgotten + ABAC** are in (§17). `security/forget.py`: `forget()` soft-deletes (sets `invalid_at` on the subject's memories + entities → out of every retrieval surface at once); `purge()` is the ops-triggered hard-delete (vertices + touching edges, episodes via the sanctioned WORM bypass, then drops the vector index so retrieval self-heals). Both tenant-scoped, optionally agent-scoped. `POST /v1/forget` exposes soft-delete (write-only); `purge` stays an ops callable. **ABAC**: `store`/`step`/`forget` require `access_level == "write"` (else `403`); `retrieve` allows read — the Vercel adapter already declares `write`/`read` correctly (3.5b). **Step 5 (security) is now complete (5a/5b).** Next: Step 6 (observability).
 
 ## Table of Contents
 
@@ -986,10 +988,14 @@ Write-path security (§17). Delivered:
 - **Config**: `redact_pii`. **Verified**: 84 tests (6 + prior 78).
 - *Note*: embedding encryption-at-rest is a DB-deployment concern (would break vector search if app-level), not built here.
 
-#### Step 5b — Right-to-be-forgotten + ABAC ← NEXT
-`forget(tenant_id, agent_id?)`: immediate soft-delete (set `invalid_at` across the subject's docs) + async physical purge (hard-delete incl. WORM episodes — the sanctioned exception — and edges). ABAC: enforce `access_level` (read/write) at the API boundary.
+#### Step 5b — Right-to-be-forgotten + ABAC ✅ DONE
+Access/deletion security (§17) — completes Step 5. Delivered:
+- **`security/forget.py`**: `forget(tenant_id, agent_id?)` soft-deletes (sets `invalid_at` on the subject's memories + entities); `purge(tenant_id, agent_id?)` hard-deletes vertices + touching edges (episodes via the sanctioned WORM bypass) and drops the vector index (self-heal rebuilds). `drop_vector_index` added to the schema module.
+- **API**: `POST /v1/forget` (soft-delete, write-only); `purge` stays an ops callable.
+- **ABAC**: `store`/`step`/`forget` require `access_level == "write"` (else `403`); `retrieve` allows read. Adapter already ABAC-compliant (3.5b).
+- **Verified**: 90 tests (6 + prior 84).
 
-### Step 6 — Observability
+### Step 6 — Observability ← NEXT
 OTEL spans + metrics, MemoryMetrics emitter, degradation counters.
 
 ### Step 7 — Hardening + ops
