@@ -1,7 +1,7 @@
 # ArangoDB Agentic Memory System — Design Specification
 
-> **Status:** Step 6 (observability) complete — 6b (lifecycle metrics) implemented and verified. Authoritative reference.
-> **Last updated:** 2026-06-04 (rev 20 — post Step 6b)
+> **Status:** Step 7a (migration runner) implemented and verified. Authoritative reference.
+> **Last updated:** 2026-06-04 (rev 21 — post Step 7a)
 >
 > **Rev 2 decisions:** Python-first core with a thin TypeScript client · v1 scope is Vercel-only · build a walking skeleton first, then a test/eval harness, then thicken each layer.
 >
@@ -40,6 +40,8 @@
 > **Rev 19 updates (from Step 6a):** **observability facade + core instrumentation** (§18). `telemetry/`: a `MemoryMetrics` event emitter (`on`/`emit`/`clear` + singleton `metrics`) and `span(name, **attrs)` — an OTEL span via the otel-api, **no-op without a configured provider** (CI needs no collector). `retrieve()` emits a `memory.retrieve` span + `retrieval` event (`duration_ms`/`results_k`/`tokens_injected`/`mode`) and **wraps the impl in try/except → empty result + `degraded` event** (this completes the core-side §15 read-degradation the API lacked — a memory fault never breaks the turn). `store()` emits a `memory.write` span + `write` event; the worker emits `write{dead_lettered:true}`. OTEL *meter instruments* deferred (span attributes + emitter payloads carry values). Next: Step 6b (lifecycle metrics: decay/consolidation/conflict + cache-hit-rate + graph gauges).
 >
 > **Rev 20 updates (from Step 6b — Step 6 complete):** the remaining §18 metrics are wired through the 6a facade. Counters: `decay_sweep` → `decay{pruned}`, `run_dream_state` → `consolidation{promoted,superseded,cleared,breaker_tripped}`, write-time detection → `conflict{detected}`. `QueryCache` now tracks hits/lookups + `hit_rate` and emits `cache{hit,hit_rate}` (a dedicated *embedding* cache + its hit rate remains a future feature). New `stats(db, tenant_id)` returns per-tenant counts + emits a `graph` gauge, exposed via `GET /v1/stats` — which also implements the **§19 `stats`** contract that was never built. **Step 6 (observability) is now complete (6a/6b).** Next: Step 7 (hardening + ops).
+>
+> **Rev 21 updates (from Step 7a):** the **schema migration runner** is in (§6 startup step 2). `schema/migrations.py`: `Migration(version, name, apply)` + a `MIGRATIONS` registry + `run_migrations(db)` — ensures a `meta` collection, reads the applied `schema_version`, applies pending migrations in version order exactly once, and records the new version. `ensure_schema` runs migrations after the idempotent baseline. **Architecture:** `ensure_schema` stays the idempotent baseline; the runner owns versioned deltas going forward (matching how the schema actually evolved — additively). `MIGRATIONS` is empty at v1; future schema changes register a `Migration`. (`meta` collection named without the leading underscore — ArangoDB reserves `_*`, as with `failed_writes`.) Next: Step 7b (ops CLI: vector:rebuild, embeddings:migrate, dead-letter replay).
 
 ## Table of Contents
 
@@ -1016,8 +1018,20 @@ Remaining §18 metrics via the 6a facade — completes Step 6. Delivered:
 - **Graph gauge + stats**: `stats(db, tenant_id)` per-tenant counts + `graph` gauge; `GET /v1/stats` (implements the §19 `stats` contract).
 - **Verified**: 101 tests (6 + prior 95).
 
-### Step 7 — Hardening + ops ← NEXT
-Migration runner, `vector:rebuild`, `embeddings:migrate`, dead-letter replay, full benchmark run.
+### Step 7 — Hardening + ops
+Split into three sub-steps (decided rev 21); the final v1 step.
+
+#### Step 7a — Migration runner ✅ DONE
+Versioned schema migrations on top of the idempotent baseline (§6). Delivered:
+- **`schema/migrations.py`**: `Migration(version, name, apply)` + `MIGRATIONS` registry + `run_migrations(db)` — `meta` collection tracks `schema_version`; pending migrations apply in order, exactly once.
+- **Wiring**: `ensure_schema` runs migrations after the baseline. `MIGRATIONS` empty at v1; future changes register a `Migration`.
+- **Verified**: 105 tests (4 + prior 101).
+
+#### Step 7b — Ops CLI ← NEXT
+`python -m arango_memory.ops <cmd>`: `vector:rebuild` (drop + recreate the Faiss index), `embeddings:migrate` (re-embed on model change + rebuild), `replay` (re-enqueue dead-letters via `replay_failed`). Admin/destructive — CLI only, off the HTTP API.
+
+#### Step 7c — Full benchmark runner
+LoCoMo benchmark runner/CLI: load a dataset → ingest → query → score F1 / Recall@k / Deducible vs §23 targets. The real LoCoMo data is a manual/nightly BYO run (large, externally licensed); tested on the smoke slice.
 
 ### v2 (post-v1)
 MCP server, LangChain/LangGraph adapter, CrewAI adapter + G-Memory tiers.

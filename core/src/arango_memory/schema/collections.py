@@ -13,6 +13,8 @@ from typing import Any, cast
 from arango.database import StandardDatabase
 from arango.exceptions import IndexCreateError
 
+from .migrations import run_migrations
+
 DOCUMENT_COLLECTIONS: tuple[str, ...] = ("episodes", "memories", "entities", "steps")
 EDGE_COLLECTIONS: tuple[str, ...] = (
     "mentions", "relates_to", "produced_by", "TOUCHED", "TRANSITION", "Supersedes",
@@ -102,6 +104,9 @@ def ensure_schema(db: StandardDatabase) -> None:
     _ensure_search_view(db)
     if not db.has_graph(GRAPH_NAME):
         db.create_graph(GRAPH_NAME, edge_definitions=_EDGE_DEFINITIONS)
+
+    # Apply any versioned migrations on top of the idempotent baseline (§6).
+    run_migrations(db)
 
 
 def has_vector_index(db: StandardDatabase) -> bool:
