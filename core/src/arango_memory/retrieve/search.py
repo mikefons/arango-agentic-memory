@@ -61,7 +61,9 @@ FOR doc IN memories
 _GRAPH_QUERY = """
 FOR start IN @seed_ids
   FOR entity IN 1..1 OUTBOUND start mentions
+    FILTER entity.invalid_at == null
     FOR related, redge, p IN 0..@hops ANY entity relates_to
+      FILTER related.invalid_at == null
       FOR mem IN 1..1 INBOUND related mentions
         FILTER mem.tenant_id == @tenant_id
            AND mem.agent_id == @agent_id

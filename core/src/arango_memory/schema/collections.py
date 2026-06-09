@@ -15,7 +15,7 @@ from arango.exceptions import IndexCreateError
 
 DOCUMENT_COLLECTIONS: tuple[str, ...] = ("episodes", "memories", "entities", "steps")
 EDGE_COLLECTIONS: tuple[str, ...] = (
-    "mentions", "relates_to", "produced_by", "TOUCHED", "TRANSITION",
+    "mentions", "relates_to", "produced_by", "TOUCHED", "TRANSITION", "Supersedes",
 )
 
 # Dead-letter for writes that exhaust retries (DESIGN.md §15). Named without a
@@ -52,6 +52,11 @@ _EDGE_DEFINITIONS = [
         "edge_collection": "TRANSITION",
         "from_vertex_collections": ["steps"],
         "to_vertex_collections": ["steps"],
+    },
+    {
+        "edge_collection": "Supersedes",
+        "from_vertex_collections": ["entities"],
+        "to_vertex_collections": ["entities"],
     },
 ]
 

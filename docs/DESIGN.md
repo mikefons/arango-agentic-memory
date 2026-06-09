@@ -1,7 +1,7 @@
 # ArangoDB Agentic Memory System — Design Specification
 
-> **Status:** Step 4a (memory decay) implemented and verified. Authoritative reference.
-> **Last updated:** 2026-06-04 (rev 14 — post Step 4a)
+> **Status:** Step 4b (bi-temporal + Supersedes) implemented and verified. Authoritative reference.
+> **Last updated:** 2026-06-04 (rev 15 — post Step 4b)
 >
 > **Rev 2 decisions:** Python-first core with a thin TypeScript client · v1 scope is Vercel-only · build a walking skeleton first, then a test/eval harness, then thicken each layer.
 >
@@ -28,6 +28,8 @@
 > **Rev 13 updates (from Step 3.5b):** the **Vercel adapter now captures procedural memory** and there's a **runnable reference agent**. The adapter pairs `tool-call` + `tool-result` parts from the prompt history (deduped by `toolCallId`, chained via `prev_step_key`) → `POST /v1/step`; outcome comes from the result's output type (`error-*` → failure). Best-effort and non-blocking, with an inherent one-turn lag (a LanguageModel middleware only sees a tool's outcome on the *next* turn). **vitest** unit tests (mocked fetch + fake model) cover retrieve/inject, memory-less degradation, store, and tool capture (success/failure, dedup, chaining); a new **`adapter` CI job** (typecheck + build + test) runs alongside `core`. **`examples/vercel-agent/`** is a minimal `generateText` loop wrapping `arangoMemory` with a tool — the manual/nightly end-to-end check (adapter → core → ArangoDB), typechecked against `ai@5` + `@ai-sdk/anthropic@2`. The full Next.js chat UI is deferred to **Step 3.5c**. Next: Step 3e or Step 4.
 >
 > **Rev 14 updates (from Step 4a):** **episodic decay is live** (§11), split as the rev-4 decision: **lazy** at query time + a **scheduled sweep**. `lifecycle/decay.py` provides `effective_strength` (`strength·exp(-λ·Δdays)`), `decay_sweep` (soft-deprecates memories below `decay_floor` via `invalid_at`; never deletes), and `reset_access` (spaced repetition). Retrieval multiplies each candidate's fused score by `effective_strength` (the §9 stage-5 recency/access boost) and refreshes `accessed_at`/`access_count` on surfaced memories. AQL gotchas recorded: `lambda` is reserved, and unary minus on a bind param mis-parses. Working-memory TTL/SCM deferred; sweep scheduling is an ops concern (Step 7). Next: Step 4b (bi-temporal + Supersedes + conflict resolution).
+>
+> **Rev 15 updates (from Step 4b):** **bi-temporal foundations + the Supersedes mechanism** are in (§5, §12). Entities and all edges now carry `valid_time` (= ingestion_time), `valid_time_explicit` (false), `invalid_at` (null); edges also carry `weight` (1.0). New `Supersedes` edge collection + `lifecycle/conflict.py:supersede(new_key, old_key)` — writes `Supersedes` (new→old) and soft-deprecates `old` (`invalid_at`), idempotent. Graph traversal now filters `entity.invalid_at`/`related.invalid_at`, so a superseded entity stops bridging the graph. Decided **machinery-only**: `needs_review` stays written-but-unconsumed; the *decision* to supersede (confirm an ambiguous conflict) is Dream State's job in 4c. Explicit temporal parsing deferred to 3e; EWA `weight` deferred. Next: Step 4c (consolidation + Dream State worker + circuit breaker).
 
 ## Table of Contents
 
@@ -955,11 +957,15 @@ Episodic decay + spaced repetition (`lifecycle/decay.py`). Delivered:
 - **Config**: `decay_lambda`, `decay_floor`. **Verified**: 70 tests (3 decay + prior 67) — recency ranking, access refresh, sweep soft-deprecation.
 - *Deferred*: working-memory type + session TTL + SCM 7-item cap (separable feature).
 
-#### Step 4b — Bi-temporal + Supersedes + conflict resolution ← NEXT
-Add `valid_time`/`valid_time_explicit`/`invalid_at` to entities + edges; the `Supersedes` edge (new→old); consume the `needs_review` flags from 3a's write-time conflict detection → soft-deprecate contradicted entities (§12).
+#### Step 4b — Bi-temporal + Supersedes ✅ DONE
+Conflict-resolution foundations (§5, §12), machinery-only. Delivered:
+- **Bi-temporal fields**: entities + all edges carry `valid_time` (= ingestion_time), `valid_time_explicit` (false), `invalid_at` (null); edges also carry `weight` (1.0).
+- **Supersedes**: new edge collection + `lifecycle/conflict.py:supersede(new_key, old_key)` — writes `Supersedes` (new→old) + soft-deprecates `old` (`invalid_at`), idempotent.
+- **Conflict-aware traversal**: graph expansion filters `entity.invalid_at`/`related.invalid_at`, so a superseded entity no longer bridges the graph.
+- **Verified**: 74 tests (4 + prior 70). *Deferred*: `needs_review` consumption → 4c (with confirmation); explicit temporal parsing → 3e; EWA `weight` → later.
 
-#### Step 4c — Consolidation + Dream State
-GAM semantic-boundary trigger (session topic embedding) + consolidation check (`mention_count` threshold) + the async Dream State worker (Haiku review → promote/distill/supersede) + circuit breaker (§13).
+#### Step 4c — Consolidation + Dream State ← NEXT
+GAM semantic-boundary trigger (session topic embedding) + consolidation check (`mention_count` threshold) + the async Dream State worker (Haiku review → promote/distill/supersede, **consuming the `needs_review` flags**) + circuit breaker (§13).
 
 ### Step 5 — Security
 PII redaction, ABAC, cascade delete, embedding encryption, WORM enforcement.
