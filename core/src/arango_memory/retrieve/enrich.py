@@ -11,6 +11,7 @@ from dataclasses import dataclass
 
 from ..embedding import Embedder
 from ..generation import Generator
+from ..telemetry import metrics
 
 _HYDE_SYSTEM = (
     "Generate a concise, plausible answer to the user's question as if recalling it "
@@ -37,15 +38,30 @@ class QueryCache:
     def __init__(self) -> None:
         self._hyde: dict[str, HydeResult] = {}
         self._gate: dict[str, bool] = {}
+        self._hits = 0
+        self._lookups = 0
+
+    @property
+    def hit_rate(self) -> float:
+        return self._hits / self._lookups if self._lookups else 0.0
+
+    def _record(self, hit: bool) -> None:  # noqa: FBT001
+        self._lookups += 1
+        self._hits += int(hit)
+        metrics.emit("cache", hit=hit, hit_rate=self.hit_rate)
 
     def get_hyde(self, query: str) -> HydeResult | None:
-        return self._hyde.get(query)
+        value = self._hyde.get(query)
+        self._record(value is not None)
+        return value
 
     def set_hyde(self, query: str, result: HydeResult) -> None:
         self._hyde[query] = result
 
     def get_gate(self, query: str) -> bool | None:
-        return self._gate.get(query)
+        value = self._gate.get(query)
+        self._record(value is not None)
+        return value
 
     def set_gate(self, query: str, skip: bool) -> None:
         self._gate[query] = skip

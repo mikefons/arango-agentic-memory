@@ -25,6 +25,7 @@ from arango.database import StandardDatabase
 from ..config import settings
 from ..generation import Generator, get_generator
 from ..models import utcnow_iso
+from ..telemetry import metrics
 from .conflict import supersede
 
 _CONFLICT_SYSTEM = (
@@ -119,6 +120,7 @@ def run_dream_state(
 
     reviewed = len(candidates)
     if reviewed and len(supersessions) / reviewed > breaker:
+        metrics.emit("consolidation", promoted=0, superseded=0, cleared=0, breaker_tripped=True)
         return DreamResult(reviewed=reviewed, breaker_tripped=True)
 
     now = utcnow_iso()
@@ -131,6 +133,13 @@ def run_dream_state(
     for key, summary in summaries:
         entities.update({"_key": key, "summary": summary, "consolidated_at": now})
 
+    metrics.emit(
+        "consolidation",
+        promoted=len(summaries),
+        superseded=len(supersessions),
+        cleared=len(clears),
+        breaker_tripped=False,
+    )
     return DreamResult(
         reviewed=reviewed,
         superseded=len(supersessions),
