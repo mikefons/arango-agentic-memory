@@ -110,6 +110,16 @@ def has_vector_index(db: StandardDatabase) -> bool:
     return any(idx.get("type") == "vector" for idx in indexes)
 
 
+def drop_vector_index(db: StandardDatabase) -> bool:
+    """Drop the Faiss IVF index if present (retrieval self-heals). Returns True if dropped."""
+    memories = db.collection("memories")
+    for idx in cast("list[dict[str, Any]]", memories.indexes()):
+        if idx.get("type") == "vector":
+            memories.delete_index(idx["id"])
+            return True
+    return False
+
+
 def ensure_vector_index(db: StandardDatabase, *, dimensions: int, n_lists: int) -> bool:
     """Create the Faiss IVF index on `memories.embedding` if warm enough.
 
