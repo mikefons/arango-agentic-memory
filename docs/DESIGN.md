@@ -1,7 +1,7 @@
 # ArangoDB Agentic Memory System — Design Specification
 
-> **Status:** Step 5 (security) complete — 5b (forget + ABAC) implemented and verified. Authoritative reference.
-> **Last updated:** 2026-06-04 (rev 18 — post Step 5b)
+> **Status:** Step 6a (telemetry facade + core instrumentation) implemented and verified. Authoritative reference.
+> **Last updated:** 2026-06-04 (rev 19 — post Step 6a)
 >
 > **Rev 2 decisions:** Python-first core with a thin TypeScript client · v1 scope is Vercel-only · build a walking skeleton first, then a test/eval harness, then thicken each layer.
 >
@@ -36,6 +36,8 @@
 > **Rev 17 updates (from Step 5a):** **write-path security** is in (§17). New `security/` package: `redact.py` (regex redactor for email/SSN/card/API-keys/bearer → typed placeholders, conservative so prose/numbers pass through; plus a full-mode generator pass for contextual PII) and `worm.py` (`worm_guard` / `WORM_COLLECTIONS` / `WormViolation` — the client-layer enforcement primitive for the insert-only `episodes`). `store()` redacts `content` **first**, so the idempotency key, episode, memory, embedding, and entity extraction all operate on redacted text — the original is never persisted. Note: full mode now makes **two** generator calls (redaction + prospective), so stubbed generators must be system-aware. `redact_pii` config (default true). **Embedding encryption-at-rest is a DB-deployment concern** (ArangoDB Enterprise storage encryption), not app code, since field-level encryption would break vector search. Next: Step 5b (right-to-be-forgotten + ABAC).
 >
 > **Rev 18 updates (from Step 5b — Step 5 complete):** **right-to-be-forgotten + ABAC** are in (§17). `security/forget.py`: `forget()` soft-deletes (sets `invalid_at` on the subject's memories + entities → out of every retrieval surface at once); `purge()` is the ops-triggered hard-delete (vertices + touching edges, episodes via the sanctioned WORM bypass, then drops the vector index so retrieval self-heals). Both tenant-scoped, optionally agent-scoped. `POST /v1/forget` exposes soft-delete (write-only); `purge` stays an ops callable. **ABAC**: `store`/`step`/`forget` require `access_level == "write"` (else `403`); `retrieve` allows read — the Vercel adapter already declares `write`/`read` correctly (3.5b). **Step 5 (security) is now complete (5a/5b).** Next: Step 6 (observability).
+>
+> **Rev 19 updates (from Step 6a):** **observability facade + core instrumentation** (§18). `telemetry/`: a `MemoryMetrics` event emitter (`on`/`emit`/`clear` + singleton `metrics`) and `span(name, **attrs)` — an OTEL span via the otel-api, **no-op without a configured provider** (CI needs no collector). `retrieve()` emits a `memory.retrieve` span + `retrieval` event (`duration_ms`/`results_k`/`tokens_injected`/`mode`) and **wraps the impl in try/except → empty result + `degraded` event** (this completes the core-side §15 read-degradation the API lacked — a memory fault never breaks the turn). `store()` emits a `memory.write` span + `write` event; the worker emits `write{dead_lettered:true}`. OTEL *meter instruments* deferred (span attributes + emitter payloads carry values). Next: Step 6b (lifecycle metrics: decay/consolidation/conflict + cache-hit-rate + graph gauges).
 
 ## Table of Contents
 
@@ -995,8 +997,18 @@ Access/deletion security (§17) — completes Step 5. Delivered:
 - **ABAC**: `store`/`step`/`forget` require `access_level == "write"` (else `403`); `retrieve` allows read. Adapter already ABAC-compliant (3.5b).
 - **Verified**: 90 tests (6 + prior 84).
 
-### Step 6 — Observability ← NEXT
-OTEL spans + metrics, MemoryMetrics emitter, degradation counters.
+### Step 6 — Observability
+Split into two sub-steps (decided rev 19).
+
+#### Step 6a — Telemetry facade + core instrumentation ✅ DONE
+OTEL spans (no-op default) + `MemoryMetrics` emitter (§18). Delivered:
+- **`telemetry/`**: `MemoryMetrics` (`on`/`emit`/`clear` + singleton `metrics`) and `span(name, **attrs)` (otel-api, no-op without a configured provider).
+- **Instrumented**: `retrieve` (`memory.retrieve` span + `retrieval` event: duration_ms/results_k/tokens_injected/mode; + try/except → empty + `degraded` event, completing core-side §15 read-degradation); `store` (`memory.write` span + `write` event); worker `write{dead_lettered}`.
+- **Verified**: 95 tests (5 + prior 90), incl. an OTEL span asserted via an in-memory exporter.
+- *Deferred*: OTEL meter instruments (span attrs + emitter carry values).
+
+#### Step 6b — Lifecycle metrics ← NEXT
+Emit/instrument the remaining §18 metrics: `decay.pruned_count` (sweep), `consolidation.promoted_count` + conflict counts (Dream State), `conflict.detected_count` (write-time), `embedding.cache_hit_rate`, and graph gauges (`entity_count`/`episode_count`).
 
 ### Step 7 — Hardening + ops
 Migration runner, `vector:rebuild`, `embeddings:migrate`, dead-letter replay, full benchmark run.

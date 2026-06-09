@@ -7,6 +7,7 @@ prospective indexing, and the durable write queue are added in later steps.
 
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass
 
 from arango.database import StandardDatabase
@@ -16,6 +17,7 @@ from ..embedding import Embedder, get_embedder
 from ..generation import Generator, get_generator
 from ..models import idempotency_key, utcnow_iso
 from ..security.redact import redact
+from ..telemetry import metrics, span
 from .entities import write_entities
 from .extract import Extractor, get_extractor
 from .prospective import generate_prospective
@@ -29,6 +31,41 @@ class StoreResult:
 
 
 def store(
+    db: StandardDatabase,
+    *,
+    content: str,
+    tenant_id: str,
+    agent_id: str,
+    session_id: str | None = None,
+    turn_index: int = 0,
+    embedder: Embedder | None = None,
+    extractor: Extractor | None = None,
+    generator: Generator | None = None,
+    mode: str = "lite",
+) -> StoreResult:
+    """Instrumented write (DESIGN.md §18): `memory.write` span + `write` metric.
+
+    Exceptions propagate to the durable worker (retry/dead-letter, §15).
+    """
+    started = time.perf_counter()
+    with span("memory.write", tenant_id=tenant_id):
+        result = _store_impl(
+            db,
+            content=content,
+            tenant_id=tenant_id,
+            agent_id=agent_id,
+            session_id=session_id,
+            turn_index=turn_index,
+            embedder=embedder,
+            extractor=extractor,
+            generator=generator,
+            mode=mode,
+        )
+    metrics.emit("write", duration_ms=(time.perf_counter() - started) * 1000.0)
+    return result
+
+
+def _store_impl(
     db: StandardDatabase,
     *,
     content: str,

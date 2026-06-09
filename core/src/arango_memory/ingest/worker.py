@@ -26,6 +26,7 @@ from ..embedding import Embedder, get_embedder
 from ..generation import Generator, get_generator
 from ..models import utcnow_iso
 from ..schema.collections import DEAD_LETTER_COLLECTION
+from ..telemetry import metrics
 from .extract import Extractor, get_extractor
 from .procedural import record_step
 from .queue import Intent, StepIntent, WriteIntent, WriteQueue
@@ -119,6 +120,7 @@ class WriteWorker:
             overwrite_mode="replace",
             silent=True,
         )
+        metrics.emit("write", dead_lettered=True)
 
     def replay_failed(self) -> int:
         """Re-enqueue dead-lettered intents and clear them. Returns count replayed."""

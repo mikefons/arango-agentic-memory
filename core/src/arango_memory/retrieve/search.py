@@ -11,6 +11,7 @@ Step 2b; graph expansion (needs entities/edges) lands in Step 3.
 from __future__ import annotations
 
 import math
+import time
 from dataclasses import dataclass, field
 from typing import Any, cast
 
@@ -24,6 +25,7 @@ from ..generation import Generator, get_generator
 from ..lifecycle.decay import effective_strength, reset_access
 from ..models import utcnow_iso
 from ..schema.collections import SEARCH_VIEW, ensure_vector_index, has_vector_index
+from ..telemetry import metrics, span
 from .enrich import QueryCache, hyde, should_skip_retrieval
 
 _BM25_QUERY = f"""
@@ -221,6 +223,58 @@ def _assemble_tiered(hits: list[_Candidate], max_tokens: int) -> tuple[str, int]
 
 
 def retrieve(
+    db: StandardDatabase,
+    *,
+    query: str,
+    tenant_id: str,
+    agent_id: str,
+    k: int = 10,
+    max_memory_tokens: int = 1500,
+    embedder: Embedder | None = None,
+    mode: str = "lite",
+    candidate_pool: int = 100,
+    n_lists: int | None = None,
+    graph_hops: int | None = None,
+    generator: Generator | None = None,
+    cache: QueryCache | None = None,
+) -> RetrieveResult:
+    """Instrumented retrieval (DESIGN.md §18): span + metrics + §15 degradation.
+
+    Any failure degrades to an empty (memory-less) result and a `degraded` event,
+    so a memory fault never breaks the agent turn.
+    """
+    started = time.perf_counter()
+    try:
+        with span("memory.retrieve", mode=mode):
+            result = _retrieve_impl(
+                db,
+                query=query,
+                tenant_id=tenant_id,
+                agent_id=agent_id,
+                k=k,
+                max_memory_tokens=max_memory_tokens,
+                embedder=embedder,
+                mode=mode,
+                candidate_pool=candidate_pool,
+                n_lists=n_lists,
+                graph_hops=graph_hops,
+                generator=generator,
+                cache=cache,
+            )
+    except Exception as exc:  # noqa: BLE001 — §15: memory failures never break the turn
+        metrics.emit("degraded", op="retrieve", reason=type(exc).__name__)
+        return RetrieveResult()
+    metrics.emit(
+        "retrieval",
+        duration_ms=(time.perf_counter() - started) * 1000.0,
+        results_k=len(result.hits),
+        tokens_injected=result.tokens_injected,
+        mode=mode,
+    )
+    return result
+
+
+def _retrieve_impl(
     db: StandardDatabase,
     *,
     query: str,
