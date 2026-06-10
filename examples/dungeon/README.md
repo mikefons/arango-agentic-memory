@@ -44,7 +44,9 @@ The footer shows **core online** once the stack is up.
 - **3.5c-3 — the lie engine** ⏳ `talk`/`confront`; testimony with bi-temporal `valid_time`; the Contradiction Ledger + `supersede`.
 
 Deferred to a Showcase follow-up: the nightly "dungeon dreams" Cron, generative
-scene art (Blob), OG share cards, Edge Config knobs.
+scene art (Blob), OG share cards, Edge Config knobs, and a **direct-provider
+fallback** (`@ai-sdk/anthropic` via `ANTHROPIC_API_KEY`) so the app can be
+play-tested without a Vercel AI Gateway key.
 
 ## Deploy (later)
 

@@ -980,6 +980,8 @@ The reference UI is **Memory Dungeon** (`examples/dungeon/`): a text-adventure w
 - **3.5c-0 — scaffold** ✅ App shell, locked dual theme, typed core client (`lib/core.ts`), `/api/health`, `docker-compose.yml` (ArangoDB + core via the existing `core/Dockerfile`); new **`dungeon` CI job** (typecheck + build).
 - **3.5c-1 — playable loop** ✅ `/api/chat` runs `streamText` over a `gateway()` model **wrapped with `arangoMemory()`** (retrieve+inject, durable store, procedural-step capture); three tools — `look`/`move`/`take` (`ai` `tool()` + zod) — validate against a static seed world (`lib/world.ts`) and persist each fact to the core (best-effort, §15). The `useChat` client (`DungeonGame.tsx`) tracks `{roomId, inventory}` (localStorage, sent per request via `sendMessage` `body`), folds tool outputs back into state, and renders DM narration / player lines / tool notes. Keyless `vitest` world tests added to the `dungeon` CI job. Verified `next build` + `tsc` + tests clean.
 
+*Deferred (Showcase follow-up):* the nightly "dungeon dreams" Cron → Dream State, generative scene art (Gateway→Blob), `@vercel/og` share cards, Edge Config knobs, and a **direct-provider fallback** (`@ai-sdk/anthropic` keyed by `ANTHROPIC_API_KEY`) so the app can be play-tested without a Vercel AI Gateway key.
+
 The *full* benchmark run still completes at Step 7; this milestone establishes the harness and its regression gates.
 
 ### Step 4 — Lifecycle
