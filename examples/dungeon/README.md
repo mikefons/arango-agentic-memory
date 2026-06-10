@@ -40,7 +40,7 @@ The footer shows **core online** once the stack is up.
 
 - **3.5c-0 — scaffold** ✅ App shell, locked dark/light theme, typed core client, `/api/health`, docker-compose.
 - **3.5c-1 — core loop** ✅ `streamText` + `arangoMemory()` + `useChat`; `look`/`move`/`take` tools; world facts persisted to the core; position/inventory resume across reloads. **Needs `AI_GATEWAY_API_KEY`** to play.
-- **3.5c-2 — generative UI** ⏳ room/inventory cards + the live knowledge-graph map.
+- **3.5c-2 — generative UI** ✅ room scene + inventory cards from tool outputs; the live **knowledge-graph map** (`/api/graph`) — rooms vs lore, edges from `relates_to`, refetched each turn.
 - **3.5c-3 — the lie engine** ⏳ `talk`/`confront`; testimony with bi-temporal `valid_time`; the Contradiction Ledger + `supersede`.
 
 Deferred to a Showcase follow-up: the nightly "dungeon dreams" Cron, generative
