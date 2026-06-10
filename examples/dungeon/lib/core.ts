@@ -89,3 +89,20 @@ export function recordStep(
 export function getSteps(tenantId: string, agentId: string): Promise<{ steps: Step[] }> {
   return coreFetch(`/v1/steps?${qs({ tenant_id: tenantId, agent_id: agentId })}`);
 }
+
+/** Mint (idempotently) a named semantic entity and return its key. */
+export async function seedEntity(name: string, ctx: Ctx): Promise<string | undefined> {
+  const res = await coreFetch<{ entity_ids: string[] }>("/v1/seed", {
+    method: "POST",
+    body: JSON.stringify({ profile: { preferences: [name] }, ctx: { access_level: "write", ...ctx } }),
+  });
+  return res.entity_ids[0];
+}
+
+/** Record `new` superseding `old` (bi-temporal §12) — the "caught a lie" primitive. */
+export function supersede(newKey: string, oldKey: string, ctx: Ctx): Promise<{ status: string }> {
+  return coreFetch("/v1/supersede", {
+    method: "POST",
+    body: JSON.stringify({ new_key: newKey, old_key: oldKey, ctx: { access_level: "write", ...ctx } }),
+  });
+}

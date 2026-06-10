@@ -23,7 +23,12 @@ const SESSION = "run-1";
 
 export async function POST(req: Request) {
   const { messages, gameState }: { messages: UIMessage[]; gameState?: GameState } = await req.json();
-  const state: GameState = gameState ?? { roomId: START_ROOM, inventory: [] };
+  const state: GameState = gameState ?? {
+    roomId: START_ROOM,
+    inventory: [],
+    heardClaims: [],
+    caughtClaims: [],
+  };
   const ctx = { tenant_id: TENANT, agent_id: AGENT, session_id: SESSION };
 
   // The DM model, wrapped so every turn retrieves+injects memory, durably stores

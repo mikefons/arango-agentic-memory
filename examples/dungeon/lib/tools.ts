@@ -12,11 +12,23 @@ import { tool } from "ai";
 import { z } from "zod";
 import * as core from "./core";
 import type { Ctx } from "./types";
-import { DIRECTIONS, exitsOf, getRoom, itemInRoom, resolveMove, type Dir } from "./world";
+import {
+  DIRECTIONS,
+  exitsOf,
+  findClaim,
+  findNpcInRoom,
+  getRoom,
+  isExposable,
+  itemInRoom,
+  resolveMove,
+  type Dir,
+} from "./world";
 
 export interface GameState {
   roomId: string;
   inventory: string[];
+  heardClaims: string[];
+  caughtClaims: string[];
 }
 
 const remember = (content: string, ctx: Ctx) =>
@@ -76,6 +88,77 @@ export function makeTools(ctx: Ctx, state: GameState) {
         }
         await remember(`The player picked up the ${found} in the ${here.name}.`, ctx);
         return { ok: true as const, item: found, roomId: here.id };
+      },
+    }),
+
+    talk: tool({
+      description: "Speak with a person in the current room and hear what they have to say.",
+      inputSchema: z.object({ npc: z.string().describe("who to talk to (their name)") }),
+      execute: async ({ npc }) => {
+        const here = getRoom(state.roomId);
+        const person = findNpcInRoom(here.id, npc);
+        if (!person) {
+          return { ok: false as const, reason: `There is no one called ${npc} in the ${here.name}.` };
+        }
+        // Persist each statement as testimony, and mint a claim entity per claim
+        // so a later `confront` has a real key to supersede (best-effort, §15).
+        for (const c of person.claims) {
+          await remember(`${person.name} the ${person.role} claims: ${c.text}`, ctx);
+          await core.seedEntity(c.subject, ctx).catch(() => undefined);
+        }
+        return {
+          ok: true as const,
+          npc: person.name,
+          role: person.role,
+          claims: person.claims.map((c) => ({ id: c.id, text: c.text })),
+          heard: person.claims.map((c) => c.id),
+        };
+      },
+    }),
+
+    confront: tool({
+      description:
+        "Challenge a person about something they said. Succeeds only if you can back it up with evidence you've gathered.",
+      inputSchema: z.object({
+        npc: z.string().describe("who to confront"),
+        about: z.string().describe("the statement or topic you're challenging"),
+      }),
+      execute: async ({ npc, about }) => {
+        const here = getRoom(state.roomId);
+        const person = findNpcInRoom(here.id, npc);
+        if (!person) {
+          return { ok: false as const, reason: `There is no one called ${npc} here.` };
+        }
+        const claim = findClaim(person, about);
+        if (!claim) {
+          return { ok: false as const, npc: person.name, reason: `${person.name} never said such a thing.` };
+        }
+        const exposable = isExposable(claim, {
+          inventory: state.inventory,
+          heardClaims: state.heardClaims,
+        });
+        if (!exposable) {
+          const reason = claim.lie
+            ? "You sense a lie, but you can't prove it yet — find what refutes it."
+            : `${person.name} is telling the truth about that.`;
+          return { ok: true as const, caught: false as const, npc: person.name, claimId: claim.id, reason };
+        }
+        // Caught: supersede the false fact in the memory core (bi-temporal §12).
+        const lieKey = await core.seedEntity(claim.subject, ctx).catch(() => undefined);
+        const truthKey = await core
+          .seedEntity(claim.truth ?? `${claim.subject} (corrected)`, ctx)
+          .catch(() => undefined);
+        if (lieKey && truthKey) {
+          await core.supersede(truthKey, lieKey, ctx).catch(() => undefined);
+        }
+        await remember(`${person.name}'s claim "${claim.subject}" was exposed as a lie.`, ctx);
+        return {
+          ok: true as const,
+          caught: true as const,
+          npc: person.name,
+          claimId: claim.id,
+          confession: claim.confession ?? `${person.name} falls silent, caught out.`,
+        };
       },
     }),
   };

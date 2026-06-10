@@ -23,6 +23,7 @@ from ..ingest.extract import get_extractor
 from ..ingest.procedural import get_steps
 from ..ingest.queue import InProcessQueue, StepIntent, WriteIntent, WriteQueue
 from ..ingest.worker import WriteWorker
+from ..lifecycle.conflict import supersede
 from ..retrieve.enrich import QueryCache
 from ..retrieve.search import retrieve
 from ..schema.collections import ensure_schema
@@ -165,6 +166,17 @@ class SeedResponse(BaseModel):
     entity_ids: list[str] = Field(default_factory=list)
 
 
+# ── /v1/supersede (bi-temporal conflict resolution, §12) ──
+class SupersedeRequest(BaseModel):
+    new_key: str
+    old_key: str
+    ctx: AccessContext
+
+
+class SupersedeResponse(BaseModel):
+    status: Literal["superseded"] = "superseded"
+
+
 # ── Route handlers ────────────────────────────────────────
 async def health(client: ArangoMemoryClient = Depends(get_client)) -> dict[str, object]:
     return {"status": "ok", "arango": client.ping(), "mode": settings.memory_mode}
@@ -279,6 +291,16 @@ async def seed_endpoint(
     return SeedResponse(entity_ids=ids)
 
 
+async def supersede_endpoint(
+    req: SupersedeRequest,
+    client: ArangoMemoryClient = Depends(get_client),
+) -> SupersedeResponse:
+    """Record `new` superseding `old` (Supersedes edge + soft-deprecate old, §12)."""
+    _require_write(req.ctx)
+    supersede(client.db, new_key=req.new_key, old_key=req.old_key)
+    return SupersedeResponse()
+
+
 async def retrieve_endpoint(
     req: RetrieveRequest,
     client: ArangoMemoryClient = Depends(get_client),
@@ -357,6 +379,9 @@ def create_app(client: ArangoMemoryClient | None = None) -> FastAPI:
         "/v1/entities", entities_endpoint, methods=["GET"], response_model=EntitiesResponse
     )
     app.add_api_route("/v1/seed", seed_endpoint, methods=["POST"], response_model=SeedResponse)
+    app.add_api_route(
+        "/v1/supersede", supersede_endpoint, methods=["POST"], response_model=SupersedeResponse
+    )
     return app
 
 

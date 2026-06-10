@@ -101,3 +101,29 @@ def test_seed_and_entity_endpoints(api: TestClient) -> None:
 def test_seed_requires_write(api: TestClient) -> None:
     ctx = {"tenant_id": "ew", "agent_id": "a", "access_level": "read"}
     assert api.post("/v1/seed", json={"profile": {"role": "x"}, "ctx": ctx}).status_code == 403
+
+
+# ── /v1/supersede ─────────────────────────────────────────
+def test_supersede_endpoint_invalidates_old(api: TestClient) -> None:
+    ctx = {"tenant_id": "sup", "agent_id": "a", "access_level": "write"}
+    seeded = api.post(
+        "/v1/seed", json={"profile": {"preferences": ["Old Fact", "New Fact"]}, "ctx": ctx}
+    ).json()
+    old_key, new_key = seeded["entity_ids"][0], seeded["entity_ids"][1]
+
+    res = api.post("/v1/supersede", json={"new_key": new_key, "old_key": old_key, "ctx": ctx})
+    assert res.status_code == 200
+    assert res.json()["status"] == "superseded"
+
+    # the superseded entity is soft-deprecated → gone from reads (§12)
+    got = api.get("/v1/entity", params={"entity_id": old_key, "tenant_id": "sup"})
+    assert got.status_code == 404
+    listed = api.get("/v1/entities", params={"tenant_id": "sup"}).json()["entities"]
+    names = {e["name"] for e in listed}
+    assert "Old Fact" not in names and "New Fact" in names
+
+
+def test_supersede_requires_write(api: TestClient) -> None:
+    ctx = {"tenant_id": "supw", "agent_id": "a", "access_level": "read"}
+    body = {"new_key": "x", "old_key": "y", "ctx": ctx}
+    assert api.post("/v1/supersede", json=body).status_code == 403
