@@ -305,6 +305,8 @@ footer .live .dot { width: 5px; height: 5px; border-radius: 50%; background: cur
   letter-spacing: 0.03em;
 }
 .dm.thinking { color: var(--faint); font-style: italic; font-size: 15px; }
+.dm.error { color: var(--lie); font-size: 15px; }
+.dm.error .hint { color: var(--faint); word-break: break-word; }
 
 .you { display: flex; gap: 12px; align-items: flex-start; }
 .you .label {

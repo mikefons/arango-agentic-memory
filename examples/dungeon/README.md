@@ -29,7 +29,7 @@ serverless. The Next.js ↔ core boundary is the existing `/v1` HTTP contract.
 docker compose up --build          # arango :8529, core :8080
 
 # 2. configure + start the UI
-cp .env.example .env.local         # CORE_URL defaults to http://localhost:8080
+cp .env.example .env.local         # CORE_URL defaults to http://127.0.0.1:8080
 npm install
 npm run dev                        # http://localhost:3000
 ```
