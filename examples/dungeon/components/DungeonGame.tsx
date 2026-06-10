@@ -5,8 +5,10 @@ import { DefaultChatTransport } from "ai";
 import { useEffect, useRef, useState } from "react";
 import { getRoom, START_ROOM } from "@/lib/world";
 import type { GameState } from "@/lib/tools";
+import { PickupNote, RoomSceneCard, ToolSkeleton, type RoomView } from "./cards";
 import { ThemeToggle } from "./ThemeToggle";
 import { HealthStatus } from "./HealthStatus";
+import { DungeonMap } from "./DungeonMap";
 
 const LS_KEY = "md-gamestate";
 
@@ -113,13 +115,7 @@ export function DungeonGame() {
       </header>
 
       <main>
-        <section className="pane map">
-          <div className="pane-head">
-            <span className="pane-title">Map</span>
-            <span className="pane-meta">3.5c-2</span>
-          </div>
-          <div className="placeholder">the knowledge graph renders here · 3.5c-2</div>
-        </section>
+        <DungeonMap currentRoom={room.name} refreshKey={messages.length} />
 
         <section className="pane narrative">
           <div className="stream" ref={streamRef}>
@@ -140,13 +136,7 @@ export function DungeonGame() {
                       <span className="text">{textOf(m.parts)}</span>
                     </div>
                   ) : (
-                    <>
-                      {m.parts.map((part, i) => {
-                        if (part.type === "text") return <p className="dm" key={i}>{part.text}</p>;
-                        const note = toolNote(part);
-                        return note ? <div className="tool-note" key={i}>{note}</div> : null;
-                      })}
-                    </>
+                    <>{m.parts.map((part, i) => renderPart(part, i))}</>
                   )}
                 </div>
               ))}
@@ -212,15 +202,26 @@ function textOf(parts: { type: string; text?: string }[]): string {
   return parts.filter((p) => p.type === "text").map((p) => p.text ?? "").join(" ");
 }
 
-function toolNote(part: { type: string; state?: string; output?: unknown }): string | null {
+type Part = { type: string; text?: string; state?: string; output?: unknown };
+
+function renderPart(part: Part, i: number) {
+  if (part.type === "text") return <p className="dm" key={i}>{part.text}</p>;
   if (!part.type.startsWith("tool-")) return null;
-  if (part.state !== "output-available") {
-    const verb = part.type.replace("tool-", "");
-    return `↳ ${verb}…`;
+
+  const verb = part.type.replace("tool-", "");
+  if (part.state !== "output-available") return <ToolSkeleton key={i} tool={verb} />;
+  const out = part.output as RoomView & { ok?: boolean; item?: string; reason?: string };
+
+  if (part.type === "tool-look") return <RoomSceneCard key={i} tool="look" view={out} />;
+  if (part.type === "tool-move") {
+    return out.ok ? (
+      <RoomSceneCard key={i} tool="move" view={out} />
+    ) : (
+      <div className="tool-skel" key={i}>↳ {out.reason ?? "the way is barred"}</div>
+    );
   }
-  const out = part.output as ToolOut;
-  if (part.type === "tool-move") return out.ok ? `↳ moved · ${out.name}` : `↳ blocked`;
-  if (part.type === "tool-look") return `↳ looked · ${out.name}`;
-  if (part.type === "tool-take") return out.ok ? `↳ took · ${out.item}` : `↳ nothing to take`;
+  if (part.type === "tool-take") {
+    return <PickupNote key={i} ok={out.ok} item={out.item} reason={out.reason} />;
+  }
   return null;
 }
