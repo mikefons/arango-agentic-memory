@@ -17,13 +17,19 @@ import type {
   StoreResult,
 } from "./types";
 
-const CORE_URL = process.env.CORE_URL ?? "http://localhost:8080";
+// Default to 127.0.0.1 (not "localhost"): server-side fetch can resolve
+// "localhost" to IPv6 ::1, which a Docker-published (IPv4) core won't answer —
+// the request then hangs. Forcing IPv4 avoids that.
+const CORE_URL = process.env.CORE_URL ?? "http://127.0.0.1:8080";
+const DEFAULT_TIMEOUT_MS = 8000;
 
 async function coreFetch<T>(path: string, init?: RequestInit): Promise<T> {
+  // Always bound the request so a slow/unreachable core can't hang the UI (§15).
   const res = await fetch(`${CORE_URL}${path}`, {
     ...init,
     headers: { "content-type": "application/json", ...(init?.headers ?? {}) },
     cache: "no-store",
+    signal: init?.signal ?? AbortSignal.timeout(DEFAULT_TIMEOUT_MS),
   });
   if (!res.ok) {
     throw new Error(`core ${path} → ${res.status} ${res.statusText}`);
@@ -38,7 +44,7 @@ const qs = (params: Record<string, string | undefined>) =>
 
 export async function health(): Promise<boolean> {
   try {
-    await coreFetch("/health");
+    await coreFetch("/health", { signal: AbortSignal.timeout(4000) });
     return true;
   } catch {
     return false;

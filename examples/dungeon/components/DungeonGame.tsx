@@ -36,7 +36,7 @@ export function DungeonGame() {
     }
   }, []);
 
-  const { messages, sendMessage, status } = useChat({
+  const { messages, sendMessage, status, error } = useChat({
     transport: new DefaultChatTransport({ api: "/api/chat" }),
   });
 
@@ -142,6 +142,13 @@ export function DungeonGame() {
               ))}
 
               {busy && <div className="dm thinking">the keep stirs…</div>}
+
+              {error && (
+                <div className="dm error">
+                  The keep falls silent — the Dungeon Master could not answer.
+                  <div className="hint">{error.message || "check the dev server logs"}</div>
+                </div>
+              )}
             </div>
           </div>
 

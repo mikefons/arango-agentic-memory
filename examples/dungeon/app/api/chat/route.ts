@@ -13,7 +13,7 @@ import { START_ROOM } from "@/lib/world";
 
 export const maxDuration = 30;
 
-const CORE_URL = process.env.CORE_URL ?? "http://localhost:8080";
+const CORE_URL = process.env.CORE_URL ?? "http://127.0.0.1:8080";
 const MODEL = process.env.DUNGEON_MODEL ?? "anthropic/claude-sonnet-4.5";
 
 // One demo player for now; multi-tenant/session wiring is a later concern.
