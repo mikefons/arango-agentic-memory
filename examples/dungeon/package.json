@@ -1,0 +1,32 @@
+{
+  "name": "memory-dungeon",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Memory Dungeon — a reference agent + Next.js UI for the ArangoDB agentic memory core (DESIGN.md §3.5c)",
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "typecheck": "tsc --noEmit",
+    "lint": "next lint"
+  },
+  "dependencies": {
+    "@ai-sdk/gateway": "^1.0.0",
+    "@ai-sdk/react": "^2.0.0",
+    "@arango-memory/vercel": "file:../../packages/vercel",
+    "ai": "^5.0.0",
+    "next": "^15.1.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "zod": "^3.23.0"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "^4.0.0",
+    "@types/node": "^22.0.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "tailwindcss": "^4.0.0",
+    "typescript": "^5.6.0"
+  }
+}
