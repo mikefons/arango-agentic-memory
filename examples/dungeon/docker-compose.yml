@@ -1,0 +1,39 @@
+# Local dev stack for the Memory Dungeon: ArangoDB + the Python memory core.
+# The Next.js app runs separately (`npm run dev`) against CORE_URL=localhost:8080.
+#
+#   docker compose up --build      # brings up arango (:8529) + core (:8080)
+#   npm run dev                    # then start the UI
+#
+# Deploy target (host for core + ArangoGraph for the DB) is decided later;
+# this compose is the local source of truth.
+
+services:
+  arango:
+    image: arangodb/enterprise:3.12.9.1
+    environment:
+      ARANGO_ROOT_PASSWORD: dungeon-dev
+    # --vector-index enables APPROX_NEAR_COSINE (DESIGN.md §6).
+    command: ["arangod", "--vector-index=true"]
+    ports:
+      - "8529:8529"
+    healthcheck:
+      test: ["CMD-SHELL", "arangosh --server.password dungeon-dev --javascript.execute-string 'require(\"@arangodb\").db._version()' || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  core:
+    build:
+      context: ../../core
+    environment:
+      ARANGO_URL: http://arango:8529
+      ARANGO_USERNAME: root
+      ARANGO_PASSWORD: dungeon-dev
+      ARANGO_DB: dungeon
+    ports:
+      - "8080:8080"
+    depends_on:
+      arango:
+        condition: service_healthy
+    # If the core races ahead of a slow ArangoDB start, just retry.
+    restart: on-failure
