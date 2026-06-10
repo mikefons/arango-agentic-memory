@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useMemo } from "react";
 import type { DungeonGraph, GraphNode } from "@/lib/graph";
 
 const CX = 140;
@@ -30,20 +30,7 @@ function isHere(name: string, currentRoom: string): boolean {
   return a === b || b.includes(a) || a.includes(b);
 }
 
-export function DungeonMap({ currentRoom, refreshKey }: { currentRoom: string; refreshKey: number }) {
-  const [graph, setGraph] = useState<DungeonGraph>({ nodes: [], edges: [] });
-
-  useEffect(() => {
-    let alive = true;
-    fetch("/api/graph")
-      .then((r) => (r.ok ? r.json() : { nodes: [], edges: [] }))
-      .then((g: DungeonGraph) => alive && setGraph(g))
-      .catch(() => undefined);
-    return () => {
-      alive = false;
-    };
-  }, [refreshKey]);
-
+export function DungeonMap({ currentRoom, graph }: { currentRoom: string; graph: DungeonGraph }) {
   const { rooms, lore, pos } = useMemo(() => {
     const rooms = graph.nodes.filter((n) => n.kind === "room").sort((a, b) => a.name.localeCompare(b.name));
     const lore = graph.nodes
