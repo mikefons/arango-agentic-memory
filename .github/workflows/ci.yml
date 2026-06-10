@@ -63,6 +63,9 @@ jobs:
         with:
           node-version: "22"
           cache: npm
+          cache-dependency-path: |
+            packages/vercel/package-lock.json
+            examples/dungeon/package-lock.json
 
       # The dungeon consumes @arango-memory/vercel via a file: dependency, so its
       # dist/ must exist before the Next.js build resolves the import.
