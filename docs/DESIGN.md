@@ -1,7 +1,7 @@
 # ArangoDB Agentic Memory System — Design Specification
 
 > **Status:** ✅ **v1 build sequence complete (Steps 0–7).** v2: all §21 adapters shipped (MCP, LangChain/LangGraph, CrewAI) + full §19 entity API + **Step 3e heavy extraction tier done**. Authoritative reference.
-> **Last updated:** 2026-06-09 (rev 29 — Step 3.5c-0: Memory Dungeon scaffold)
+> **Last updated:** 2026-06-09 (rev 30 — Step 3.5c-1: Memory Dungeon playable loop)
 >
 > **Rev 2 decisions:** Python-first core with a thin TypeScript client · v1 scope is Vercel-only · build a walking skeleton first, then a test/eval harness, then thicken each layer.
 >
@@ -978,6 +978,7 @@ Adapter procedural capture + a runnable reference agent. Delivered:
 #### Step 3.5c — Memory Dungeon (Next.js reference app) ⏳ IN PROGRESS
 The reference UI is **Memory Dungeon** (`examples/dungeon/`): a text-adventure where the world persists across sessions and the **NPCs lie** — catching a lie is the backend's bi-temporal supersession + conflict detection made playable; the map is the knowledge graph; tool calls are procedural memory. Built on Next.js (App Router) + the Vercel **AI SDK** (`streamText` + tools + `useChat` generative UI) + the shipped `arangoMemory()` middleware, in Vercel's Geist aesthetic (dark "candle-lit" + light "dashboard white", both in the locked mockup `docs/mockups/dungeon-ui.html`). **Standard scope** (3.5c-0 scaffold → 3.5c-3 lie engine); host decided later (built against `CORE_URL` + docker-compose).
 - **3.5c-0 — scaffold** ✅ App shell, locked dual theme, typed core client (`lib/core.ts`), `/api/health`, `docker-compose.yml` (ArangoDB + core via the existing `core/Dockerfile`); new **`dungeon` CI job** (typecheck + build).
+- **3.5c-1 — playable loop** ✅ `/api/chat` runs `streamText` over a `gateway()` model **wrapped with `arangoMemory()`** (retrieve+inject, durable store, procedural-step capture); three tools — `look`/`move`/`take` (`ai` `tool()` + zod) — validate against a static seed world (`lib/world.ts`) and persist each fact to the core (best-effort, §15). The `useChat` client (`DungeonGame.tsx`) tracks `{roomId, inventory}` (localStorage, sent per request via `sendMessage` `body`), folds tool outputs back into state, and renders DM narration / player lines / tool notes. Keyless `vitest` world tests added to the `dungeon` CI job. Verified `next build` + `tsc` + tests clean.
 
 The *full* benchmark run still completes at Step 7; this milestone establishes the harness and its regression gates.
 

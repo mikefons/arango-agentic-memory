@@ -1,0 +1,226 @@
+"use client";
+
+import { useChat } from "@ai-sdk/react";
+import { DefaultChatTransport } from "ai";
+import { useEffect, useRef, useState } from "react";
+import { getRoom, START_ROOM } from "@/lib/world";
+import type { GameState } from "@/lib/tools";
+import { ThemeToggle } from "./ThemeToggle";
+import { HealthStatus } from "./HealthStatus";
+
+const LS_KEY = "md-gamestate";
+
+interface ToolOut {
+  ok?: boolean;
+  roomId?: string;
+  name?: string;
+  item?: string;
+}
+
+export function DungeonGame() {
+  const [game, setGame] = useState<GameState>({ roomId: START_ROOM, inventory: [] });
+  const [input, setInput] = useState("");
+  const gameRef = useRef(game);
+  gameRef.current = game;
+  const streamRef = useRef<HTMLDivElement>(null);
+
+  // resume position from a prior session
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem(LS_KEY);
+      if (saved) setGame(JSON.parse(saved) as GameState);
+    } catch {
+      /* ignore */
+    }
+  }, []);
+
+  const { messages, sendMessage, status } = useChat({
+    transport: new DefaultChatTransport({ api: "/api/chat" }),
+  });
+
+  // fold completed tool outputs back into game state (+ persist)
+  useEffect(() => {
+    const last = messages[messages.length - 1];
+    if (!last || last.role !== "assistant") return;
+    let next = gameRef.current;
+    let changed = false;
+    for (const part of last.parts) {
+      const isTool =
+        part.type === "tool-move" || part.type === "tool-look" || part.type === "tool-take";
+      if (!isTool || !("state" in part) || part.state !== "output-available") continue;
+      const out = part.output as ToolOut;
+      if ((part.type === "tool-move" || part.type === "tool-look") && out.roomId && out.roomId !== next.roomId) {
+        next = { ...next, roomId: out.roomId };
+        changed = true;
+      }
+      if (part.type === "tool-take" && out.ok && out.item && !next.inventory.includes(out.item)) {
+        next = { ...next, inventory: [...next.inventory, out.item] };
+        changed = true;
+      }
+    }
+    if (changed) {
+      setGame(next);
+      try {
+        localStorage.setItem(LS_KEY, JSON.stringify(next));
+      } catch {
+        /* ignore */
+      }
+    }
+  }, [messages]);
+
+  // keep the latest narration in view
+  useEffect(() => {
+    streamRef.current?.scrollTo({ top: streamRef.current.scrollHeight, behavior: "smooth" });
+  }, [messages]);
+
+  function submit(e: React.FormEvent) {
+    e.preventDefault();
+    const text = input.trim();
+    if (!text || status === "streaming" || status === "submitted") return;
+    sendMessage({ text }, { body: { gameState: gameRef.current } });
+    setInput("");
+  }
+
+  const room = getRoom(game.roomId);
+  const busy = status === "streaming" || status === "submitted";
+
+  return (
+    <div className="app">
+      <header>
+        <div className="brand">
+          <span className="glyph">
+            <svg width="20" height="18" viewBox="0 0 20 18" fill="none">
+              <path d="M10 1 L19 17 L1 17 Z" stroke="currentColor" strokeWidth="1.4" fill="currentColor" fillOpacity="0.12" />
+              <circle cx="10" cy="12" r="1.6" fill="currentColor" />
+            </svg>
+          </span>
+          <span className="wordmark">
+            Memory&nbsp;<b>Dungeon</b>
+          </span>
+        </div>
+        <div className="crumbs">
+          <span>Ashfall Keep</span>
+          <span className="sep">/</span>
+          <span className="here">{room.name}</span>
+        </div>
+        <div className="head-right">
+          <span className="pill save">
+            <span className="dot" />
+            run #1
+          </span>
+          <ThemeToggle />
+        </div>
+      </header>
+
+      <main>
+        <section className="pane map">
+          <div className="pane-head">
+            <span className="pane-title">Map</span>
+            <span className="pane-meta">3.5c-2</span>
+          </div>
+          <div className="placeholder">the knowledge graph renders here · 3.5c-2</div>
+        </section>
+
+        <section className="pane narrative">
+          <div className="stream" ref={streamRef}>
+            <div className="stream-inner">
+              {messages.length === 0 && (
+                <div className="dm intro">
+                  You stand at the threshold of Ashfall Keep. Soot stains the archway; somewhere
+                  below, water drips in the dark. <span className="em">Something here remembers you.</span>
+                  <div className="hint">Try: “look around”, “go down”, “take the lantern”.</div>
+                </div>
+              )}
+
+              {messages.map((m) => (
+                <div className="turn" key={m.id}>
+                  {m.role === "user" ? (
+                    <div className="you">
+                      <span className="label">You</span>
+                      <span className="text">{textOf(m.parts)}</span>
+                    </div>
+                  ) : (
+                    <>
+                      {m.parts.map((part, i) => {
+                        if (part.type === "text") return <p className="dm" key={i}>{part.text}</p>;
+                        const note = toolNote(part);
+                        return note ? <div className="tool-note" key={i}>{note}</div> : null;
+                      })}
+                    </>
+                  )}
+                </div>
+              ))}
+
+              {busy && <div className="dm thinking">the keep stirs…</div>}
+            </div>
+          </div>
+
+          <div className="composer-wrap">
+            <form className="composer" onSubmit={submit}>
+              <span className="prompt-glyph">›</span>
+              <input
+                value={input}
+                onChange={(e) => setInput(e.target.value)}
+                placeholder="What do you do?"
+                aria-label="Your action"
+              />
+              <button className="send" type="submit" disabled={busy}>
+                Act ⏎
+              </button>
+            </form>
+            <div className="composer-hint">
+              <span>look · move · take</span>
+              <span>memory · full mode</span>
+            </div>
+          </div>
+        </section>
+
+        <aside className="pane dossier">
+          <div className="pane-head">
+            <span className="pane-title">Satchel</span>
+            <span className="pane-meta">{game.inventory.length}</span>
+          </div>
+          <div className="section">
+            {game.inventory.length === 0 ? (
+              <div className="placeholder" style={{ padding: 0 }}>empty — take something</div>
+            ) : (
+              <div className="inv">
+                {game.inventory.map((it) => (
+                  <span className="chip item" key={it}>◇ {it}</span>
+                ))}
+              </div>
+            )}
+          </div>
+        </aside>
+      </main>
+
+      <footer>
+        <div className="left">
+          <HealthStatus />
+          <span className="stat">tenant <b>dungeon-player</b></span>
+          <span className="stat">room <b>{room.id}</b></span>
+        </div>
+        <div className="right">
+          <span className="stat">memory <b>full mode</b></span>
+        </div>
+      </footer>
+    </div>
+  );
+}
+
+function textOf(parts: { type: string; text?: string }[]): string {
+  return parts.filter((p) => p.type === "text").map((p) => p.text ?? "").join(" ");
+}
+
+function toolNote(part: { type: string; state?: string; output?: unknown }): string | null {
+  if (!part.type.startsWith("tool-")) return null;
+  if (part.state !== "output-available") {
+    const verb = part.type.replace("tool-", "");
+    return `↳ ${verb}…`;
+  }
+  const out = part.output as ToolOut;
+  if (part.type === "tool-move") return out.ok ? `↳ moved · ${out.name}` : `↳ blocked`;
+  if (part.type === "tool-look") return `↳ looked · ${out.name}`;
+  if (part.type === "tool-take") return out.ok ? `↳ took · ${out.item}` : `↳ nothing to take`;
+  return null;
+}

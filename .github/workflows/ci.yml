@@ -56,9 +56,6 @@ jobs:
   dungeon:
     name: Dungeon (typecheck, build)
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: examples/dungeon
     steps:
       - uses: actions/checkout@v4
 
@@ -66,12 +63,22 @@ jobs:
         with:
           node-version: "22"
           cache: npm
-          cache-dependency-path: examples/dungeon/package-lock.json
+          cache-dependency-path: |
+            packages/vercel/package-lock.json
+            examples/dungeon/package-lock.json
 
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Build + type-check
+      # The dungeon consumes @arango-memory/vercel via a file: dependency, so its
+      # dist/ must exist before the Next.js build resolves the import.
+      - name: Build the adapter
+        working-directory: packages/vercel
         run: |
+          npm ci
+          npm run build
+
+      - name: Install, build, type-check, test (dungeon)
+        working-directory: examples/dungeon
+        run: |
+          npm ci
           npm run build
           npm run typecheck
+          npm test

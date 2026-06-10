@@ -39,7 +39,7 @@ The footer shows **core online** once the stack is up.
 ## Build status (Standard scope, 3.5c-0 → 3.5c-3)
 
 - **3.5c-0 — scaffold** ✅ App shell, locked dark/light theme, typed core client, `/api/health`, docker-compose.
-- **3.5c-1 — core loop** ⏳ `streamText` + `arangoMemory()` + `useChat`; `look`/`move`/`take` tools; persistent rooms.
+- **3.5c-1 — core loop** ✅ `streamText` + `arangoMemory()` + `useChat`; `look`/`move`/`take` tools; world facts persisted to the core; position/inventory resume across reloads. **Needs `AI_GATEWAY_API_KEY`** to play.
 - **3.5c-2 — generative UI** ⏳ room/inventory cards + the live knowledge-graph map.
 - **3.5c-3 — the lie engine** ⏳ `talk`/`confront`; testimony with bi-temporal `valid_time`; the Contradiction Ledger + `supersede`.
 
