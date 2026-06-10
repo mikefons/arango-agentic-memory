@@ -1,4 +1,6 @@
-/** Generative-UI cards rendered from tool outputs (3.5c-2). */
+/** Generative-UI cards rendered from tool outputs (3.5c-2 / memory glimpse). */
+
+import { roomMemory, type DungeonGraph, type GraphNode } from "@/lib/graph";
 
 export interface RoomView {
   name?: string;
@@ -18,14 +20,55 @@ function hueOf(name = ""): number {
   return h;
 }
 
-export function RoomSceneCard({ tool, view }: { tool: "look" | "move"; view: RoomView }) {
+function shortName(name: string): string {
+  const n = name.replace(/^the\s+/i, "");
+  return n.length > 12 ? `${n.slice(0, 11)}…` : n;
+}
+
+/** A constellation of what the memory core remembers about this room — the
+ *  room node at centre, its graph neighbours orbiting. Replaces the old static
+ *  art tint with an honest window into the knowledge graph. */
+function MemoryGlimpse({ facts }: { facts: GraphNode[] }) {
+  const cx = 140;
+  const cy = 60;
+  const r = 44;
+  return (
+    <svg className="glimpse" viewBox="0 0 280 124" preserveAspectRatio="xMidYMid meet">
+      {facts.map((f, i) => {
+        const a = -Math.PI / 2 + (2 * Math.PI * i) / Math.max(facts.length, 1);
+        const x = cx + r * Math.cos(a);
+        const y = cy + r * Math.sin(a);
+        return (
+          <g key={f.id} className="gfact">
+            <line className="glink" x1={cx} y1={cy} x2={x} y2={y} />
+            <circle className={`gnode ${f.kind}`} cx={x} cy={y} r={f.kind === "room" ? 4.5 : 3} />
+            <text className="glabel" x={x} y={y - 7}>{shortName(f.name)}</text>
+          </g>
+        );
+      })}
+      <circle className="gcenter" cx={cx} cy={cy} r={6.5} />
+    </svg>
+  );
+}
+
+export function RoomSceneCard({
+  tool,
+  view,
+  graph,
+}: {
+  tool: "look" | "move";
+  view: RoomView;
+  graph?: DungeonGraph;
+}) {
   const hue = hueOf(view.name);
   const art = {
     background:
-      `radial-gradient(120% 90% at 28% 8%, hsl(${hue} 55% 22%), transparent 55%),` +
-      `radial-gradient(95% 120% at 86% 92%, hsl(${(hue + 70) % 360} 45% 15%), transparent 60%),` +
-      `linear-gradient(160deg, #161019, #0a0a0f 72%)`,
+      `radial-gradient(120% 90% at 28% 8%, hsl(${hue} 45% 16%), transparent 55%),` +
+      `radial-gradient(95% 120% at 86% 92%, hsl(${(hue + 70) % 360} 38% 12%), transparent 60%),` +
+      `linear-gradient(160deg, #141019, #0a0a0f 74%)`,
   };
+  const mem = graph ? roomMemory(graph, view.name ?? "") : { found: false, facts: [] };
+  const remembered = mem.facts.length;
   return (
     <div className="card">
       <div className="card-head">
@@ -33,8 +76,12 @@ export function RoomSceneCard({ tool, view }: { tool: "look" | "move"; view: Roo
         <span className="state">resolved</span>
       </div>
       <div className="scene-art" style={art}>
+        {remembered > 0 && <MemoryGlimpse facts={mem.facts} />}
         <span className="scene-cap">
-          <span className="spark">✦</span> {view.name ?? "the dark"} · stored to graph
+          <span className="spark">✦</span>{" "}
+          {remembered > 0
+            ? `remembered here · ${remembered} linked`
+            : `${view.name ?? "the dark"} · committing to memory…`}
         </span>
       </div>
       {view.description && <p className="card-desc">{view.description}</p>}

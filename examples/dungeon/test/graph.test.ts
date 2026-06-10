@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { buildGraph, matchesRoom } from "../lib/graph";
+import { buildGraph, matchesRoom, roomMemory } from "../lib/graph";
+import type { DungeonGraph } from "../lib/graph";
 import type { Entity, EntityDetail } from "../lib/types";
 
 const ROOMS = ["The Gatehouse", "The Cistern"];
@@ -43,5 +44,31 @@ describe("buildGraph", () => {
   it("does not expand lore nodes (no edges from 'Black')", async () => {
     const g = await buildGraph(list, get, ROOMS);
     expect(g.edges.every((e) => e.source !== "b" && e.target !== "b")).toBe(true);
+  });
+});
+
+describe("roomMemory", () => {
+  const graph: DungeonGraph = {
+    nodes: [
+      { id: "g", name: "Gatehouse", label: "Concept", kind: "room" },
+      { id: "c", name: "Cistern", label: "Concept", kind: "room" },
+      { id: "b", name: "Black", label: "Concept", kind: "lore" },
+    ],
+    edges: [
+      { source: "g", target: "c", relationship: "associated_with" },
+      { source: "g", target: "b", relationship: "associated_with" },
+    ],
+  };
+
+  it("returns a room's graph neighbours (matched loosely by name)", () => {
+    const mem = roomMemory(graph, "The Gatehouse");
+    expect(mem.found).toBe(true);
+    expect(mem.facts.map((f) => f.name).sort()).toEqual(["Black", "Cistern"]);
+  });
+
+  it("reports not-found for a room absent from the graph", () => {
+    const mem = roomMemory(graph, "The Vault");
+    expect(mem.found).toBe(false);
+    expect(mem.facts).toEqual([]);
   });
 });

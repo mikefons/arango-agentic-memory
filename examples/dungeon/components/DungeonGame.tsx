@@ -5,6 +5,7 @@ import { DefaultChatTransport } from "ai";
 import { useEffect, useRef, useState } from "react";
 import { getRoom, START_ROOM } from "@/lib/world";
 import type { GameState } from "@/lib/tools";
+import type { DungeonGraph } from "@/lib/graph";
 import {
   ConfrontCard,
   PickupNote,
@@ -36,6 +37,7 @@ interface ToolOut {
 
 export function DungeonGame() {
   const [game, setGame] = useState<GameState>(EMPTY_GAME);
+  const [graph, setGraph] = useState<DungeonGraph>({ nodes: [], edges: [] });
   const [input, setInput] = useState("");
   const gameRef = useRef(game);
   gameRef.current = game;
@@ -101,6 +103,18 @@ export function DungeonGame() {
     streamRef.current?.scrollTo({ top: streamRef.current.scrollHeight, behavior: "smooth" });
   }, [messages]);
 
+  // refetch the knowledge graph after each turn (shared by the map + room cards)
+  useEffect(() => {
+    let alive = true;
+    fetch("/api/graph")
+      .then((r) => (r.ok ? r.json() : { nodes: [], edges: [] }))
+      .then((g: DungeonGraph) => alive && setGraph(g))
+      .catch(() => undefined);
+    return () => {
+      alive = false;
+    };
+  }, [messages.length]);
+
   function submit(e: React.FormEvent) {
     e.preventDefault();
     const text = input.trim();
@@ -141,7 +155,7 @@ export function DungeonGame() {
       </header>
 
       <main>
-        <DungeonMap currentRoom={room.name} refreshKey={messages.length} />
+        <DungeonMap currentRoom={room.name} graph={graph} />
 
         <section className="pane narrative">
           <div className="stream" ref={streamRef}>
@@ -162,7 +176,7 @@ export function DungeonGame() {
                       <span className="text">{textOf(m.parts)}</span>
                     </div>
                   ) : (
-                    <>{m.parts.map((part, i) => renderPart(part, i))}</>
+                    <>{m.parts.map((part, i) => renderPart(part, i, graph))}</>
                   )}
                 </div>
               ))}
@@ -221,7 +235,7 @@ function textOf(parts: { type: string; text?: string }[]): string {
 
 type Part = { type: string; text?: string; state?: string; output?: unknown };
 
-function renderPart(part: Part, i: number) {
+function renderPart(part: Part, i: number, graph: DungeonGraph) {
   if (part.type === "text") return <p className="dm" key={i}>{part.text}</p>;
   if (!part.type.startsWith("tool-")) return null;
 
@@ -229,10 +243,10 @@ function renderPart(part: Part, i: number) {
   if (part.state !== "output-available") return <ToolSkeleton key={i} tool={verb} />;
   const out = part.output as RoomView & { ok?: boolean; item?: string; reason?: string };
 
-  if (part.type === "tool-look") return <RoomSceneCard key={i} tool="look" view={out} />;
+  if (part.type === "tool-look") return <RoomSceneCard key={i} tool="look" view={out} graph={graph} />;
   if (part.type === "tool-move") {
     return out.ok ? (
-      <RoomSceneCard key={i} tool="move" view={out} />
+      <RoomSceneCard key={i} tool="move" view={out} graph={graph} />
     ) : (
       <div className="tool-skel" key={i}>↳ {out.reason ?? "the way is barred"}</div>
     );
