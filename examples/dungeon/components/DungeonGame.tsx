@@ -5,10 +5,22 @@ import { DefaultChatTransport } from "ai";
 import { useEffect, useRef, useState } from "react";
 import { getRoom, START_ROOM } from "@/lib/world";
 import type { GameState } from "@/lib/tools";
-import { PickupNote, RoomSceneCard, ToolSkeleton, type RoomView } from "./cards";
+import {
+  ConfrontCard,
+  PickupNote,
+  RoomSceneCard,
+  TalkCard,
+  ToolSkeleton,
+  type ConfrontView,
+  type RoomView,
+  type TalkView,
+} from "./cards";
 import { ThemeToggle } from "./ThemeToggle";
 import { HealthStatus } from "./HealthStatus";
 import { DungeonMap } from "./DungeonMap";
+import { Dossier } from "./Dossier";
+
+const EMPTY_GAME: GameState = { roomId: START_ROOM, inventory: [], heardClaims: [], caughtClaims: [] };
 
 const LS_KEY = "md-gamestate";
 
@@ -17,10 +29,13 @@ interface ToolOut {
   roomId?: string;
   name?: string;
   item?: string;
+  heard?: string[];
+  caught?: boolean;
+  claimId?: string;
 }
 
 export function DungeonGame() {
-  const [game, setGame] = useState<GameState>({ roomId: START_ROOM, inventory: [] });
+  const [game, setGame] = useState<GameState>(EMPTY_GAME);
   const [input, setInput] = useState("");
   const gameRef = useRef(game);
   gameRef.current = game;
@@ -30,7 +45,7 @@ export function DungeonGame() {
   useEffect(() => {
     try {
       const saved = localStorage.getItem(LS_KEY);
-      if (saved) setGame(JSON.parse(saved) as GameState);
+      if (saved) setGame({ ...EMPTY_GAME, ...(JSON.parse(saved) as Partial<GameState>) });
     } catch {
       /* ignore */
     }
@@ -47,9 +62,9 @@ export function DungeonGame() {
     let next = gameRef.current;
     let changed = false;
     for (const part of last.parts) {
-      const isTool =
-        part.type === "tool-move" || part.type === "tool-look" || part.type === "tool-take";
-      if (!isTool || !("state" in part) || part.state !== "output-available") continue;
+      if (!part.type.startsWith("tool-") || !("state" in part) || part.state !== "output-available") {
+        continue;
+      }
       const out = part.output as ToolOut;
       if ((part.type === "tool-move" || part.type === "tool-look") && out.roomId && out.roomId !== next.roomId) {
         next = { ...next, roomId: out.roomId };
@@ -57,6 +72,17 @@ export function DungeonGame() {
       }
       if (part.type === "tool-take" && out.ok && out.item && !next.inventory.includes(out.item)) {
         next = { ...next, inventory: [...next.inventory, out.item] };
+        changed = true;
+      }
+      if (part.type === "tool-talk" && Array.isArray(out.heard)) {
+        const merged = [...new Set([...next.heardClaims, ...out.heard])];
+        if (merged.length !== next.heardClaims.length) {
+          next = { ...next, heardClaims: merged };
+          changed = true;
+        }
+      }
+      if (part.type === "tool-confront" && out.caught && out.claimId && !next.caughtClaims.includes(out.claimId)) {
+        next = { ...next, caughtClaims: [...next.caughtClaims, out.claimId] };
         changed = true;
       }
     }
@@ -172,23 +198,7 @@ export function DungeonGame() {
           </div>
         </section>
 
-        <aside className="pane dossier">
-          <div className="pane-head">
-            <span className="pane-title">Satchel</span>
-            <span className="pane-meta">{game.inventory.length}</span>
-          </div>
-          <div className="section">
-            {game.inventory.length === 0 ? (
-              <div className="placeholder" style={{ padding: 0 }}>empty — take something</div>
-            ) : (
-              <div className="inv">
-                {game.inventory.map((it) => (
-                  <span className="chip item" key={it}>◇ {it}</span>
-                ))}
-              </div>
-            )}
-          </div>
-        </aside>
+        <Dossier game={game} />
       </main>
 
       <footer>
@@ -229,6 +239,20 @@ function renderPart(part: Part, i: number) {
   }
   if (part.type === "tool-take") {
     return <PickupNote key={i} ok={out.ok} item={out.item} reason={out.reason} />;
+  }
+  if (part.type === "tool-talk") {
+    return out.ok ? (
+      <TalkCard key={i} view={part.output as TalkView} />
+    ) : (
+      <div className="tool-skel" key={i}>↳ {out.reason ?? "no one answers"}</div>
+    );
+  }
+  if (part.type === "tool-confront") {
+    return out.ok ? (
+      <ConfrontCard key={i} view={part.output as ConfrontView} />
+    ) : (
+      <div className="tool-skel" key={i}>↳ {out.reason ?? "no such claim"}</div>
+    );
   }
   return null;
 }

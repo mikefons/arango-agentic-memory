@@ -532,6 +532,108 @@ footer .live .dot { width: 5px; height: 5px; border-radius: 50%; background: cur
 .swatch.room { background: var(--fg-soft); }
 .swatch.lore { background: var(--faint); }
 
+/* ---------- Dossier: persons + contradiction ledger (3.5c-3) ---------- */
+.dossier-body { flex: 1; overflow-y: auto; }
+.section { border-bottom: 1px solid var(--border); padding: 15px 16px; }
+.section h3 {
+  font-family: var(--font-mono), monospace;
+  font-size: 10px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin: 0 0 13px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.section h3 .count { color: var(--faint); }
+.empty {
+  font-family: var(--font-mono), monospace;
+  font-size: 11px;
+  color: var(--faint);
+  letter-spacing: 0.03em;
+}
+
+.npc { margin-bottom: 14px; }
+.npc:last-child { margin-bottom: 0; }
+.npc-row { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; }
+.npc-name { display: flex; align-items: center; gap: 9px; }
+.avatar {
+  width: 22px; height: 22px;
+  border-radius: 50%;
+  border: 1px solid var(--border-strong);
+  display: grid; place-items: center;
+  font-family: var(--font-serif), serif;
+  font-size: 12px;
+  color: var(--fg-soft);
+  background: var(--bg-2);
+}
+.npc-name .n { font-size: 13px; color: var(--fg); }
+.npc-name .role { font-family: var(--font-mono), monospace; font-size: 9.5px; color: var(--faint); }
+.trust-val { font-family: var(--font-mono), monospace; font-size: 10.5px; color: var(--muted); }
+.meter { height: 4px; border-radius: 3px; background: var(--bg-3); overflow: hidden; }
+.meter > i {
+  display: block; height: 100%; border-radius: 3px;
+  background: linear-gradient(90deg, var(--ember-soft), var(--ember));
+  transition: width 0.5s ease;
+}
+.meter.low > i { background: linear-gradient(90deg, #8a3030, var(--lie)); }
+.meter.high > i { background: linear-gradient(90deg, #2f7d66, var(--truth)); }
+
+.ledger { display: flex; flex-direction: column; gap: 10px; }
+.entry {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-1);
+  padding: 10px 11px;
+  display: flex; flex-direction: column; gap: 7px;
+  animation: rise 0.4s ease;
+}
+.entry.caught { border-color: var(--lie-dim); background: linear-gradient(180deg, var(--lie-dim), transparent); }
+.entry.pending { border-color: var(--ember-dim); }
+.entry-top { display: flex; align-items: center; justify-content: space-between; }
+.entry-tag {
+  font-family: var(--font-mono), monospace;
+  font-size: 9px; letter-spacing: 0.1em; text-transform: uppercase;
+  padding: 2px 6px; border-radius: 4px;
+}
+.entry-tag.caught { color: var(--lie); background: var(--lie-dim); }
+.entry-tag.pending { color: var(--ember); background: var(--ember-dim); }
+.entry-who { font-family: var(--font-mono), monospace; font-size: 10px; color: var(--faint); }
+.claim { font-size: 12.5px; color: var(--fg-soft); line-height: 1.45; }
+.claim.false { text-decoration: line-through; text-decoration-color: var(--lie); color: var(--muted); }
+.claim.refute { color: var(--muted); }
+.claim .vs { color: var(--faint); font-family: var(--font-mono), monospace; font-size: 10px; }
+.entry-foot { font-family: var(--font-mono), monospace; font-size: 9.5px; color: var(--faint); }
+.entry-foot .k { color: var(--truth); }
+.entry-foot .k.pend { color: var(--ember); }
+
+/* talk / confront cards in the narrative */
+.card.talk .card-head .who { margin-left: auto; font-family: var(--font-mono), monospace; font-size: 10px; color: var(--muted); }
+.testimony { padding: 12px 14px; display: flex; flex-direction: column; gap: 8px; }
+.say { font-family: var(--font-serif), Georgia, serif; font-size: 15px; line-height: 1.6; color: var(--fg-soft); margin: 0; }
+
+.confront {
+  border: 1px solid var(--lie-dim);
+  border-radius: var(--radius);
+  background: linear-gradient(180deg, var(--lie-dim), transparent);
+  padding: 13px 14px;
+  display: flex; flex-direction: column; gap: 9px;
+  animation: rise 0.5s ease;
+}
+.confront.held { border-color: var(--border); background: var(--bg-1); }
+.confront .ribbon {
+  display: flex; align-items: center; gap: 8px;
+  font-family: var(--font-mono), monospace;
+  font-size: 10px; letter-spacing: 0.1em; text-transform: uppercase;
+  color: var(--lie);
+}
+.confront .ribbon.held { color: var(--muted); }
+.confront .resolve {
+  font-family: var(--font-mono), monospace; font-size: 11px; color: var(--truth);
+  border-top: 1px solid var(--border); padding-top: 9px;
+}
+
 @keyframes rise { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
 
 ::-webkit-scrollbar { width: 9px; }

@@ -66,3 +66,50 @@ export function PickupNote({ ok, item, reason }: { ok?: boolean; item?: string; 
 export function ToolSkeleton({ tool }: { tool: string }) {
   return <div className="tool-skel">↳ {tool}…</div>;
 }
+
+export interface TalkView {
+  npc?: string;
+  role?: string;
+  claims?: { id: string; text: string }[];
+}
+
+export function TalkCard({ view }: { view: TalkView }) {
+  return (
+    <div className="card talk">
+      <div className="card-head">
+        <span className="tool">tool · <b>talk</b></span>
+        <span className="who">{view.npc}{view.role ? ` · ${view.role}` : ""}</span>
+      </div>
+      <div className="testimony">
+        {(view.claims ?? []).map((c) => (
+          <p className="say" key={c.id}>“{c.text}”</p>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+export interface ConfrontView {
+  caught?: boolean;
+  npc?: string;
+  confession?: string;
+  reason?: string;
+}
+
+export function ConfrontCard({ view }: { view: ConfrontView }) {
+  if (view.caught) {
+    return (
+      <div className="confront caught">
+        <div className="ribbon">▲ contradiction confirmed</div>
+        <p className="say">“{view.confession}”</p>
+        <div className="resolve">✓ superseded · {view.npc}&apos;s claim invalidated</div>
+      </div>
+    );
+  }
+  return (
+    <div className="confront held">
+      <div className="ribbon held">— they hold firm</div>
+      <p className="say">{view.reason}</p>
+    </div>
+  );
+}
