@@ -71,7 +71,8 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Build + type-check
+      - name: Build + type-check + test
         run: |
           npm run build
           npm run typecheck
+          npm test
