@@ -20,6 +20,7 @@ import { ThemeToggle } from "./ThemeToggle";
 import { HealthStatus } from "./HealthStatus";
 import { DungeonMap } from "./DungeonMap";
 import { Dossier } from "./Dossier";
+import { TabNav } from "./TabNav";
 
 const EMPTY_GAME: GameState = { roomId: START_ROOM, inventory: [], heardClaims: [], caughtClaims: [] };
 
@@ -129,16 +130,19 @@ export function DungeonGame() {
   return (
     <div className="app">
       <header>
-        <div className="brand">
-          <span className="glyph">
-            <svg width="20" height="18" viewBox="0 0 20 18" fill="none">
-              <path d="M10 1 L19 17 L1 17 Z" stroke="currentColor" strokeWidth="1.4" fill="currentColor" fillOpacity="0.12" />
-              <circle cx="10" cy="12" r="1.6" fill="currentColor" />
-            </svg>
-          </span>
-          <span className="wordmark">
-            Memory&nbsp;<b>Dungeon</b>
-          </span>
+        <div className="header-left">
+          <div className="brand">
+            <span className="glyph">
+              <svg width="20" height="18" viewBox="0 0 20 18" fill="none">
+                <path d="M10 1 L19 17 L1 17 Z" stroke="currentColor" strokeWidth="1.4" fill="currentColor" fillOpacity="0.12" />
+                <circle cx="10" cy="12" r="1.6" fill="currentColor" />
+              </svg>
+            </span>
+            <span className="wordmark">
+              Memory&nbsp;<b>Dungeon</b>
+            </span>
+          </div>
+          <TabNav />
         </div>
         <div className="crumbs">
           <span>Ashfall Keep</span>

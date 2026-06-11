@@ -7,6 +7,7 @@
  * explicit game actions (rooms, NPCs, testimony, the lie engine).
  */
 
+import type { MemoryGraph } from "./explorer";
 import type {
   Ctx,
   Entity,
@@ -88,6 +89,11 @@ export function recordStep(
 
 export function getSteps(tenantId: string, agentId: string): Promise<{ steps: Step[] }> {
   return coreFetch(`/v1/steps?${qs({ tenant_id: tenantId, agent_id: agentId })}`);
+}
+
+/** The tenant's full semantic graph (entities + relates_to/Supersedes) for the explorer. */
+export function memoryGraph(tenantId: string): Promise<MemoryGraph> {
+  return coreFetch<MemoryGraph>(`/v1/graph?${qs({ tenant_id: tenantId })}`);
 }
 
 /** Mint (idempotently) a named semantic entity and return its key. */
