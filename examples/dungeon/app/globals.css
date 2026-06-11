@@ -693,7 +693,8 @@ footer .live .dot { width: 5px; height: 5px; border-radius: 50%; background: cur
 .tab.active { background: var(--bg-1); color: var(--fg); box-shadow: 0 1px 0 rgba(0, 0, 0, 0.2); }
 
 .graph-app { grid-template-rows: 52px 1fr; }
-.graph-main { overflow: hidden; position: relative; }
+/* override the play view's 3-column `main` grid so the canvas fills the frame */
+.graph-main { display: block; overflow: hidden; position: relative; }
 
 .gx-canvas { position: relative; width: 100%; height: 100%; }
 .gx-canvas .react-flow { background: var(--black); }
