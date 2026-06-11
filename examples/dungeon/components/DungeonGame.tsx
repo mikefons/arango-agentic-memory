@@ -140,10 +140,21 @@ export function DungeonGame() {
 
   // "the keep dreams" — trigger Dream State consolidation (§13)
   const [dreaming, setDreaming] = useState(false);
-  const [dreamMsg, setDreamMsg] = useState<string | null>(null);
+  const [lastDream, setLastDream] = useState<{ r: number; c: number; s: number } | null>(null);
+
+  // append a DM-styled narration line into the story stream
+  const narrate = useCallback(
+    (text: string) => {
+      setMessages((prev) => [
+        ...prev,
+        { id: `dream-${Date.now()}`, role: "assistant", parts: [{ type: "text", text }] },
+      ]);
+    },
+    [setMessages],
+  );
+
   const runDream = useCallback(async () => {
     setDreaming(true);
-    setDreamMsg(null);
     try {
       const res = await fetch("/api/dream", { method: "POST" });
       const d = (await res.json()) as {
@@ -153,21 +164,32 @@ export function DungeonGame() {
         breaker_tripped?: boolean;
         error?: string;
       };
-      if (d.error) setDreamMsg("the keep could not dream — is the core awake?");
-      else if (d.breaker_tripped)
-        setDreamMsg("the keep stirred, then held its tongue — too much would change at once");
-      else
-        setDreamMsg(
-          `the keep dreamed · reviewed ${d.reviewed ?? 0} · consolidated ${d.consolidated ?? 0} · superseded ${d.superseded ?? 0}`,
+      if (d.error) {
+        narrate("The keep cannot dream — the deep memory lies silent.");
+      } else if (d.breaker_tripped) {
+        setLastDream({ r: d.reviewed ?? 0, c: 0, s: 0 });
+        narrate("The keep stirs in its sleep, then stills — too much would change at once.");
+      } else {
+        const r = d.reviewed ?? 0;
+        const c = d.consolidated ?? 0;
+        const s = d.superseded ?? 0;
+        setLastDream({ r, c, s });
+        narrate(
+          r === 0
+            ? "A hush falls over Ashfall Keep. It dreams, but finds nothing new to settle."
+            : `A hush falls over Ashfall Keep. It settles its memories — ${r} recalled` +
+                (c ? `, ${c} distilled into truth` : "") +
+                (s ? `, ${s} cast out as false` : "") +
+                ".",
         );
+      }
       refreshGraph();
     } catch {
-      setDreamMsg("the keep could not dream — is the core awake?");
+      narrate("The keep cannot dream — the deep memory lies silent.");
     } finally {
       setDreaming(false);
-      setTimeout(() => setDreamMsg(null), 7000);
     }
-  }, [refreshGraph]);
+  }, [refreshGraph, narrate]);
 
   function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -287,11 +309,14 @@ export function DungeonGame() {
           <span className="stat">room <b>{room.id}</b></span>
         </div>
         <div className="right">
+          {lastDream && (
+            <span className="stat">
+              last dream <b>{lastDream.r} reviewed · {lastDream.c} distilled · {lastDream.s} superseded</b>
+            </span>
+          )}
           <span className="stat">memory <b>full mode</b></span>
         </div>
       </footer>
-
-      {dreamMsg && <div className="dream-toast">{dreamMsg}</div>}
     </div>
   );
 }
