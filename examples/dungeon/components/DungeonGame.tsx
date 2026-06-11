@@ -21,6 +21,7 @@ import { HealthStatus } from "./HealthStatus";
 import { DungeonMap } from "./DungeonMap";
 import { Dossier } from "./Dossier";
 import { TabNav } from "./TabNav";
+import { buildShareUrl } from "@/lib/share";
 
 const EMPTY_GAME: GameState = { roomId: START_ROOM, inventory: [], heardClaims: [], caughtClaims: [] };
 
@@ -232,6 +233,22 @@ export function DungeonGame() {
             title="The keep dreams — run Dream State consolidation"
           >
             {dreaming ? "dreaming…" : "✦ dream"}
+          </button>
+          <button
+            className="dream-btn share-btn"
+            onClick={() =>
+              window.open(
+                buildShareUrl({
+                  room: room.name,
+                  items: game.inventory.length,
+                  lies: game.caughtClaims.length,
+                }),
+                "_blank",
+              )
+            }
+            title="Share this run — open the OG card image"
+          >
+            ⧉ share
           </button>
           <span className="pill save">
             <span className="dot" />

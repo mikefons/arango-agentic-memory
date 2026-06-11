@@ -203,6 +203,8 @@ header {
 }
 .dream-btn:hover:not(:disabled) { border-color: var(--ember); }
 .dream-btn:disabled { opacity: 0.55; cursor: default; }
+.share-btn { color: var(--muted); background: var(--bg-1); border-color: var(--border); }
+.share-btn:hover:not(:disabled) { color: var(--fg); border-color: var(--border-strong); }
 
 .theme-toggle {
   width: 30px; height: 30px;
