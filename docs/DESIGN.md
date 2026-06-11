@@ -1,7 +1,7 @@
 # ArangoDB Agentic Memory System — Design Specification
 
 > **Status:** ✅ **v1 build sequence complete (Steps 0–7).** v2: all §21 adapters shipped (MCP, LangChain/LangGraph, CrewAI) + full §19 entity API + **Step 3e heavy extraction tier done**. Authoritative reference.
-> **Last updated:** 2026-06-09 (rev 38 — Memory Dungeon feature toggles / Edge Config)
+> **Last updated:** 2026-06-09 (rev 39 — Memory Dungeon scene art — Showcase complete)
 >
 > **Rev 2 decisions:** Python-first core with a thin TypeScript client · v1 scope is Vercel-only · build a walking skeleton first, then a test/eval harness, then thicken each layer.
 >
@@ -992,7 +992,9 @@ The reference UI is **Memory Dungeon** (`examples/dungeon/`): a text-adventure w
 
 - **Feature toggles (Edge Config)** ✅ (rev 38) `lib/flags.ts` — all features **off by default**; opt in via env (`SCENE_ART`, `DUNGEON_HINT`) or override at runtime via **Vercel Edge Config** (a `dungeon` key, read only when `EDGE_CONFIG` is set; `@vercel/edge-config` dynamically imported). `GET /api/flags` exposes them to the client. First knob: **`hint`** — when on, the chat route appends a hint instruction to the DM system prompt (off → prompt unchanged). Pure `flagsFromEnv` unit-tested.
 
-*Deferred (Showcase follow-up):* generative scene art (image provider → Blob), gated behind the `sceneArt` flag.
+- **Scene art** ✅ (rev 39) `GET /api/scene?room=` — gated behind the `sceneArt` flag: generates a dark-fantasy room image (`experimental_generateImage`, OpenAI image model) and caches it in **Vercel Blob** (keyed by room slug, generated once), returning the URL. Heavy deps (`ai`/`@ai-sdk/openai`/`@vercel/blob`) are **dynamically imported** so they stay inert when off; returns `204` (cards keep the memory glimpse) unless the flag + `OPENAI_API_KEY` + `BLOB_READ_WRITE_TOKEN` are all set. `RoomSceneCard` uses the image as the card backdrop (with a scrim) under the memory-glimpse constellation when enabled. Pure `roomSlug`/`scenePrompt` unit-tested.
+
+**Step 3.5c Showcase follow-up is complete** — every deferred item shipped as a config-gated toggle (Cron dreams, OG cards, feature flags/Edge Config, scene art), all off by default.
 
 The *full* benchmark run still completes at Step 7; this milestone establishes the harness and its regression gates.
 
@@ -1081,7 +1083,7 @@ LoCoMo benchmark runner/CLI (`eval/benchmark.py`) — completes Step 7 and the v
 
 ---
 
-> ✅ **v1 build sequence complete (Steps 0–7).** v2: **all §21 adapters shipped** — MCP server, LangChain/LangGraph, and CrewAI — plus **Step 3e** (heavy extraction tier) and **Step 3.5c** (Memory Dungeon reference app, Standard scope). Remaining: only the **Step 3.5c Showcase follow-up** (scene art, Edge Config) — pure demo polish.
+> ✅ **v1 build sequence complete (Steps 0–7).** v2: **all §21 adapters shipped** — MCP server, LangChain/LangGraph, and CrewAI — plus **Step 3e** (heavy extraction tier) and **Step 3.5c** (Memory Dungeon reference app, Standard scope). The **Step 3.5c Showcase follow-up is also complete** (dreams Cron, OG cards, Edge Config flags, scene art — all config-gated). The project is feature-complete against the spec.
 
 ### v2 (post-v1)
 MCP server, LangChain/LangGraph adapter, CrewAI adapter + G-Memory tiers.

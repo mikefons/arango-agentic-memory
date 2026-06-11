@@ -1,6 +1,40 @@
+"use client";
+
 /** Generative-UI cards rendered from tool outputs (3.5c-2 / memory glimpse). */
 
+import { useEffect, useState } from "react";
 import { roomMemory, type DungeonGraph, type GraphNode } from "@/lib/graph";
+
+// Cache room → scene-art URL across cards so each room is fetched once.
+const sceneCache = new Map<string, string>();
+
+function useSceneArt(room: string | undefined, enabled: boolean): string | null {
+  const [url, setUrl] = useState<string | null>(
+    enabled && room ? sceneCache.get(room) ?? null : null,
+  );
+  useEffect(() => {
+    if (!enabled || !room) return;
+    const hit = sceneCache.get(room);
+    if (hit) {
+      setUrl(hit);
+      return;
+    }
+    let alive = true;
+    fetch(`/api/scene?room=${encodeURIComponent(room)}`)
+      .then((r) => (r.ok && r.status !== 204 ? r.json() : null))
+      .then((d: { url?: string } | null) => {
+        if (alive && d?.url) {
+          sceneCache.set(room, d.url);
+          setUrl(d.url);
+        }
+      })
+      .catch(() => undefined);
+    return () => {
+      alive = false;
+    };
+  }, [room, enabled]);
+  return url;
+}
 
 export interface RoomView {
   name?: string;
@@ -55,18 +89,22 @@ export function RoomSceneCard({
   tool,
   view,
   graph,
+  sceneArt = false,
 }: {
   tool: "look" | "move";
   view: RoomView;
   graph?: DungeonGraph;
+  sceneArt?: boolean;
 }) {
   const hue = hueOf(view.name);
-  const art = {
-    background:
-      `radial-gradient(120% 90% at 28% 8%, hsl(${hue} 45% 16%), transparent 55%),` +
-      `radial-gradient(95% 120% at 86% 92%, hsl(${(hue + 70) % 360} 38% 12%), transparent 60%),` +
-      `linear-gradient(160deg, #141019, #0a0a0f 74%)`,
-  };
+  const gradient =
+    `radial-gradient(120% 90% at 28% 8%, hsl(${hue} 45% 16%), transparent 55%),` +
+    `radial-gradient(95% 120% at 86% 92%, hsl(${(hue + 70) % 360} 38% 12%), transparent 60%),` +
+    `linear-gradient(160deg, #141019, #0a0a0f 74%)`;
+  const sceneUrl = useSceneArt(view.name, sceneArt);
+  const art = sceneUrl
+    ? { backgroundImage: `url(${sceneUrl})`, backgroundSize: "cover", backgroundPosition: "center" }
+    : { background: gradient };
   const mem = graph ? roomMemory(graph, view.name ?? "") : { found: false, facts: [] };
   const remembered = mem.facts.length;
   return (
@@ -76,6 +114,7 @@ export function RoomSceneCard({
         <span className="state">resolved</span>
       </div>
       <div className="scene-art" style={art}>
+        {sceneUrl && <div className="scene-scrim" />}
         {remembered > 0 && <MemoryGlimpse facts={mem.facts} />}
         <span className="scene-cap">
           <span className="spark">✦</span>{" "}

@@ -446,6 +446,12 @@ footer .live .dot { width: 5px; height: 5px; border-radius: 50%; background: cur
   letter-spacing: 0.08em;
 }
 .scene-art { height: 142px; position: relative; }
+/* scrim over generated art so the glimpse + caption stay readable */
+.scene-scrim {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(180deg, rgba(10, 10, 15, 0.35), rgba(10, 10, 15, 0.78));
+}
 .scene-art::after {
   content: "";
   position: absolute;

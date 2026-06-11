@@ -46,8 +46,10 @@ The footer shows **core online** once the stack is up.
 - **Dungeon dreams** ✅ a **✦ dream** button runs Dream State consolidation (`POST /v1/dream`) — reviews flagged/well-attested entities, confirms conflicts, distills summaries — shows a report toast and refreshes the graph. A Vercel Cron (`vercel.json`) runs it nightly on deploys. Meaningful conflict-confirm/distillation needs a real background model on the **core**: put `ANTHROPIC_API_KEY=…` and `GENERATION_PROVIDER=anthropic` in `examples/dungeon/.env` (gitignored; read by docker compose — *not* the same file as the UI's `.env.local`), then `docker compose up --build`. Without it the core stays keyless and dreams just review/clear.
 
 - **OG share cards** ✅ a **⧉ share** button opens a generated "Dungeon Run" image (`/api/og`, via `next/og`) — entities/relations counted live from the core, plus items/lies/room from the run.
+- **Feature toggles** ✅ all OFF by default; opt in via env or **Vercel Edge Config** (`lib/flags.ts`). Knobs: `DUNGEON_HINT` (DM hint level) and `SCENE_ART`.
+- **Scene art** ✅ (gated by `SCENE_ART=1` + `OPENAI_API_KEY` + `BLOB_READ_WRITE_TOKEN`) — `/api/scene` generates a dark-fantasy room image and caches it in Vercel Blob; the room card uses it as a backdrop under the memory glimpse. Off → cards keep the glimpse.
 
-Deferred to a Showcase follow-up: generative scene art (Blob) and Edge Config knobs.
+The Showcase polish is complete — all items are config-gated toggles, off by default.
 
 ## Deploy (later)
 
