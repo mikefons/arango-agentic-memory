@@ -1,7 +1,7 @@
 # ArangoDB Agentic Memory System — Design Specification
 
 > **Status:** ✅ **v1 build sequence complete (Steps 0–7).** v2: all §21 adapters shipped (MCP, LangChain/LangGraph, CrewAI) + full §19 entity API + **Step 3e heavy extraction tier done**. Authoritative reference.
-> **Last updated:** 2026-06-09 (rev 34 — Memory Dungeon Graph Explorer tab)
+> **Last updated:** 2026-06-09 (rev 35 — Memory Dungeon direct-Anthropic fallback)
 >
 > **Rev 2 decisions:** Python-first core with a thin TypeScript client · v1 scope is Vercel-only · build a walking skeleton first, then a test/eval harness, then thicken each layer.
 >
@@ -984,7 +984,9 @@ The reference UI is **Memory Dungeon** (`examples/dungeon/`): a text-adventure w
 
 - **Graph Explorer tab** ✅ (rev 34) A dedicated `/graph` route (a **Play · Graph** tab) that visualizes the tenant's full **semantic graph** from ArangoDB with **React Flow** (`@xyflow/react`) + **elk** force layout. New additive core read **`GET /v1/graph`** (`graph_api.py`): entities (incl. **superseded**, carrying `invalid_at`) + `relates_to`/`Supersedes` edges, embeddings excluded (§17), pytest-covered (**156 core tests**). Themed `EntityNode` (Geist pill; superseded → struck/dim, `needs_review` → amber ring); pan/zoom + minimap; **click-to-inspect** drawer (label, `valid_time`, status, mentions), **edge-type filter** (per relationship), **supersession toggle** (show/hide `invalid_at` entities + `Supersedes` — the before/after-the-lie view), and **search/center**. Pure transforms (`lib/explorer.ts`) unit-tested keyless. The room-scoped mini-map stays in the play view.
 
-*Deferred (Showcase follow-up):* the nightly "dungeon dreams" Cron → Dream State, generative scene art (Gateway→Blob), `@vercel/og` share cards, Edge Config knobs, and a **direct-provider fallback** (`@ai-sdk/anthropic` keyed by `ANTHROPIC_API_KEY`) so the app can be play-tested without a Vercel AI Gateway key.
+- **Direct-provider fallback** ✅ (rev 35) `lib/model.ts` `resolveModel()` — prefers the AI Gateway, but when `AI_GATEWAY_API_KEY` is unset and `ANTHROPIC_API_KEY` is present it calls Anthropic directly (`@ai-sdk/anthropic`), so the dungeon is play-testable without a Gateway account. Pure `chooseProvider()` selection unit-tested keyless.
+
+*Deferred (Showcase follow-up):* the nightly "dungeon dreams" Cron → Dream State, generative scene art (Gateway→Blob), `@vercel/og` share cards, and Edge Config knobs.
 
 The *full* benchmark run still completes at Step 7; this milestone establishes the harness and its regression gates.
 
@@ -1073,7 +1075,7 @@ LoCoMo benchmark runner/CLI (`eval/benchmark.py`) — completes Step 7 and the v
 
 ---
 
-> ✅ **v1 build sequence complete (Steps 0–7).** v2: **all §21 adapters shipped** — MCP server, LangChain/LangGraph, and CrewAI — plus **Step 3e** (heavy extraction tier) and **Step 3.5c** (Memory Dungeon reference app, Standard scope). Remaining: only the **Step 3.5c Showcase follow-up** (Cron "dungeon dreams", scene art, OG cards, direct-provider fallback) — pure demo polish.
+> ✅ **v1 build sequence complete (Steps 0–7).** v2: **all §21 adapters shipped** — MCP server, LangChain/LangGraph, and CrewAI — plus **Step 3e** (heavy extraction tier) and **Step 3.5c** (Memory Dungeon reference app, Standard scope). Remaining: only the **Step 3.5c Showcase follow-up** (Cron "dungeon dreams", scene art, OG cards, Edge Config) — pure demo polish.
 
 ### v2 (post-v1)
 MCP server, LangChain/LangGraph adapter, CrewAI adapter + G-Memory tiers.
