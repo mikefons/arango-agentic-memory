@@ -663,3 +663,154 @@ footer .live .dot { width: 5px; height: 5px; border-radius: 50%; background: cur
 ::-webkit-scrollbar { width: 9px; }
 ::-webkit-scrollbar-thumb { background: var(--bg-3); border-radius: 6px; border: 2px solid var(--black); }
 ::-webkit-scrollbar-track { background: transparent; }
+
+/* ============================================================
+   Graph Explorer (React Flow + elk) — the /graph tab
+   ============================================================ */
+
+/* tab nav (shared by both headers) */
+.header-left { display: flex; align-items: center; gap: 20px; }
+.tabnav {
+  display: flex;
+  gap: 2px;
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 2px;
+}
+.tab {
+  font-family: var(--font-mono), monospace;
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+  text-decoration: none;
+  padding: 5px 13px;
+  border-radius: 6px;
+  transition: color 0.15s, background-color 0.15s;
+}
+.tab:hover { color: var(--fg); }
+.tab.active { background: var(--bg-1); color: var(--fg); box-shadow: 0 1px 0 rgba(0, 0, 0, 0.2); }
+
+.graph-app { grid-template-rows: 52px 1fr; }
+.graph-main { overflow: hidden; position: relative; }
+
+.gx-canvas { position: relative; width: 100%; height: 100%; }
+.gx-canvas .react-flow { background: var(--black); }
+
+/* nodes */
+.gx-node {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 6px 11px;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  background: var(--bg-1);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.25);
+}
+.gx-node .gx-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--ember); flex: none; }
+.gx-node .gx-name { font-family: var(--font-sans), sans-serif; font-size: 12px; color: var(--fg); white-space: nowrap; }
+.gx-node .gx-label {
+  font-family: var(--font-mono), monospace;
+  font-size: 8.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--faint);
+}
+.gx-node.review { border-color: var(--ember); box-shadow: 0 0 0 2px var(--ember-dim); }
+.gx-node.superseded { opacity: 0.5; }
+.gx-node.superseded .gx-name { text-decoration: line-through; text-decoration-color: var(--lie); color: var(--muted); }
+.gx-node.superseded .gx-dot { background: var(--lie); }
+.gx-node.highlighted { border-color: var(--truth); box-shadow: 0 0 0 2px var(--truth-dim), 0 0 16px var(--truth-dim); }
+.gx-node.selected { border-color: var(--fg); }
+.gx-handle { opacity: 0; pointer-events: none; }
+
+/* edges */
+.react-flow__edge.relate .react-flow__edge-path { stroke: var(--border-strong); stroke-width: 1.4; }
+.react-flow__edge.supersede .react-flow__edge-path { stroke: var(--lie); stroke-width: 1.4; stroke-dasharray: 5 4; }
+.react-flow__edge-text { fill: var(--muted); font-family: var(--font-mono), monospace; font-size: 8px; }
+.react-flow__edge-textbg { fill: var(--bg); }
+
+/* controls + minimap */
+.react-flow__controls { box-shadow: none; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+.react-flow__controls-button {
+  background: var(--bg-1);
+  border-bottom: 1px solid var(--border);
+  color: var(--fg);
+}
+.react-flow__controls-button:hover { background: var(--bg-2); }
+.react-flow__controls-button svg { fill: var(--fg-soft); }
+.react-flow__minimap { background: var(--bg-1); border: 1px solid var(--border); border-radius: 8px; }
+
+/* control panel: search + filters */
+.gx-controls {
+  position: absolute;
+  top: 14px;
+  left: 14px;
+  z-index: 5;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: 214px;
+  background: var(--shell);
+  backdrop-filter: blur(8px);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 12px;
+}
+.gx-search {
+  background: var(--bg-2);
+  border: 1px solid var(--border-strong);
+  border-radius: 7px;
+  padding: 7px 10px;
+  color: var(--fg);
+  font-family: var(--font-sans), sans-serif;
+  font-size: 13px;
+  outline: none;
+}
+.gx-search:focus { border-color: var(--ember); box-shadow: 0 0 0 3px var(--ember-dim); }
+.gx-search::placeholder { color: var(--faint); }
+.gx-filters { display: flex; flex-direction: column; gap: 7px; }
+.gx-check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-family: var(--font-mono), monospace;
+  font-size: 10.5px;
+  color: var(--muted);
+  letter-spacing: 0.02em;
+  cursor: pointer;
+}
+.gx-check input { accent-color: var(--ember); }
+.gx-stat { font-family: var(--font-mono), monospace; font-size: 10px; color: var(--faint); border-top: 1px solid var(--border); padding-top: 9px; }
+
+/* inspect drawer */
+.gx-inspect {
+  position: absolute;
+  top: 14px;
+  right: 14px;
+  z-index: 5;
+  width: 234px;
+  background: var(--shell);
+  backdrop-filter: blur(8px);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 14px;
+}
+.gx-inspect-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
+.gx-inspect-name { font-family: var(--font-serif), Georgia, serif; font-size: 17px; color: var(--fg); }
+.gx-close { background: none; border: none; color: var(--muted); font-size: 19px; line-height: 1; cursor: pointer; }
+.gx-close:hover { color: var(--fg); }
+.gx-fields { display: grid; grid-template-columns: auto 1fr; gap: 7px 14px; margin: 0; }
+.gx-fields dt {
+  font-family: var(--font-mono), monospace;
+  font-size: 9.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--faint);
+}
+.gx-fields dd { margin: 0; font-size: 12.5px; color: var(--fg-soft); }
+.gx-fields dd.bad { color: var(--lie); }
+.gx-fields dd.warn { color: var(--ember); }
+.gx-fields dd.ok { color: var(--truth); }

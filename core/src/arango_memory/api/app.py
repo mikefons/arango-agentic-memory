@@ -19,6 +19,7 @@ from ..config import settings
 from ..embedding import Embedder, get_embedder
 from ..entity_api import get_entity, list_entities, seed
 from ..generation import Generator, get_generator
+from ..graph_api import tenant_graph
 from ..ingest.extract import get_extractor
 from ..ingest.procedural import get_steps
 from ..ingest.queue import InProcessQueue, StepIntent, WriteIntent, WriteQueue
@@ -177,6 +178,12 @@ class SupersedeResponse(BaseModel):
     status: Literal["superseded"] = "superseded"
 
 
+# ── /v1/graph (full semantic graph for visualization) ─────
+class GraphResponse(BaseModel):
+    nodes: list[dict[str, Any]] = Field(default_factory=list)
+    edges: list[dict[str, Any]] = Field(default_factory=list)
+
+
 # ── Route handlers ────────────────────────────────────────
 async def health(client: ArangoMemoryClient = Depends(get_client)) -> dict[str, object]:
     return {"status": "ok", "arango": client.ping(), "mode": settings.memory_mode}
@@ -301,6 +308,15 @@ async def supersede_endpoint(
     return SupersedeResponse()
 
 
+async def graph_endpoint(
+    tenant_id: str,
+    client: ArangoMemoryClient = Depends(get_client),
+) -> GraphResponse:
+    """The tenant's full semantic graph (entities + relates_to/Supersedes), §11."""
+    g = tenant_graph(client.db, tenant_id=tenant_id)
+    return GraphResponse(nodes=g["nodes"], edges=g["edges"])
+
+
 async def retrieve_endpoint(
     req: RetrieveRequest,
     client: ArangoMemoryClient = Depends(get_client),
@@ -382,6 +398,7 @@ def create_app(client: ArangoMemoryClient | None = None) -> FastAPI:
     app.add_api_route(
         "/v1/supersede", supersede_endpoint, methods=["POST"], response_model=SupersedeResponse
     )
+    app.add_api_route("/v1/graph", graph_endpoint, methods=["GET"], response_model=GraphResponse)
     return app
 
 
