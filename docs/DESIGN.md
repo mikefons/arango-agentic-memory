@@ -1,7 +1,7 @@
 # ArangoDB Agentic Memory System — Design Specification
 
 > **Status:** ✅ **v1 build sequence complete (Steps 0–7).** v2: all §21 adapters shipped (MCP, LangChain/LangGraph, CrewAI) + full §19 entity API + **Step 3e heavy extraction tier done**. Authoritative reference.
-> **Last updated:** 2026-06-09 (rev 39 — Memory Dungeon scene art — Showcase complete)
+> **Last updated:** 2026-06-09 (rev 40 — consolidated roadmap & backlog)
 >
 > **Rev 2 decisions:** Python-first core with a thin TypeScript client · v1 scope is Vercel-only · build a walking skeleton first, then a test/eval harness, then thicken each layer.
 >
@@ -1085,54 +1085,61 @@ LoCoMo benchmark runner/CLI (`eval/benchmark.py`) — completes Step 7 and the v
 
 > ✅ **v1 build sequence complete (Steps 0–7).** v2: **all §21 adapters shipped** — MCP server, LangChain/LangGraph, and CrewAI — plus **Step 3e** (heavy extraction tier) and **Step 3.5c** (Memory Dungeon reference app, Standard scope). The **Step 3.5c Showcase follow-up is also complete** (dreams Cron, OG cards, Edge Config flags, scene art — all config-gated). The project is feature-complete against the spec.
 
-### v2 (post-v1)
-MCP server, LangChain/LangGraph adapter, CrewAI adapter + G-Memory tiers.
+### Roadmap & backlog
 
-### Candidate enhancements (open ideas, not committed)
+> The v1 build sequence, v2 (§21 adapters + G-Memory tiers, entity API, Step 3e),
+> and Step 3.5c (Memory Dungeon + Showcase) are all **shipped** — the project is
+> feature-complete against the spec. Everything below is enhancement/hardening
+> work, **not gaps**. This is the single, prioritized source of future direction.
 
-Drawn from a review of adjacent prior art (a self-evolving POI link-analysis
-harness on the same ArangoDB substrate). Each is tagged to the phase where it
-would land. None are commitments — they are recorded here so the spec stays the
-single source of future direction.
+#### Prioritized (next up)
 
-1. **Lazy decay computed at query time** → **Step 4 (Lifecycle).**
-   Evaluate `strength × exp(-λ × time_since_access)` as a ranking-time multiplier
-   *inside* the AQL retrieval query rather than (only) via a scheduled batch job.
-   Always-fresh, removes a moving part. Trade-off: a computed value can't be
-   indexed, so it's a ranking multiplier only — the scheduled job is still needed
-   for hard soft-deprecation (`invalid_at`). Candidate to become the *default*
-   decay path (§11), with the batch job reserved for deprecation sweeps.
+1. **Corroboration count + source reliability → confidence**
+   *(ingestion conflict detection §8 Stage 3, conflict resolution §12).*
+   Today confidence is `1.0 observed / 0.6 seeded`. Add (a) **corroboration
+   count** — how many *independent* episodes assert the same fact (cheap; every
+   episode is already a provenance anchor) — as a confidence boost and
+   conflict-resolution tiebreaker, and (b) optional **source reliability** as a
+   per-episode score input. Sharpens conflict resolution + the trust story.
 
-2. **Corroboration count + source reliability as first-class confidence inputs**
-   → **Step 3 (ingestion conflict detection, §8 Stage 3) and Step 4 (conflict
-   resolution, §12).** Today confidence is `1.0 observed / 0.6 seeded` plus EWA
-   edge weights. Add (a) **corroboration count** — how many *independent*
-   episodes assert the same fact (cheap; every episode is already a provenance
-   anchor) — as a confidence boost and conflict-resolution tiebreaker, and
-   (b) optional **source reliability** as a per-episode input to the score.
+2. **Graph-algorithmic salience (centrality / community via Pregel)**
+   *(retrieval ranking §9, consolidation §13).* Retrieval is currently local
+   (vector + BM25 + 1–2 hop); we never compute global structure. Use ArangoDB
+   **Pregel** for (a) **centrality** (PageRank) as a salience signal that boosts
+   retrieval ranking and resists decay for hub entities, and (b) **community
+   detection** to cluster entities before Dream State review. Bonus: size/colour
+   nodes by centrality in the dungeon Graph Explorer.
 
-3. **Graph-algorithmic salience (centrality / community via Pregel)**
-   → **Step 2 (retrieval ranking) and Step 4 (consolidation).** Retrieval is
-   currently local (vector + BM25 + 1–2 hop traversal); we never compute global
-   structure. Two uses: (a) **centrality** (e.g. PageRank) as a salience signal
-   that boosts retrieval ranking and resists decay for hub entities; (b)
-   **community detection** to cluster related entities before Dream State review,
-   complementing the per-entity `mention_count` threshold (§13). Pregel ships with
-   ArangoDB, so this is cheap to prototype.
+3. **Core API reference docs** *(§3).* Write `docs/api.md` (the `/v1` HTTP
+   contract + the in-process Python surface), then `docs/ops.md` (runbook) and the
+   per-adapter guides (`docs/adapters/`).
 
-4. **Ontology evolution — propose new relationship types, human-in-loop review**
-   → **v2 research item (extends §13 Dream State), behind a config flag.**
-   `relates_to` types are a fixed enum (§5). Let the consolidation layer detect a
-   recurring cluster of `associated_with` edges that really represents a new,
-   nameable relation, write a proposal record, and require human approval before a
-   migration adds the new edge type. Dream State already reviews stored structure
-   asynchronously, so this is an extension, not a new subsystem. **Tension:** it
-   leans toward a curated application rather than a drop-in library — hence v2 and
-   flag-gated, not a v1 commitment.
+#### Backlog (unprioritized)
 
-*Not adopted from that prior art:* LangGraph for the core (contradicts the
-lite-mode zero-hot-path-LLM envelope, §10), its POI-specific domain schema, and
-its React/Cytoscape UI — all out of scope for a domain-agnostic memory backend.
+- **Lazy decay at query time** — AQL ranking-time `strength × exp(-λ·Δt)` as the
+  *default* decay path (the batch job stays for hard `invalid_at` sweeps, §11).
+- **Ontology evolution** — consolidation proposes new `relates_to` types from
+  recurring `associated_with` clusters, with human-in-loop approval before a
+  migration adds the edge type (v2 research, flag-gated; extends §13).
+- **Working-memory tier** — a `working` memory type + session TTL + the SCM
+  7-item cap (§5/§14).
+- **GAM session-topic trigger** for Dream State (consolidation is threshold-driven
+  today, §13).
+- **EWA edge weights** — exponentially-weighted-average update for edge `weight`
+  (today `1.0`, §12).
+- **OTEL meter instruments** — counters/histograms alongside the metrics event
+  emitter (§18).
+- **Dedicated embedding cache** (+ its hit rate), distinct from the query cache (§16).
+- **Hallucination-Rate / Noise-Reduction eval** — a generated-answer + LLM-judge
+  harness (§23).
+
+*Shipped in v2:* MCP server, LangChain/LangGraph, CrewAI (+ G-Memory tiers), the
+full §19 entity API, Step 3e extraction tier, the Memory Dungeon reference app.
+
+*Not adopted (from adjacent prior art):* LangGraph for the core (contradicts the
+lite-mode zero-hot-path-LLM envelope, §10), a POI-specific domain schema, and a
+React/Cytoscape UI baked into the core — out of scope for a domain-agnostic
+memory backend.
 
 ---
 
