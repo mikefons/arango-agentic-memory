@@ -25,6 +25,7 @@ import { TabNav } from "./TabNav";
 const EMPTY_GAME: GameState = { roomId: START_ROOM, inventory: [], heardClaims: [], caughtClaims: [] };
 
 const LS_KEY = "md-gamestate";
+const MSG_KEY = "md-messages";
 
 interface ToolOut {
   ok?: boolean;
@@ -54,9 +55,30 @@ export function DungeonGame() {
     }
   }, []);
 
-  const { messages, sendMessage, status, error } = useChat({
+  const { messages, sendMessage, status, error, setMessages } = useChat({
     transport: new DefaultChatTransport({ api: "/api/chat" }),
   });
+
+  // Restore the transcript so switching tabs (or reloading) doesn't reset the
+  // narrative — game position already persists via gameState above.
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem(MSG_KEY);
+      if (saved) setMessages(JSON.parse(saved));
+    } catch {
+      /* ignore */
+    }
+  }, [setMessages]);
+
+  // Persist the transcript once a turn settles.
+  useEffect(() => {
+    if (status !== "ready" || messages.length === 0) return;
+    try {
+      localStorage.setItem(MSG_KEY, JSON.stringify(messages));
+    } catch {
+      /* ignore */
+    }
+  }, [messages, status]);
 
   // fold completed tool outputs back into game state (+ persist)
   useEffect(() => {
