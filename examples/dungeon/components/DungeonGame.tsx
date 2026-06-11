@@ -41,6 +41,7 @@ interface ToolOut {
 export function DungeonGame() {
   const [game, setGame] = useState<GameState>(EMPTY_GAME);
   const [graph, setGraph] = useState<DungeonGraph>({ nodes: [], edges: [] });
+  const [sceneArt, setSceneArt] = useState(false);
   const [input, setInput] = useState("");
   const gameRef = useRef(game);
   gameRef.current = game;
@@ -138,6 +139,14 @@ export function DungeonGame() {
   useEffect(() => {
     refreshGraph();
   }, [messages.length, refreshGraph]);
+
+  // read config-gated feature flags once (scene art is off unless enabled)
+  useEffect(() => {
+    fetch("/api/flags")
+      .then((r) => (r.ok ? r.json() : {}))
+      .then((f: { sceneArt?: boolean }) => setSceneArt(!!f.sceneArt))
+      .catch(() => undefined);
+  }, []);
 
   // "the keep dreams" — trigger Dream State consolidation (§13)
   const [dreaming, setDreaming] = useState(false);
@@ -280,7 +289,7 @@ export function DungeonGame() {
                       <span className="text">{textOf(m.parts)}</span>
                     </div>
                   ) : (
-                    <>{m.parts.map((part, i) => renderPart(part, i, graph))}</>
+                    <>{m.parts.map((part, i) => renderPart(part, i, graph, sceneArt))}</>
                   )}
                 </div>
               ))}
@@ -344,7 +353,7 @@ function textOf(parts: { type: string; text?: string }[]): string {
 
 type Part = { type: string; text?: string; state?: string; output?: unknown };
 
-function renderPart(part: Part, i: number, graph: DungeonGraph) {
+function renderPart(part: Part, i: number, graph: DungeonGraph, sceneArt: boolean) {
   if (part.type === "text") return <p className="dm" key={i}>{part.text}</p>;
   if (!part.type.startsWith("tool-")) return null;
 
@@ -352,10 +361,11 @@ function renderPart(part: Part, i: number, graph: DungeonGraph) {
   if (part.state !== "output-available") return <ToolSkeleton key={i} tool={verb} />;
   const out = part.output as RoomView & { ok?: boolean; item?: string; reason?: string };
 
-  if (part.type === "tool-look") return <RoomSceneCard key={i} tool="look" view={out} graph={graph} />;
+  if (part.type === "tool-look")
+    return <RoomSceneCard key={i} tool="look" view={out} graph={graph} sceneArt={sceneArt} />;
   if (part.type === "tool-move") {
     return out.ok ? (
-      <RoomSceneCard key={i} tool="move" view={out} graph={graph} />
+      <RoomSceneCard key={i} tool="move" view={out} graph={graph} sceneArt={sceneArt} />
     ) : (
       <div className="tool-skel" key={i}>↳ {out.reason ?? "the way is barred"}</div>
     );
