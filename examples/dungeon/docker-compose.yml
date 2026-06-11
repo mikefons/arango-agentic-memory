@@ -30,6 +30,14 @@ services:
       ARANGO_USERNAME: root
       ARANGO_PASSWORD: dungeon-dev
       ARANGO_DB: dungeon
+      # Optional real background model (Dream State Haiku + full-mode enrichment).
+      # NEVER hardcode the key here — put it in examples/dungeon/.env (gitignored);
+      # docker compose interpolates it below. Defaults keep the core keyless/fake,
+      # so it still boots with no key. To enable, set BOTH in .env:
+      #   ANTHROPIC_API_KEY=<your-anthropic-key>
+      #   GENERATION_PROVIDER=anthropic
+      GENERATION_PROVIDER: ${GENERATION_PROVIDER:-fake}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
     ports:
       - "8080:8080"
     depends_on:
