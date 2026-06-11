@@ -45,8 +45,9 @@ The footer shows **core online** once the stack is up.
 - **Graph Explorer** ✅ a **Play · Graph** tab (`/graph`) — a full interactive visualization of the whole memory graph from ArangoDB (`GET /v1/graph`) via React Flow + elk: themed entity nodes, click-to-inspect, edge-type filter, before/after-supersession toggle, and search.
 - **Dungeon dreams** ✅ a **✦ dream** button runs Dream State consolidation (`POST /v1/dream`) — reviews flagged/well-attested entities, confirms conflicts, distills summaries — shows a report toast and refreshes the graph. A Vercel Cron (`vercel.json`) runs it nightly on deploys. Meaningful conflict-confirm/distillation needs a real background model on the **core**: put `ANTHROPIC_API_KEY=…` and `GENERATION_PROVIDER=anthropic` in `examples/dungeon/.env` (gitignored; read by docker compose — *not* the same file as the UI's `.env.local`), then `docker compose up --build`. Without it the core stays keyless and dreams just review/clear.
 
-Deferred to a Showcase follow-up: generative scene art (Blob), OG share cards,
-and Edge Config knobs.
+- **OG share cards** ✅ a **⧉ share** button opens a generated "Dungeon Run" image (`/api/og`, via `next/og`) — entities/relations counted live from the core, plus items/lies/room from the run.
+
+Deferred to a Showcase follow-up: generative scene art (Blob) and Edge Config knobs.
 
 ## Deploy (later)
 
