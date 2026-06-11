@@ -43,9 +43,10 @@ The footer shows **core online** once the stack is up.
 - **3.5c-2 — generative UI** ✅ room scene + inventory cards from tool outputs; the live **knowledge-graph map** (`/api/graph`) — rooms vs lore, edges from `relates_to`, refetched each turn.
 - **3.5c-3 — the lie engine** ✅ `talk`/`confront`; NPC testimony + claim entities; exposability (evidence-gated); the **Contradiction Ledger** + trust meters; a caught lie calls **`POST /v1/supersede`** → the false fact vanishes from the live map.
 - **Graph Explorer** ✅ a **Play · Graph** tab (`/graph`) — a full interactive visualization of the whole memory graph from ArangoDB (`GET /v1/graph`) via React Flow + elk: themed entity nodes, click-to-inspect, edge-type filter, before/after-supersession toggle, and search.
+- **Dungeon dreams** ✅ a **✦ dream** button runs Dream State consolidation (`POST /v1/dream`) — reviews flagged/well-attested entities, confirms conflicts, distills summaries — shows a report toast and refreshes the graph. A Vercel Cron (`vercel.json`) runs it nightly on deploys. (Meaningful conflict-confirm/distillation needs a background model on the core — set `ANTHROPIC_API_KEY` in the core's environment.)
 
-Deferred to a Showcase follow-up: the nightly "dungeon dreams" Cron, generative
-scene art (Blob), OG share cards, and Edge Config knobs.
+Deferred to a Showcase follow-up: generative scene art (Blob), OG share cards,
+and Edge Config knobs.
 
 ## Deploy (later)
 

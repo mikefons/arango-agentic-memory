@@ -58,3 +58,11 @@ export interface RetrieveOpts {
   max_memory_tokens?: number;
   k?: number;
 }
+
+export interface DreamResult {
+  reviewed: number;
+  superseded: number;
+  consolidated: number;
+  cleared: number;
+  breaker_tripped: boolean;
+}

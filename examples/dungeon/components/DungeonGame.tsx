@@ -2,7 +2,7 @@
 
 import { useChat } from "@ai-sdk/react";
 import { DefaultChatTransport } from "ai";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { getRoom, START_ROOM } from "@/lib/world";
 import type { GameState } from "@/lib/tools";
 import type { DungeonGraph } from "@/lib/graph";
@@ -126,17 +126,48 @@ export function DungeonGame() {
     streamRef.current?.scrollTo({ top: streamRef.current.scrollHeight, behavior: "smooth" });
   }, [messages]);
 
-  // refetch the knowledge graph after each turn (shared by the map + room cards)
-  useEffect(() => {
-    let alive = true;
+  // shared graph fetch (map + room cards); also re-run after a dream
+  const refreshGraph = useCallback(() => {
     fetch("/api/graph")
       .then((r) => (r.ok ? r.json() : { nodes: [], edges: [] }))
-      .then((g: DungeonGraph) => alive && setGraph(g))
+      .then((g: DungeonGraph) => setGraph(g))
       .catch(() => undefined);
-    return () => {
-      alive = false;
-    };
-  }, [messages.length]);
+  }, []);
+
+  useEffect(() => {
+    refreshGraph();
+  }, [messages.length, refreshGraph]);
+
+  // "the keep dreams" — trigger Dream State consolidation (§13)
+  const [dreaming, setDreaming] = useState(false);
+  const [dreamMsg, setDreamMsg] = useState<string | null>(null);
+  const runDream = useCallback(async () => {
+    setDreaming(true);
+    setDreamMsg(null);
+    try {
+      const res = await fetch("/api/dream", { method: "POST" });
+      const d = (await res.json()) as {
+        reviewed?: number;
+        consolidated?: number;
+        superseded?: number;
+        breaker_tripped?: boolean;
+        error?: string;
+      };
+      if (d.error) setDreamMsg("the keep could not dream — is the core awake?");
+      else if (d.breaker_tripped)
+        setDreamMsg("the keep stirred, then held its tongue — too much would change at once");
+      else
+        setDreamMsg(
+          `the keep dreamed · reviewed ${d.reviewed ?? 0} · consolidated ${d.consolidated ?? 0} · superseded ${d.superseded ?? 0}`,
+        );
+      refreshGraph();
+    } catch {
+      setDreamMsg("the keep could not dream — is the core awake?");
+    } finally {
+      setDreaming(false);
+      setTimeout(() => setDreamMsg(null), 7000);
+    }
+  }, [refreshGraph]);
 
   function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -172,6 +203,14 @@ export function DungeonGame() {
           <span className="here">{room.name}</span>
         </div>
         <div className="head-right">
+          <button
+            className="dream-btn"
+            onClick={runDream}
+            disabled={dreaming}
+            title="The keep dreams — run Dream State consolidation"
+          >
+            {dreaming ? "dreaming…" : "✦ dream"}
+          </button>
           <span className="pill save">
             <span className="dot" />
             run #1
@@ -251,6 +290,8 @@ export function DungeonGame() {
           <span className="stat">memory <b>full mode</b></span>
         </div>
       </footer>
+
+      {dreamMsg && <div className="dream-toast">{dreamMsg}</div>}
     </div>
   );
 }
