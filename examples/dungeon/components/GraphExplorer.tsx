@@ -8,6 +8,7 @@ import {
   ReactFlow,
   ReactFlowProvider,
   useEdgesState,
+  useNodesInitialized,
   useNodesState,
   useReactFlow,
   MarkerType,
@@ -91,6 +92,8 @@ function Inner() {
 
   const [nodes, setNodes, onNodesChange] = useNodesState<EntityFlowNode>([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([]);
+  const nodesInitialized = useNodesInitialized();
+  const [needsFit, setNeedsFit] = useState(false);
 
   const refresh = useCallback(() => {
     setLoading(true);
@@ -139,14 +142,22 @@ function Inner() {
         })),
       );
       setEdges(filtered.edges.map(makeEdge));
-      // let React Flow measure the nodes before fitting (avoids an empty-looking view)
-      setTimeout(() => alive && fitView({ padding: 0.25, duration: 400 }), 90);
+      // fit once the (custom) nodes are actually measured — see the effect below
+      setNeedsFit(true);
     })();
     return () => {
       alive = false;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [structureKey]);
+
+  // React Flow can only fit-to-view after the custom nodes have been measured.
+  useEffect(() => {
+    if (nodesInitialized && needsFit && nodes.length > 0) {
+      fitView({ padding: 0.2, duration: 400 });
+      setNeedsFit(false);
+    }
+  }, [nodesInitialized, needsFit, nodes.length, fitView]);
 
   useEffect(() => {
     setNodes((nds) =>
