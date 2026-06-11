@@ -7,9 +7,14 @@ import {
 } from "ai";
 import { arangoMemory } from "@arango-memory/vercel";
 import { DM_SYSTEM } from "@/lib/prompt";
+import { getFlags } from "@/lib/flags";
 import { resolveModel } from "@/lib/model";
 import { makeTools, type GameState } from "@/lib/tools";
 import { START_ROOM } from "@/lib/world";
+
+const HINT_INSTRUCTION =
+  "\n\nThe player may be stuck: weave one gentle, diegetic hint toward an " +
+  "unresolved contradiction into your narration, without naming the lie outright.";
 
 export const maxDuration = 30;
 
@@ -43,9 +48,10 @@ export async function POST(req: Request) {
     }),
   });
 
+  const flags = await getFlags();
   const result = streamText({
     model,
-    system: DM_SYSTEM,
+    system: flags.hint ? DM_SYSTEM + HINT_INSTRUCTION : DM_SYSTEM,
     messages: convertToModelMessages(messages),
     tools: makeTools(ctx, state),
     stopWhen: stepCountIs(5),

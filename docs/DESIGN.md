@@ -1,7 +1,7 @@
 # ArangoDB Agentic Memory System — Design Specification
 
 > **Status:** ✅ **v1 build sequence complete (Steps 0–7).** v2: all §21 adapters shipped (MCP, LangChain/LangGraph, CrewAI) + full §19 entity API + **Step 3e heavy extraction tier done**. Authoritative reference.
-> **Last updated:** 2026-06-09 (rev 37 — Memory Dungeon OG share cards)
+> **Last updated:** 2026-06-09 (rev 38 — Memory Dungeon feature toggles / Edge Config)
 >
 > **Rev 2 decisions:** Python-first core with a thin TypeScript client · v1 scope is Vercel-only · build a walking skeleton first, then a test/eval harness, then thicken each layer.
 >
@@ -990,7 +990,9 @@ The reference UI is **Memory Dungeon** (`examples/dungeon/`): a text-adventure w
 
 - **OG share cards** ✅ (rev 37) `app/api/og/route.tsx` renders a shareable "Dungeon Run" image (1200×630) via **`next/og`** `ImageResponse` (built into Next, no dep) — entities/relations counted live from the core (`GET /v1/graph`) + items/lies/room from the client run. A **⧉ share** button (play header) opens it with the current stats (`lib/share.ts` `buildShareUrl`, unit-tested). Renders locally; no external service.
 
-*Deferred (Showcase follow-up):* generative scene art (Gateway→Blob) and Edge Config knobs.
+- **Feature toggles (Edge Config)** ✅ (rev 38) `lib/flags.ts` — all features **off by default**; opt in via env (`SCENE_ART`, `DUNGEON_HINT`) or override at runtime via **Vercel Edge Config** (a `dungeon` key, read only when `EDGE_CONFIG` is set; `@vercel/edge-config` dynamically imported). `GET /api/flags` exposes them to the client. First knob: **`hint`** — when on, the chat route appends a hint instruction to the DM system prompt (off → prompt unchanged). Pure `flagsFromEnv` unit-tested.
+
+*Deferred (Showcase follow-up):* generative scene art (image provider → Blob), gated behind the `sceneArt` flag.
 
 The *full* benchmark run still completes at Step 7; this milestone establishes the harness and its regression gates.
 
