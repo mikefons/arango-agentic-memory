@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Background,
   Controls,
@@ -81,33 +81,41 @@ function Inner() {
   const { fitView, getNode, setCenter } = useReactFlow();
 
   const [raw, setRaw] = useState<MemoryGraph>({ nodes: [], edges: [] });
+  const [loading, setLoading] = useState(true);
   const [showSuperseded, setShowSuperseded] = useState(true);
-  const [rels, setRels] = useState<Set<string>>(new Set());
+  // Track only the relationship kinds the user *disabled* — so kinds that appear
+  // later (e.g. "supersedes" after a lie is caught) are visible by default.
+  const [disabled, setDisabled] = useState<Set<string>>(new Set());
   const [query, setQuery] = useState("");
   const [selected, setSelected] = useState<GraphNodeRaw | null>(null);
 
   const [nodes, setNodes, onNodesChange] = useNodesState<EntityFlowNode>([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([]);
 
-  // load the graph; initialise the edge-type filter to "all present"
-  useEffect(() => {
+  const refresh = useCallback(() => {
+    setLoading(true);
     fetch("/api/memory-graph")
       .then((r) => (r.ok ? r.json() : { nodes: [], edges: [] }))
-      .then((g: MemoryGraph) => {
-        setRaw(g);
-        setRels(new Set(relationshipKinds(g)));
-      })
-      .catch(() => undefined);
+      .then((g: MemoryGraph) => setRaw(g))
+      .catch(() => undefined)
+      .finally(() => setLoading(false));
   }, []);
 
+  useEffect(() => {
+    refresh();
+  }, [refresh]);
+
   const allKinds = useMemo(() => relationshipKinds(raw), [raw]);
+  const enabled = useMemo(
+    () => new Set(allKinds.filter((k) => !disabled.has(k))),
+    [allKinds, disabled],
+  );
   const filtered = useMemo(
-    () => filterGraph(raw, { showSuperseded, relationships: rels }),
-    [raw, showSuperseded, rels],
+    () => filterGraph(raw, { showSuperseded, relationships: enabled }),
+    [raw, showSuperseded, enabled],
   );
   const matches = useMemo(() => searchMatches(filtered.nodes, query), [filtered.nodes, query]);
 
-  // relayout only when the graph structure changes
   const structureKey = useMemo(
     () =>
       filtered.nodes.map((n) => n.id).join(",") +
@@ -116,6 +124,7 @@ function Inner() {
     [filtered],
   );
 
+  // relayout when the graph structure changes, then fit once nodes have rendered
   useEffect(() => {
     let alive = true;
     (async () => {
@@ -130,7 +139,8 @@ function Inner() {
         })),
       );
       setEdges(filtered.edges.map(makeEdge));
-      requestAnimationFrame(() => fitView({ padding: 0.25, duration: 400 }));
+      // let React Flow measure the nodes before fitting (avoids an empty-looking view)
+      setTimeout(() => alive && fitView({ padding: 0.25, duration: 400 }), 90);
     })();
     return () => {
       alive = false;
@@ -138,7 +148,6 @@ function Inner() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [structureKey]);
 
-  // patch highlight/selection flags without relayout
   useEffect(() => {
     setNodes((nds) =>
       nds.map((n) => ({
@@ -148,7 +157,6 @@ function Inner() {
     );
   }, [matches, selected, setNodes]);
 
-  // centre the first search hit
   useEffect(() => {
     if (!query) return;
     const first = filtered.nodes.find((n) => matches.has(n.id));
@@ -158,12 +166,14 @@ function Inner() {
   }, [query]);
 
   const toggleRel = (k: string) =>
-    setRels((prev) => {
+    setDisabled((prev) => {
       const next = new Set(prev);
       if (next.has(k)) next.delete(k);
       else next.add(k);
       return next;
     });
+
+  const empty = !loading && filtered.nodes.length === 0;
 
   return (
     <div className="gx-canvas">
@@ -185,8 +195,15 @@ function Inner() {
         <MiniMap pannable zoomable nodeStrokeWidth={2} />
       </ReactFlow>
 
-      {/* controls: search + filters */}
       <div className="gx-controls">
+        <div className="gx-actions">
+          <button className="gx-btn" onClick={refresh} disabled={loading}>
+            {loading ? "loading…" : "↻ refresh"}
+          </button>
+          <button className="gx-btn" onClick={() => fitView({ padding: 0.25, duration: 400 })}>
+            ⊹ re-center
+          </button>
+        </div>
         <input
           className="gx-search"
           value={query}
@@ -205,17 +222,18 @@ function Inner() {
           </label>
           {allKinds.map((k) => (
             <label className="gx-check" key={k}>
-              <input type="checkbox" checked={rels.has(k)} onChange={() => toggleRel(k)} />
+              <input type="checkbox" checked={!disabled.has(k)} onChange={() => toggleRel(k)} />
               {k}
             </label>
           ))}
         </div>
         <div className="gx-stat">
-          {filtered.nodes.length} entities · {filtered.edges.length} relations
+          {empty
+            ? "no entities yet — play a few turns, then refresh"
+            : `${filtered.nodes.length} entities · ${filtered.edges.length} relations`}
         </div>
       </div>
 
-      {/* inspect panel */}
       {selected && (
         <div className="gx-inspect">
           <div className="gx-inspect-head">
