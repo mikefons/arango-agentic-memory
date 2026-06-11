@@ -25,6 +25,7 @@ from ..ingest.procedural import get_steps
 from ..ingest.queue import InProcessQueue, StepIntent, WriteIntent, WriteQueue
 from ..ingest.worker import WriteWorker
 from ..lifecycle.conflict import supersede
+from ..lifecycle.dream import run_dream_state
 from ..retrieve.enrich import QueryCache
 from ..retrieve.search import retrieve
 from ..schema.collections import ensure_schema
@@ -184,6 +185,19 @@ class GraphResponse(BaseModel):
     edges: list[dict[str, Any]] = Field(default_factory=list)
 
 
+# ── /v1/dream (Dream State consolidation, §13) ────────────
+class DreamRequest(BaseModel):
+    ctx: AccessContext
+
+
+class DreamResponse(BaseModel):
+    reviewed: int = 0
+    superseded: int = 0
+    consolidated: int = 0
+    cleared: int = 0
+    breaker_tripped: bool = False
+
+
 # ── Route handlers ────────────────────────────────────────
 async def health(client: ArangoMemoryClient = Depends(get_client)) -> dict[str, object]:
     return {"status": "ok", "arango": client.ping(), "mode": settings.memory_mode}
@@ -317,6 +331,23 @@ async def graph_endpoint(
     return GraphResponse(nodes=g["nodes"], edges=g["edges"])
 
 
+async def dream_endpoint(
+    req: DreamRequest,
+    client: ArangoMemoryClient = Depends(get_client),
+    generator: Generator = Depends(get_generator_dep),
+) -> DreamResponse:
+    """Run Dream State consolidation for the tenant (§13) — mutating, write-only."""
+    _require_write(req.ctx)
+    r = run_dream_state(client.db, tenant_id=req.ctx.tenant_id, generator=generator)
+    return DreamResponse(
+        reviewed=r.reviewed,
+        superseded=r.superseded,
+        consolidated=r.consolidated,
+        cleared=r.cleared,
+        breaker_tripped=r.breaker_tripped,
+    )
+
+
 async def retrieve_endpoint(
     req: RetrieveRequest,
     client: ArangoMemoryClient = Depends(get_client),
@@ -399,6 +430,7 @@ def create_app(client: ArangoMemoryClient | None = None) -> FastAPI:
         "/v1/supersede", supersede_endpoint, methods=["POST"], response_model=SupersedeResponse
     )
     app.add_api_route("/v1/graph", graph_endpoint, methods=["GET"], response_model=GraphResponse)
+    app.add_api_route("/v1/dream", dream_endpoint, methods=["POST"], response_model=DreamResponse)
     return app
 
 

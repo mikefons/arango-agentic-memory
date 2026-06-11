@@ -1,7 +1,7 @@
 # ArangoDB Agentic Memory System — Design Specification
 
 > **Status:** ✅ **v1 build sequence complete (Steps 0–7).** v2: all §21 adapters shipped (MCP, LangChain/LangGraph, CrewAI) + full §19 entity API + **Step 3e heavy extraction tier done**. Authoritative reference.
-> **Last updated:** 2026-06-09 (rev 35 — Memory Dungeon direct-Anthropic fallback)
+> **Last updated:** 2026-06-09 (rev 36 — Memory Dungeon "dungeon dreams" / Dream State trigger)
 >
 > **Rev 2 decisions:** Python-first core with a thin TypeScript client · v1 scope is Vercel-only · build a walking skeleton first, then a test/eval harness, then thicken each layer.
 >
@@ -986,7 +986,9 @@ The reference UI is **Memory Dungeon** (`examples/dungeon/`): a text-adventure w
 
 - **Direct-provider fallback** ✅ (rev 35) `lib/model.ts` `resolveModel()` — prefers the AI Gateway, but when `AI_GATEWAY_API_KEY` is unset and `ANTHROPIC_API_KEY` is present it calls Anthropic directly (`@ai-sdk/anthropic`), so the dungeon is play-testable without a Gateway account. Pure `chooseProvider()` selection unit-tested keyless.
 
-*Deferred (Showcase follow-up):* the nightly "dungeon dreams" Cron → Dream State, generative scene art (Gateway→Blob), `@vercel/og` share cards, and Edge Config knobs.
+- **Dungeon dreams (Dream State)** ✅ (rev 36) New additive core read **`POST /v1/dream`** (write-only ABAC) wrapping `lifecycle/dream.run_dream_state` — reviews flagged/well-attested entities, confirms conflicts → supersede, distills summaries, with the circuit breaker; returns a `{reviewed, superseded, consolidated, cleared, breaker_tripped}` report. pytest-covered (**158 core tests**). A **✦ dream** button in the play header ("the keep dreams") POSTs `/api/dream`, shows the report as a transient toast, and refreshes the graph; a **Vercel Cron** route (`/api/cron/dream` + `vercel.json`, daily) runs it automatically on deploys. With a real background model on the core (`ANTHROPIC_API_KEY`) the Haiku conflict-confirm + distillation are exercised; with the keyless default it still reviews + clears.
+
+*Deferred (Showcase follow-up):* generative scene art (Gateway→Blob), `@vercel/og` share cards, and Edge Config knobs.
 
 The *full* benchmark run still completes at Step 7; this milestone establishes the harness and its regression gates.
 
@@ -1075,7 +1077,7 @@ LoCoMo benchmark runner/CLI (`eval/benchmark.py`) — completes Step 7 and the v
 
 ---
 
-> ✅ **v1 build sequence complete (Steps 0–7).** v2: **all §21 adapters shipped** — MCP server, LangChain/LangGraph, and CrewAI — plus **Step 3e** (heavy extraction tier) and **Step 3.5c** (Memory Dungeon reference app, Standard scope). Remaining: only the **Step 3.5c Showcase follow-up** (Cron "dungeon dreams", scene art, OG cards, Edge Config) — pure demo polish.
+> ✅ **v1 build sequence complete (Steps 0–7).** v2: **all §21 adapters shipped** — MCP server, LangChain/LangGraph, and CrewAI — plus **Step 3e** (heavy extraction tier) and **Step 3.5c** (Memory Dungeon reference app, Standard scope). Remaining: only the **Step 3.5c Showcase follow-up** (scene art, OG cards, Edge Config) — pure demo polish.
 
 ### v2 (post-v1)
 MCP server, LangChain/LangGraph adapter, CrewAI adapter + G-Memory tiers.

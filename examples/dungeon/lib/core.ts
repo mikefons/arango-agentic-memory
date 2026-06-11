@@ -10,6 +10,7 @@
 import type { MemoryGraph } from "./explorer";
 import type {
   Ctx,
+  DreamResult,
   Entity,
   EntityDetail,
   RetrieveOpts,
@@ -103,6 +104,14 @@ export async function seedEntity(name: string, ctx: Ctx): Promise<string | undef
     body: JSON.stringify({ profile: { preferences: [name] }, ctx: { access_level: "write", ...ctx } }),
   });
   return res.entity_ids[0];
+}
+
+/** Run Dream State consolidation for the tenant (§13) — the "dungeon dreams". */
+export function dream(tenantId: string, agentId: string): Promise<DreamResult> {
+  return coreFetch("/v1/dream", {
+    method: "POST",
+    body: JSON.stringify({ ctx: { tenant_id: tenantId, agent_id: agentId, access_level: "write" } }),
+  });
 }
 
 /** Record `new` superseding `old` (bi-temporal §12) — the "caught a lie" primitive. */

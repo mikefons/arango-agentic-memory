@@ -188,6 +188,42 @@ header {
 .pill .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--ember); box-shadow: 0 0 8px var(--ember); }
 .pill.save .dot { background: var(--truth); box-shadow: 0 0 8px var(--truth); }
 
+.dream-btn {
+  font-family: var(--font-mono), monospace;
+  font-size: 10.5px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ember);
+  background: var(--ember-dim);
+  border: 1px solid var(--ember-dim);
+  border-radius: 999px;
+  padding: 5px 12px;
+  cursor: pointer;
+  transition: border-color 0.15s, opacity 0.15s;
+}
+.dream-btn:hover:not(:disabled) { border-color: var(--ember); }
+.dream-btn:disabled { opacity: 0.55; cursor: default; }
+
+.dream-toast {
+  position: fixed;
+  bottom: 48px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 60;
+  font-family: var(--font-serif), Georgia, serif;
+  font-size: 15px;
+  font-style: italic;
+  color: var(--fg-soft);
+  background: var(--shell);
+  backdrop-filter: blur(10px);
+  border: 1px solid var(--ember-dim);
+  border-radius: 999px;
+  padding: 10px 20px;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.4);
+  animation: dreamrise 0.5s ease;
+}
+@keyframes dreamrise { from { opacity: 0; transform: translate(-50%, 10px); } to { opacity: 1; transform: translate(-50%, 0); } }
+
 .theme-toggle {
   width: 30px; height: 30px;
   display: grid; place-items: center;
