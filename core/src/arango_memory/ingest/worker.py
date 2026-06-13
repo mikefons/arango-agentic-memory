@@ -97,6 +97,7 @@ class WriteWorker:
                 extractor=self._extractor,
                 generator=self._generator,
                 mode=settings.memory_mode,
+                source_reliability=intent.source_reliability,
             )
 
     def drain(self) -> int:

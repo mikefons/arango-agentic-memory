@@ -71,10 +71,13 @@ FOR start IN @seed_ids
            AND mem.agent_id == @agent_id
            AND mem.invalid_at == null
            AND mem._key NOT IN @seed_keys
-        COLLECT key = mem._key AGGREGATE hops = MIN(LENGTH(p.edges)) INTO rows = mem
-        SORT hops ASC
+        COLLECT key = mem._key AGGREGATE hops = MIN(LENGTH(p.edges)),
+                                          belief = MAX(related.belief) INTO rows = mem
+        // closer hops rank higher, scaled 0.5–1.0 by how corroborated the bridge is (§12)
+        LET score = (1.0 / (1.0 + hops)) * (0.5 + 0.5 * NOT_NULL(belief, 0))
+        SORT score DESC
         LIMIT @pool
-        RETURN { key: key, score: 1.0 / (1.0 + hops),
+        RETURN { key: key, score: score,
                  text: rows[0].text, embedding: rows[0].embedding, type: rows[0].type,
                  strength: rows[0].strength, accessed_at: rows[0].accessed_at }
 """

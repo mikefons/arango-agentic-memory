@@ -84,6 +84,7 @@ class StoreRequest(BaseModel):
     content: str
     ctx: AccessContext
     turn_index: int = 0
+    source_reliability: float = 1.0
 
 
 class StoreResponse(BaseModel):
@@ -217,6 +218,7 @@ async def store_endpoint(
         agent_id=req.ctx.agent_id,
         session_id=req.ctx.session_id,
         turn_index=req.turn_index,
+        source_reliability=req.source_reliability,
     )
     queue.enqueue(intent)
     return StoreResponse(episode_id=intent.key, memory_ids=[f"{intent.key}-mem"])

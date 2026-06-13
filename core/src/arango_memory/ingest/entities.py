@@ -29,10 +29,17 @@ from ..telemetry import metrics
 from .extract import ExtractedEntity, Extractor, cooccurring_pairs
 from .temporal import parse_explicit_time
 
+# A corroborating mention bumps mention_count, accumulates the source's
+# reliability, and recomputes belief = confidence_prior × (1 − (1−base)^Σreliability) (§8/§12).
 _UPSERT_ENTITY = """
 UPSERT { tenant_id: @tenant_id, name: @name, label: @label }
 INSERT @doc
-UPDATE { mention_count: OLD.mention_count + 1, accessed_at: @now }
+UPDATE {
+  mention_count: OLD.mention_count + 1,
+  reliability_sum: NOT_NULL(OLD.reliability_sum, 0) + @rel,
+  belief: OLD.confidence * (1 - POW(1 - @base, NOT_NULL(OLD.reliability_sum, 0) + @rel)),
+  accessed_at: @now
+}
 IN entities
 RETURN NEW._key
 """
@@ -46,7 +53,28 @@ FOR e IN entities
 _INCREMENT = """
 FOR e IN entities
   FILTER e._key == @key
-  UPDATE e WITH { mention_count: e.mention_count + 1, accessed_at: @now } IN entities
+  UPDATE e WITH {
+    mention_count: e.mention_count + 1,
+    reliability_sum: NOT_NULL(e.reliability_sum, 0) + @rel,
+    belief: e.confidence * (1 - POW(1 - @base, NOT_NULL(e.reliability_sum, 0) + @rel)),
+    accessed_at: @now
+  } IN entities
+"""
+
+# A relates_to edge corroborated by another episode: bump the count, accumulate
+# reliability, recompute belief (prior 1.0 for a relation). Typed relationship
+# from a later assertion wins (last-writer). mentions/produced_by stay idempotent.
+_RELATE = """
+UPSERT { _key: @key }
+INSERT @doc
+UPDATE {
+  corroboration: NOT_NULL(OLD.corroboration, 1) + 1,
+  reliability_sum: NOT_NULL(OLD.reliability_sum, 0) + @rel,
+  belief: 1 - POW(1 - @base, NOT_NULL(OLD.reliability_sum, 0) + @rel),
+  relationship: @relationship,
+  last_seen: @now
+}
+IN relates_to
 """
 
 
@@ -91,6 +119,41 @@ def _edge(
     db.collection(collection).insert(doc, overwrite_mode="ignore", silent=True)
 
 
+def _relate(
+    db: StandardDatabase,
+    *,
+    key: str,
+    from_id: str,
+    to_id: str,
+    relationship: str,
+    rel: float,
+    base: float,
+    now: str,
+    valid_time: str | None,
+) -> None:
+    """Corroborate (UPSERT-increment) one `relates_to` edge for this episode (§5/§12)."""
+    doc = {
+        "_key": key,
+        "_from": from_id,
+        "_to": to_id,
+        "relationship": relationship,
+        "corroboration": 1,
+        "reliability_sum": rel,
+        "belief": 1 - (1 - base) ** rel,
+        "ingestion_time": now,
+        "valid_time": valid_time or now,
+        "valid_time_explicit": valid_time is not None,
+        "invalid_at": None,
+        "weight": 1.0,
+        "last_seen": now,
+    }
+    bind: dict[str, Any] = {
+        "key": key, "doc": doc, "relationship": relationship,
+        "rel": rel, "base": base, "now": now,
+    }
+    db.aql.execute(_RELATE, bind_vars=bind)
+
+
 def write_entities(
     db: StandardDatabase,
     *,
@@ -101,8 +164,13 @@ def write_entities(
     agent_id: str,
     extractor: Extractor,
     embedder: Embedder,
+    source_reliability: float = 1.0,
 ) -> list[str]:
-    """Extract, dedupe/flag, persist entities + edges. Returns resolved entity keys."""
+    """Extract, dedupe/flag, persist entities + edges. Returns resolved entity keys.
+
+    `source_reliability` (0..1) weights how much this episode corroborates each
+    fact: it accumulates into `reliability_sum` and drives `belief` (§8/§12).
+    """
     extracted = extractor.extract(content)
     if not extracted:
         return []
@@ -110,6 +178,8 @@ def write_entities(
     cursor = cast(Cursor, db.aql.execute(_FETCH_EXISTING, bind_vars={"tenant_id": tenant_id}))
     existing = list(cursor)
     now = utcnow_iso()
+    base = settings.corroboration_base
+    rel = source_reliability
     explicit_vt = parse_explicit_time(content)  # when the fact holds (§4)
     key_by_entity: dict[tuple[str, str], str] = {}
     key_by_name: dict[str, str] = {}
@@ -121,27 +191,26 @@ def write_entities(
 
         if match is not None and sim >= settings.entity_merge_threshold:
             # Semantic duplicate of a differently-named entity → merge into it.
-            db.aql.execute(_INCREMENT, bind_vars={"key": match["key"], "now": now})
+            inc_bind: dict[str, Any] = {"key": match["key"], "now": now, "rel": rel, "base": base}
+            db.aql.execute(_INCREMENT, bind_vars=inc_bind)
             key = cast(str, match["key"])
         else:
             needs_review = match is not None and sim >= settings.entity_flag_threshold
             detected += int(needs_review)
             doc = _entity_doc(
-                ent, vec, tenant_id, agent_id, embedder, now, needs_review, match, explicit_vt
+                ent, vec, tenant_id, agent_id, embedder, now, needs_review, match, explicit_vt,
+                rel, base,
             )
-            cursor = cast(
-                Cursor,
-                db.aql.execute(
-                    _UPSERT_ENTITY,
-                    bind_vars={
-                        "tenant_id": tenant_id,
-                        "name": ent.name,
-                        "label": ent.label,
-                        "doc": doc,
-                        "now": now,
-                    },
-                ),
-            )
+            up_bind: dict[str, Any] = {
+                "tenant_id": tenant_id,
+                "name": ent.name,
+                "label": ent.label,
+                "doc": doc,
+                "now": now,
+                "rel": rel,
+                "base": base,
+            }
+            cursor = cast(Cursor, db.aql.execute(_UPSERT_ENTITY, bind_vars=up_bind))
             key = cast(str, next(iter(cursor)))
 
         key_by_entity[(ent.name, ent.label)] = key
@@ -152,30 +221,26 @@ def write_entities(
             f"entities/{key}", f"episodes/{episode_key}",
         )
 
-    # Typed relations (GLiREL/Haiku) win; written first so the co-occurrence pass
-    # below (same edge key, overwrite_mode="ignore") only fills untyped pairs (§5).
-    vt_extra: dict[str, Any] = (
-        {"valid_time": explicit_vt, "valid_time_explicit": True} if explicit_vt else {}
-    )
-    for rel in extractor.extract_relations(content, extracted):
-        ka, kb = key_by_name.get(rel.source), key_by_name.get(rel.target)
+    # One relation per entity pair (typed relationship wins over co-occurrence),
+    # corroborated exactly once per episode so the count tracks independent episodes.
+    pairs: dict[tuple[str, str], str] = {}
+    for relation in extractor.extract_relations(content, extracted):
+        ka, kb = key_by_name.get(relation.source), key_by_name.get(relation.target)
         if not ka or not kb or ka == kb:
             continue
         lo, hi = sorted((ka, kb))
-        _edge(
-            db, "relates_to", f"{lo}__{hi}", f"entities/{lo}", f"entities/{hi}",
-            relationship=rel.relationship, **vt_extra,
-        )
-
+        pairs[(lo, hi)] = relation.relationship
     for left, right in cooccurring_pairs(extracted):
         ka = key_by_entity[(left.name, left.label)]
         kb = key_by_entity[(right.name, right.label)]
         if ka == kb:
             continue
         lo, hi = sorted((ka, kb))
-        _edge(
-            db, "relates_to", f"{lo}__{hi}", f"entities/{lo}", f"entities/{hi}",
-            relationship="associated_with", **vt_extra,
+        pairs.setdefault((lo, hi), "associated_with")  # don't downgrade a typed relation
+    for (lo, hi), relationship in pairs.items():
+        _relate(
+            db, key=f"{lo}__{hi}", from_id=f"entities/{lo}", to_id=f"entities/{hi}",
+            relationship=relationship, rel=rel, base=base, now=now, valid_time=explicit_vt,
         )
 
     if detected:
@@ -195,7 +260,10 @@ def _entity_doc(
     needs_review: bool,
     match: dict[str, Any] | None,
     valid_time: str | None = None,
+    reliability: float = 1.0,
+    base: float = 0.5,
 ) -> dict[str, Any]:
+    confidence = 1.0
     return {
         "name": ent.name,
         "label": ent.label,
@@ -205,7 +273,11 @@ def _entity_doc(
         "embedding_model": embedder.model,
         "embedding_version": embedder.version,
         "mention_count": 1,
-        "confidence": 1.0,
+        "confidence": confidence,
+        # belief = evidential confidence from corroboration × source reliability (§8/§12);
+        # `confidence` stays the source prior (observed 1.0 / seed 0.6).
+        "reliability_sum": reliability,
+        "belief": confidence * (1 - (1 - base) ** reliability),
         "source": "observed",
         "summary": "",              # distilled by Dream State (§13)
         "consolidated_at": None,

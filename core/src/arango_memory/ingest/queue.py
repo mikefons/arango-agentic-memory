@@ -26,6 +26,7 @@ class WriteIntent:
     agent_id: str
     session_id: str | None = None
     turn_index: int = 0
+    source_reliability: float = 1.0
     attempts: int = 0
 
     @property
@@ -46,6 +47,7 @@ class WriteIntent:
             agent_id=self.agent_id,
             session_id=self.session_id,
             turn_index=self.turn_index,
+            source_reliability=self.source_reliability,
             attempts=self.attempts + 1,
         )
 

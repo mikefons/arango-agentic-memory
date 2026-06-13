@@ -17,7 +17,7 @@ _NODES = """
 FOR e IN entities
   FILTER e.tenant_id == @tenant_id
   RETURN { id: e._key, name: e.name, label: e.label, source: e.source,
-           mention_count: e.mention_count, valid_time: e.valid_time,
+           mention_count: e.mention_count, belief: e.belief, valid_time: e.valid_time,
            valid_time_explicit: e.valid_time_explicit, needs_review: e.needs_review,
            conflict_with: e.conflict_with, invalid_at: e.invalid_at }
 """
@@ -30,7 +30,8 @@ FOR edge IN @@coll
   LET f = PARSE_IDENTIFIER(edge._from).key
   LET t = PARSE_IDENTIFIER(edge._to).key
   FILTER f IN @keys AND t IN @keys
-  RETURN { source: f, target: t, relationship: edge.relationship, kind: @kind }
+  RETURN { source: f, target: t, relationship: edge.relationship, kind: @kind,
+           corroboration: edge.corroboration, belief: edge.belief }
 """
 
 
