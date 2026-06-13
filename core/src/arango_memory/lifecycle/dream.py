@@ -104,7 +104,14 @@ def run_dream_state(
                     f"A: {entity['name']}\nB: {target['name']}", system=_CONFLICT_SYSTEM
                 ).strip().upper()
                 if verdict.startswith("CONTRADICTS"):
-                    supersessions.append((key, target["_key"]))
+                    # Tiebreaker (§12): the better-attested entity survives; the
+                    # weaker one is superseded. Belief, then mention_count.
+                    e_score = (entity.get("belief", 0.0), entity.get("mention_count", 0))
+                    t_score = (target.get("belief", 0.0), target.get("mention_count", 0))
+                    if t_score > e_score:
+                        supersessions.append((target["_key"], key))  # target wins
+                    else:
+                        supersessions.append((key, target["_key"]))  # entity wins
                 else:
                     clears.append(key)
 

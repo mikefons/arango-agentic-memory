@@ -1,7 +1,7 @@
 # ArangoDB Agentic Memory System — Design Specification
 
 > **Status:** ✅ **v1 build sequence complete (Steps 0–7).** v2: all §21 adapters shipped (MCP, LangChain/LangGraph, CrewAI) + full §19 entity API + **Step 3e heavy extraction tier done**. Authoritative reference.
-> **Last updated:** 2026-06-09 (rev 40 — consolidated roadmap & backlog)
+> **Last updated:** 2026-06-09 (rev 41 — corroboration count + source reliability → belief)
 >
 > **Rev 2 decisions:** Python-first core with a thin TypeScript client · v1 scope is Vercel-only · build a walking skeleton first, then a test/eval harness, then thicken each layer.
 >
@@ -1092,17 +1092,21 @@ LoCoMo benchmark runner/CLI (`eval/benchmark.py`) — completes Step 7 and the v
 > feature-complete against the spec. Everything below is enhancement/hardening
 > work, **not gaps**. This is the single, prioritized source of future direction.
 
+**Shipped from this list:** ✅ **Corroboration count + source reliability → belief**
+(rev 41). `confidence` stays the source prior (observed 1.0 / seed 0.6); a new
+**`belief`** = `confidence × (1 − (1−base)^reliability_sum)` blends corroboration
+(each independent episode adds its `source_reliability` to `reliability_sum`) with
+source trust. Entities accumulate it on every corroborating write; **`relates_to`
+edges gained a corroboration counter** (UPSERT-increment, once per pair per
+episode); Dream State uses belief as the **conflict-resolution tiebreaker** (the
+better-attested entity survives); belief boosts the **graph retrieval signal**;
+and `belief`/`corroboration` are surfaced in `/v1/entity`, `/v1/entities`, and
+`/v1/graph`. `store(source_reliability=…)` + `POST /v1/store {source_reliability}`
+thread the per-source trust. (§8/§12)
+
 #### Prioritized (next up)
 
-1. **Corroboration count + source reliability → confidence**
-   *(ingestion conflict detection §8 Stage 3, conflict resolution §12).*
-   Today confidence is `1.0 observed / 0.6 seeded`. Add (a) **corroboration
-   count** — how many *independent* episodes assert the same fact (cheap; every
-   episode is already a provenance anchor) — as a confidence boost and
-   conflict-resolution tiebreaker, and (b) optional **source reliability** as a
-   per-episode score input. Sharpens conflict resolution + the trust story.
-
-2. **Graph-algorithmic salience (centrality / community via Pregel)**
+1. **Graph-algorithmic salience (centrality / community via Pregel)**
    *(retrieval ranking §9, consolidation §13).* Retrieval is currently local
    (vector + BM25 + 1–2 hop); we never compute global structure. Use ArangoDB
    **Pregel** for (a) **centrality** (PageRank) as a salience signal that boosts
@@ -1110,7 +1114,7 @@ LoCoMo benchmark runner/CLI (`eval/benchmark.py`) — completes Step 7 and the v
    detection** to cluster entities before Dream State review. Bonus: size/colour
    nodes by centrality in the dungeon Graph Explorer.
 
-3. **Core API reference docs** *(§3).* Write `docs/api.md` (the `/v1` HTTP
+2. **Core API reference docs** *(§3).* Write `docs/api.md` (the `/v1` HTTP
    contract + the in-process Python surface), then `docs/ops.md` (runbook) and the
    per-adapter guides (`docs/adapters/`).
 

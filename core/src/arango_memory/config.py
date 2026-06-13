@@ -75,6 +75,10 @@ class Settings(BaseSettings):
     # entities — ≥ merge → same entity; ≥ flag → create + mark for Dream State.
     entity_merge_threshold: float = Field(default=0.9, ge=0.0, le=1.0)
     entity_flag_threshold: float = Field(default=0.6, ge=0.0, le=1.0)
+    # Corroboration → belief (DESIGN.md §8/§12): belief = confidence_prior ×
+    # (1 − (1 − base)^reliability_sum). Each corroborating episode adds its
+    # source_reliability to reliability_sum; `base` is the per-evidence increment.
+    corroboration_base: float = Field(default=0.5, gt=0.0, lt=1.0)
     # Consolidation / Dream State (DESIGN.md §13).
     consolidation_mention_threshold: int = Field(default=5, ge=1)
     dream_breaker_threshold: float = Field(default=0.5, ge=0.0, le=1.0)

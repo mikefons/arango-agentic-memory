@@ -43,6 +43,7 @@ def store(
     generator: Generator | None = None,
     mode: str = "lite",
     message_type: str | None = None,
+    source_reliability: float = 1.0,
 ) -> StoreResult:
     """Instrumented write (DESIGN.md §18): `memory.write` span + `write` metric.
 
@@ -66,6 +67,7 @@ def store(
             generator=generator,
             mode=mode,
             message_type=message_type,
+            source_reliability=source_reliability,
         )
     metrics.emit("write", duration_ms=(time.perf_counter() - started) * 1000.0)
     return result
@@ -84,6 +86,7 @@ def _store_impl(
     generator: Generator | None = None,
     mode: str = "lite",
     message_type: str | None = None,
+    source_reliability: float = 1.0,
 ) -> StoreResult:
     """Persist one turn as an episode + episodic memory, with extracted entities.
 
@@ -123,6 +126,7 @@ def _store_impl(
         "tenant_id": tenant_id,
         "session_id": session_id,
         "message_type": message_type,
+        "source_reliability": source_reliability,
         "ingested_at": now,
     }
     db.collection("episodes").insert(episode, overwrite_mode="ignore", silent=True)
@@ -160,6 +164,7 @@ def _store_impl(
             agent_id=agent_id,
             extractor=extractor or get_extractor(),
             embedder=emb,
+            source_reliability=source_reliability,
         )
 
     return StoreResult(episode_id=key, memory_ids=[mem_key], entity_ids=entity_ids)
