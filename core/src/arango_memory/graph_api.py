@@ -17,7 +17,8 @@ _NODES = """
 FOR e IN entities
   FILTER e.tenant_id == @tenant_id
   RETURN { id: e._key, name: e.name, label: e.label, source: e.source,
-           mention_count: e.mention_count, belief: e.belief, valid_time: e.valid_time,
+           mention_count: e.mention_count, belief: e.belief, centrality: e.centrality,
+           valid_time: e.valid_time,
            valid_time_explicit: e.valid_time_explicit, needs_review: e.needs_review,
            conflict_with: e.conflict_with, invalid_at: e.invalid_at }
 """

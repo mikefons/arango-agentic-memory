@@ -26,6 +26,7 @@ from ..ingest.queue import InProcessQueue, StepIntent, WriteIntent, WriteQueue
 from ..ingest.worker import WriteWorker
 from ..lifecycle.conflict import supersede
 from ..lifecycle.dream import run_dream_state
+from ..lifecycle.salience import compute_centrality
 from ..retrieve.enrich import QueryCache
 from ..retrieve.search import retrieve
 from ..schema.collections import ensure_schema
@@ -199,6 +200,15 @@ class DreamResponse(BaseModel):
     breaker_tripped: bool = False
 
 
+# ── /v1/salience (graph centrality, §9/§13) ───────────────
+class SalienceRequest(BaseModel):
+    ctx: AccessContext
+
+
+class SalienceResponse(BaseModel):
+    entities: int = 0
+
+
 # ── Route handlers ────────────────────────────────────────
 async def health(client: ArangoMemoryClient = Depends(get_client)) -> dict[str, object]:
     return {"status": "ok", "arango": client.ping(), "mode": settings.memory_mode}
@@ -350,6 +360,16 @@ async def dream_endpoint(
     )
 
 
+async def salience_endpoint(
+    req: SalienceRequest,
+    client: ArangoMemoryClient = Depends(get_client),
+) -> SalienceResponse:
+    """Recompute PageRank centrality for the tenant's entities (§9/§13) — write-only."""
+    _require_write(req.ctx)
+    result = compute_centrality(client.db, tenant_id=req.ctx.tenant_id)
+    return SalienceResponse(entities=result.get("entities", 0))
+
+
 async def retrieve_endpoint(
     req: RetrieveRequest,
     client: ArangoMemoryClient = Depends(get_client),
@@ -433,6 +453,9 @@ def create_app(client: ArangoMemoryClient | None = None) -> FastAPI:
     )
     app.add_api_route("/v1/graph", graph_endpoint, methods=["GET"], response_model=GraphResponse)
     app.add_api_route("/v1/dream", dream_endpoint, methods=["POST"], response_model=DreamResponse)
+    app.add_api_route(
+        "/v1/salience", salience_endpoint, methods=["POST"], response_model=SalienceResponse
+    )
     return app
 
 

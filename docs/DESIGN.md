@@ -1,7 +1,7 @@
 # ArangoDB Agentic Memory System — Design Specification
 
 > **Status:** ✅ **v1 build sequence complete (Steps 0–7).** v2: all §21 adapters shipped (MCP, LangChain/LangGraph, CrewAI) + full §19 entity API + **Step 3e heavy extraction tier done**. Authoritative reference.
-> **Last updated:** 2026-06-09 (rev 41 — corroboration count + source reliability → belief)
+> **Last updated:** 2026-06-09 (rev 42 — graph salience: in-process PageRank centrality, no Pregel)
 >
 > **Rev 2 decisions:** Python-first core with a thin TypeScript client · v1 scope is Vercel-only · build a walking skeleton first, then a test/eval harness, then thicken each layer.
 >
@@ -1104,22 +1104,26 @@ and `belief`/`corroboration` are surfaced in `/v1/entity`, `/v1/entities`, and
 `/v1/graph`. `store(source_reliability=…)` + `POST /v1/store {source_reliability}`
 thread the per-source trust. (§8/§12)
 
+✅ **Graph-algorithmic salience — PageRank centrality** (rev 42). **Note:** ArangoDB
+**removed Pregel in 3.12**, so centrality is computed **in-process** — a short
+PageRank power-iteration (`lifecycle/salience.py`) over the tenant's small entity
+subgraph (no Pregel, no license, keyless-testable). `POST /v1/salience` recomputes
++ persists normalized `centrality` (0..1, hub = 1.0); it boosts the **graph
+retrieval signal** (max of belief/centrality) and is surfaced in `/v1/entity`,
+`/v1/entities`, `/v1/graph`. The dungeon recomputes it on "✦ dream" and sizes
+Graph-Explorer node dots by it. *(Community detection via label-propagation
+remains in the backlog.)*
+
 #### Prioritized (next up)
 
-1. **Graph-algorithmic salience (centrality / community via Pregel)**
-   *(retrieval ranking §9, consolidation §13).* Retrieval is currently local
-   (vector + BM25 + 1–2 hop); we never compute global structure. Use ArangoDB
-   **Pregel** for (a) **centrality** (PageRank) as a salience signal that boosts
-   retrieval ranking and resists decay for hub entities, and (b) **community
-   detection** to cluster entities before Dream State review. Bonus: size/colour
-   nodes by centrality in the dungeon Graph Explorer.
-
-2. **Core API reference docs** *(§3).* Write `docs/api.md` (the `/v1` HTTP
+1. **Core API reference docs** *(§3).* Write `docs/api.md` (the `/v1` HTTP
    contract + the in-process Python surface), then `docs/ops.md` (runbook) and the
    per-adapter guides (`docs/adapters/`).
 
 #### Backlog (unprioritized)
 
+- **Graph community detection** — label-propagation over the entity subgraph
+  (in-process, like centrality) to cluster entities before Dream State review (§13).
 - **Lazy decay at query time** — AQL ranking-time `strength × exp(-λ·Δt)` as the
   *default* decay path (the batch job stays for hard `invalid_at` sweeps, §11).
 - **Ontology evolution** — consolidation proposes new `relates_to` types from

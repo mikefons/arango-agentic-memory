@@ -17,10 +17,12 @@ export function EntityNode({ data }: NodeProps<EntityFlowNode>) {
   if (highlighted) cls.push("highlighted");
   if (selected) cls.push("selected");
 
+  // size the accent dot by PageRank centrality (salience cue; 6–14px)
+  const dot = 6 + Math.round((node.centrality ?? 0) * 8);
   return (
     <div className={cls.join(" ")} data-label={node.label}>
       <Handle type="target" position={Position.Top} className="gx-handle" />
-      <span className="gx-dot" />
+      <span className="gx-dot" style={{ width: dot, height: dot }} />
       <span className="gx-name">{node.name}</span>
       <span className="gx-label">{node.label}</span>
       <Handle type="source" position={Position.Bottom} className="gx-handle" />

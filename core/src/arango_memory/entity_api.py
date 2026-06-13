@@ -18,8 +18,8 @@ from .models import utcnow_iso
 # Public projection — never exposes embeddings (§17).
 _PROJECT = """{ id: e._key, name: e.name, label: e.label, summary: e.summary,
                 mention_count: e.mention_count, confidence: e.confidence,
-                belief: e.belief, source: e.source, needs_review: e.needs_review,
-                conflict_with: e.conflict_with }"""
+                belief: e.belief, centrality: e.centrality, source: e.source,
+                needs_review: e.needs_review, conflict_with: e.conflict_with }"""
 
 _GET = f"""
 FOR e IN entities
