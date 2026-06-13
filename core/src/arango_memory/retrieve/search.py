@@ -72,9 +72,12 @@ FOR start IN @seed_ids
            AND mem.invalid_at == null
            AND mem._key NOT IN @seed_keys
         COLLECT key = mem._key AGGREGATE hops = MIN(LENGTH(p.edges)),
-                                          belief = MAX(related.belief) INTO rows = mem
-        // closer hops rank higher, scaled 0.5–1.0 by how corroborated the bridge is (§12)
-        LET score = (1.0 / (1.0 + hops)) * (0.5 + 0.5 * NOT_NULL(belief, 0))
+                                          belief = MAX(related.belief),
+                                          centrality = MAX(related.centrality) INTO rows = mem
+        // closer hops rank higher, scaled 0.5–1.0 by the bridge's salience —
+        // the stronger of corroboration (belief, §12) or PageRank centrality (§9).
+        LET salience = MAX([NOT_NULL(belief, 0), NOT_NULL(centrality, 0)])
+        LET score = (1.0 / (1.0 + hops)) * (0.5 + 0.5 * salience)
         SORT score DESC
         LIMIT @pool
         RETURN { key: key, score: score,

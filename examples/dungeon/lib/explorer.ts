@@ -18,6 +18,8 @@ export interface GraphNodeRaw {
   needs_review?: boolean;
   conflict_with?: string | null;
   invalid_at?: string | null;
+  belief?: number;
+  centrality?: number;
 }
 
 export interface GraphEdgeRaw {

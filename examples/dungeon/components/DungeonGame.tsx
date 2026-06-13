@@ -193,6 +193,8 @@ export function DungeonGame() {
                 ".",
         );
       }
+      // recompute graph salience (PageRank centrality) after consolidation
+      await fetch("/api/salience", { method: "POST" }).catch(() => undefined);
       refreshGraph();
     } catch {
       narrate("The keep cannot dream — the deep memory lies silent.");
