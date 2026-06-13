@@ -1,7 +1,7 @@
 # ArangoDB Agentic Memory System — Design Specification
 
 > **Status:** ✅ **v1 build sequence complete (Steps 0–7).** v2: all §21 adapters shipped (MCP, LangChain/LangGraph, CrewAI) + full §19 entity API + **Step 3e heavy extraction tier done**. Authoritative reference.
-> **Last updated:** 2026-06-09 (rev 43 — core API reference: docs/api.md)
+> **Last updated:** 2026-06-13 (rev 44 — ops runbook + per-adapter guides: docs/ops.md, docs/adapters/)
 >
 > **Rev 2 decisions:** Python-first core with a thin TypeScript client · v1 scope is Vercel-only · build a walking skeleton first, then a test/eval harness, then thicken each layer.
 >
@@ -159,8 +159,8 @@ arango-agentic-memory/
 ├── docs/
 │   ├── DESIGN.md          ← this file
 │   ├── api.md             ← core API reference (✅ /v1 + in-process surface)
-│   ├── ops.md             ← operations runbook (future)
-│   └── adapters/          ← per-adapter guides (future)
+│   ├── ops.md             ← operations runbook (✅)
+│   └── adapters/          ← per-adapter guides (✅ vercel/langchain/crewai/mcp)
 ├── core/                  ← Python core (the heart of the system)
 │   ├── pyproject.toml     ← uv-managed
 │   ├── Makefile           ← dev tasks; bakes in relocated venv + PYTHONPATH (§25)
@@ -1116,16 +1116,19 @@ remains in the backlog.)*
 
 ✅ **Core API reference** (rev 43) — [`docs/api.md`](api.md) documents the full
 `/v1` HTTP contract (every endpoint, request/response, ABAC, conventions) + the
-in-process Python surface + the pluggable providers. *(Remaining doc follow-ups —
-`docs/ops.md` runbook, per-adapter guides — stay in the backlog.)*
+in-process Python surface + the pluggable providers.
+
+✅ **Operations runbook + per-adapter guides** (rev 44) — [`docs/ops.md`](ops.md)
+(run targets, env config, durable write/dead-letter `replay`, scheduled jobs,
+vector index, observability, security/forget, schema) + [`docs/adapters/`](adapters/)
+(index + one guide each for Vercel AI SDK, LangChain/LangGraph, CrewAI, and the MCP
+server).
 
 #### Prioritized (next up)
 
 *Empty — all prioritized items shipped. Promote from the backlog as needed.*
 
 #### Backlog (unprioritized)
-
-- **Docs:** `docs/ops.md` (operations runbook) + per-adapter guides (`docs/adapters/`).
 
 - **Graph community detection** — label-propagation over the entity subgraph
   (in-process, like centrality) to cluster entities before Dream State review (§13).

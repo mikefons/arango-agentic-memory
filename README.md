@@ -95,6 +95,8 @@ Plus a **deterministic simulation harness** (`core/src/arango_memory/sim/`) that
 ```
 docs/DESIGN.md         Authoritative design spec
 docs/api.md            Core API reference (/v1 HTTP + in-process Python)
+docs/ops.md            Operations runbook (run · config · jobs · security)
+docs/adapters/         Per-adapter guides (vercel · langchain · crewai · mcp)
 core/                  Python core (uv): ingest · retrieve · lifecycle ·
                        security · telemetry · sim · eval
 packages/vercel/       Thin TS client middleware (npm) + vitest
