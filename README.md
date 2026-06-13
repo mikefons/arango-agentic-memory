@@ -2,7 +2,7 @@
 
 Persistent, relational memory for AI agents — built on ArangoDB (graph + vector + full-text in one engine), with a Python core and a thin Vercel AI SDK adapter.
 
-> **Status:** Steps 0–6 implemented (ingestion, retrieval, lifecycle, security, observability). Step 7 (hardening + ops) is next. See [`docs/DESIGN.md`](docs/DESIGN.md) — the authoritative spec (rev 20).
+> **Status:** Feature-complete against the spec — v1 core (Steps 0–7), all v2 adapters (MCP, LangChain/LangGraph, CrewAI), the full entity API, the GLiNER/Haiku extraction tier, and the **Memory Dungeon** reference app (`examples/dungeon/`). See [`docs/DESIGN.md`](docs/DESIGN.md) — the authoritative spec — and [`docs/api.md`](docs/api.md) — the core API reference.
 
 ## Architecture (v1)
 
@@ -93,7 +93,8 @@ Plus a **deterministic simulation harness** (`core/src/arango_memory/sim/`) that
 ## Repository layout
 
 ```
-docs/DESIGN.md         Authoritative design spec (rev 20)
+docs/DESIGN.md         Authoritative design spec
+docs/api.md            Core API reference (/v1 HTTP + in-process Python)
 core/                  Python core (uv): ingest · retrieve · lifecycle ·
                        security · telemetry · sim · eval
 packages/vercel/       Thin TS client middleware (npm) + vitest

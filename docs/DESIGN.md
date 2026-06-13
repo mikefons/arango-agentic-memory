@@ -1,7 +1,7 @@
 # ArangoDB Agentic Memory System — Design Specification
 
 > **Status:** ✅ **v1 build sequence complete (Steps 0–7).** v2: all §21 adapters shipped (MCP, LangChain/LangGraph, CrewAI) + full §19 entity API + **Step 3e heavy extraction tier done**. Authoritative reference.
-> **Last updated:** 2026-06-09 (rev 42 — graph salience: in-process PageRank centrality, no Pregel)
+> **Last updated:** 2026-06-09 (rev 43 — core API reference: docs/api.md)
 >
 > **Rev 2 decisions:** Python-first core with a thin TypeScript client · v1 scope is Vercel-only · build a walking skeleton first, then a test/eval harness, then thicken each layer.
 >
@@ -158,7 +158,7 @@ Build the thinnest end-to-end loop before any breadth. Prove the architecture (a
 arango-agentic-memory/
 ├── docs/
 │   ├── DESIGN.md          ← this file
-│   ├── api.md             ← core API reference (future)
+│   ├── api.md             ← core API reference (✅ /v1 + in-process surface)
 │   ├── ops.md             ← operations runbook (future)
 │   └── adapters/          ← per-adapter guides (future)
 ├── core/                  ← Python core (the heart of the system)
@@ -1114,13 +1114,18 @@ retrieval signal** (max of belief/centrality) and is surfaced in `/v1/entity`,
 Graph-Explorer node dots by it. *(Community detection via label-propagation
 remains in the backlog.)*
 
+✅ **Core API reference** (rev 43) — [`docs/api.md`](api.md) documents the full
+`/v1` HTTP contract (every endpoint, request/response, ABAC, conventions) + the
+in-process Python surface + the pluggable providers. *(Remaining doc follow-ups —
+`docs/ops.md` runbook, per-adapter guides — stay in the backlog.)*
+
 #### Prioritized (next up)
 
-1. **Core API reference docs** *(§3).* Write `docs/api.md` (the `/v1` HTTP
-   contract + the in-process Python surface), then `docs/ops.md` (runbook) and the
-   per-adapter guides (`docs/adapters/`).
+*Empty — all prioritized items shipped. Promote from the backlog as needed.*
 
 #### Backlog (unprioritized)
+
+- **Docs:** `docs/ops.md` (operations runbook) + per-adapter guides (`docs/adapters/`).
 
 - **Graph community detection** — label-propagation over the entity subgraph
   (in-process, like centrality) to cluster entities before Dream State review (§13).
