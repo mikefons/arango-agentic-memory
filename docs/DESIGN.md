@@ -1,7 +1,7 @@
 # ArangoDB Agentic Memory System — Design Specification
 
 > **Status:** ✅ **v1 build sequence complete (Steps 0–7).** v2: all §21 adapters shipped (MCP, LangChain/LangGraph, CrewAI) + full §19 entity API + **Step 3e heavy extraction tier done**. Authoritative reference.
-> **Last updated:** 2026-06-13 (rev 44 — ops runbook + per-adapter guides: docs/ops.md, docs/adapters/)
+> **Last updated:** 2026-06-13 (rev 45 — OTEL meter instruments: telemetry/ counters + histograms)
 >
 > **Rev 2 decisions:** Python-first core with a thin TypeScript client · v1 scope is Vercel-only · build a walking skeleton first, then a test/eval harness, then thicken each layer.
 >
@@ -1049,7 +1049,7 @@ OTEL spans (no-op default) + `MemoryMetrics` emitter (§18). Delivered:
 - **`telemetry/`**: `MemoryMetrics` (`on`/`emit`/`clear` + singleton `metrics`) and `span(name, **attrs)` (otel-api, no-op without a configured provider).
 - **Instrumented**: `retrieve` (`memory.retrieve` span + `retrieval` event: duration_ms/results_k/tokens_injected/mode; + try/except → empty + `degraded` event, completing core-side §15 read-degradation); `store` (`memory.write` span + `write` event); worker `write{dead_lettered}`.
 - **Verified**: 95 tests (5 + prior 90), incl. an OTEL span asserted via an in-memory exporter.
-- *Deferred*: OTEL meter instruments (span attrs + emitter carry values).
+- *Follow-on shipped (rev 45)*: OTEL **meter instruments** — counters/histograms (`memory.*`) recorded centrally from `metrics.emit(...)`, so every emit site feeds any otel backend with no call-site changes (no-op without a `MeterProvider`).
 
 #### Step 6b — Lifecycle metrics ✅ DONE
 Remaining §18 metrics via the 6a facade — completes Step 6. Delivered:
@@ -1124,6 +1124,12 @@ vector index, observability, security/forget, schema) + [`docs/adapters/`](adapt
 (index + one guide each for Vercel AI SDK, LangChain/LangGraph, CrewAI, and the MCP
 server).
 
+✅ **OTEL meter instruments** (rev 45) — counters + histograms (`memory.*`:
+writes/retrievals + their latency/result/token histograms, degraded, conflicts,
+decay, consolidation, cache) recorded centrally inside `metrics.emit(...)`, so all
+existing emit sites feed any OpenTelemetry backend (Prometheus/Datadog/Grafana)
+with no call-site changes. No-op without a configured `MeterProvider` (keyless CI).
+
 #### Prioritized (next up)
 
 *Empty — all prioritized items shipped. Promote from the backlog as needed.*
@@ -1143,8 +1149,6 @@ server).
   today, §13).
 - **EWA edge weights** — exponentially-weighted-average update for edge `weight`
   (today `1.0`, §12).
-- **OTEL meter instruments** — counters/histograms alongside the metrics event
-  emitter (§18).
 - **Dedicated embedding cache** (+ its hit rate), distinct from the query cache (§16).
 - **Hallucination-Rate / Noise-Reduction eval** — a generated-answer + LLM-judge
   harness (§23).

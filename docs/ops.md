@@ -111,6 +111,12 @@ Run `embeddings-migrate` after switching `EMBEDDING_PROVIDER`/`EMBEDDING_MODEL`
 - **`GET /v1/stats?tenant_id=`** — per-tenant collection counts.
 - **OTEL spans** — emitted around `memory.write` / `memory.retrieve`; **no-op
   unless** an OpenTelemetry provider is configured in the host process.
+- **OTEL meters** — counters + histograms under the `memory.*` namespace
+  (`memory.writes`, `memory.retrievals` + `memory.retrieval.duration`/`.results`/
+  `.tokens` histograms, `memory.degraded`, `memory.conflicts`, `memory.decay.pruned`,
+  `memory.consolidations`, `memory.cache.lookups`). Recorded automatically from the
+  emitter; export them by configuring a `MeterProvider` (e.g. the Prometheus or OTLP
+  exporter) in the host process — no-op otherwise.
 - **`MemoryMetrics`** event emitter — `retrieval`/`write`/`degraded`/`decay`/
   `consolidation`/`conflict`/`cache`/`graph` events; subscribe in-process.
 
