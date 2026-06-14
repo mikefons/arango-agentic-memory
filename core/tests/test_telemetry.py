@@ -92,3 +92,68 @@ def test_retrieve_records_otel_span(
     retrieve(db, query="anything", tenant_id="t_span", agent_id="a")
     names = [s.name for s in exporter.get_finished_spans()]
     assert "memory.retrieve" in names
+
+
+# ── OTEL meters (unit) ─────────────────────────────────────
+class _Recorder:
+    """Stands in for an OTEL counter/histogram, capturing (value, attributes)."""
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[float, dict[str, object] | None]] = []
+
+    def add(self, amount: float, attributes: dict[str, object] | None = None) -> None:
+        self.calls.append((amount, attributes))
+
+    def record(self, amount: float, attributes: dict[str, object] | None = None) -> None:
+        self.calls.append((amount, attributes))
+
+
+@pytest.fixture
+def meters(monkeypatch: pytest.MonkeyPatch) -> dict[str, _Recorder]:
+    """Swap the singleton's instruments for recorders so emits are observable."""
+    from arango_memory.telemetry import _meters
+
+    names = [
+        "writes", "write_duration", "retrievals", "retrieval_duration",
+        "retrieval_results", "retrieval_tokens", "degraded", "conflicts",
+        "decay_pruned", "consolidations", "consolidation_changes", "cache_lookups",
+    ]
+    recorders = {name: _Recorder() for name in names}
+    for name, rec in recorders.items():
+        monkeypatch.setattr(_meters, name, rec)
+    return recorders
+
+
+def test_write_event_records_meters(meters: dict[str, _Recorder]) -> None:
+    metrics.emit("write", duration_ms=12.5)
+    metrics.emit("write", dead_lettered=True)
+    assert meters["writes"].calls == [(1, {"outcome": "ok"}), (1, {"outcome": "dead_lettered"})]
+    assert meters["write_duration"].calls == [(12.5, None)]
+
+
+def test_retrieval_event_records_meters(meters: dict[str, _Recorder]) -> None:
+    metrics.emit("retrieval", duration_ms=8.0, results_k=3, tokens_injected=120, mode="full")
+    attrs = {"mode": "full"}
+    assert meters["retrievals"].calls == [(1, attrs)]
+    assert meters["retrieval_duration"].calls == [(8.0, attrs)]
+    assert meters["retrieval_results"].calls == [(3, attrs)]
+    assert meters["retrieval_tokens"].calls == [(120, attrs)]
+
+
+def test_lifecycle_events_record_meters(meters: dict[str, _Recorder]) -> None:
+    metrics.emit("degraded", op="retrieve", reason="Timeout")
+    metrics.emit("conflict", detected=2)
+    metrics.emit("decay", pruned=7)
+    metrics.emit("cache", hit=True, hit_rate=0.5)
+    metrics.emit("consolidation", promoted=1, superseded=2, cleared=0, breaker_tripped=False)
+
+    assert meters["degraded"].calls == [(1, {"op": "retrieve", "reason": "Timeout"})]
+    assert meters["conflicts"].calls == [(2, None)]
+    assert meters["decay_pruned"].calls == [(7, None)]
+    assert meters["cache_lookups"].calls == [(1, {"hit": True})]
+    assert meters["consolidations"].calls == [(1, {"breaker_tripped": False})]
+    # only non-zero change kinds are recorded
+    assert meters["consolidation_changes"].calls == [
+        (1, {"kind": "promoted"}),
+        (2, {"kind": "superseded"}),
+    ]
