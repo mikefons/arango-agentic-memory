@@ -8,6 +8,7 @@
  */
 
 import type { MemoryGraph } from "./explorer";
+import type { Proposal } from "./ontology";
 import type {
   Ctx,
   DreamResult,
@@ -130,6 +131,36 @@ export function community(
   return coreFetch("/v1/community", {
     method: "POST",
     body: JSON.stringify({ ctx: { tenant_id: tenantId, agent_id: agentId, access_level: "write" } }),
+  });
+}
+
+/** Ontology evolution (§13) — flag-gated on the core; helpers throw 404 when off. */
+export function ontologyScan(
+  tenantId: string,
+  agentId: string,
+): Promise<{ clusters: number; proposed: number }> {
+  return coreFetch("/v1/ontology/scan", {
+    method: "POST",
+    body: JSON.stringify({ ctx: { tenant_id: tenantId, agent_id: agentId, access_level: "write" } }),
+  });
+}
+
+export function ontologyProposals(tenantId: string, status?: string): Promise<Proposal[]> {
+  return coreFetch(`/v1/ontology/proposals?${qs({ tenant_id: tenantId, status })}`);
+}
+
+export function ontologyDecide(
+  tenantId: string,
+  agentId: string,
+  key: string,
+  decision: "approve" | "reject",
+): Promise<{ status: string; relabeled?: number }> {
+  return coreFetch(`/v1/ontology/${decision}`, {
+    method: "POST",
+    body: JSON.stringify({
+      ctx: { tenant_id: tenantId, agent_id: agentId, access_level: "write" },
+      key,
+    }),
   });
 }
 

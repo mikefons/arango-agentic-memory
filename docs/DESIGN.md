@@ -1,7 +1,7 @@
 # ArangoDB Agentic Memory System — Design Specification
 
 > **Status:** ✅ **v1 build sequence complete (Steps 0–7).** v2: all §21 adapters shipped (MCP, LangChain/LangGraph, CrewAI) + full §19 entity API + **Step 3e heavy extraction tier done**. Authoritative reference.
-> **Last updated:** 2026-06-15 (rev 49 — ontology evolution: relationship-type proposals + human-in-loop approval)
+> **Last updated:** 2026-06-15 (rev 50 — dungeon ontology-review UI: approve/reject proposals)
 >
 > **Rev 2 decisions:** Python-first core with a thin TypeScript client · v1 scope is Vercel-only · build a walking skeleton first, then a test/eval harness, then thicken each layer.
 >
@@ -1153,7 +1153,14 @@ API: `POST /v1/ontology/scan` (propose), `GET /v1/ontology/proposals` (review),
 `POST /v1/ontology/approve` (relabel the tenant's matching `associated_with` edges to
 the proposed type — a scoped data migration; edge "types" are attribute values, not
 collections) / `…/reject`. Off + 404 by default; keyless (the Fake generator proposes
-nothing). *(A Dungeon ontology-review UI remains in the backlog.)*
+nothing).
+
+✅ **Dungeon ontology-review UI** (rev 50) — a **Play · Graph · Ontology** tab
+(`/ontology`) surfaces `ontology_proposals` for one-click **approve/reject** (the
+human-in-loop step), with a "✦ scan bonds" button to trigger a proposal pass. Reads
+through `/api/ontology` → the core's flag-gated endpoints; when `ONTOLOGY_EVOLUTION`
+is off the core 404s and the tab shows a disabled note. Closes the ontology feature
+end-to-end.
 
 ✅ **Lazy decay at query time** (rev 48) — the Ebbinghaus multiplier
 `strength·exp(-λ·Δt)` is folded into the **BM25 + graph retrieval arm SORTs** in
