@@ -1,7 +1,7 @@
 # ArangoDB Agentic Memory System — Design Specification
 
 > **Status:** ✅ **v1 build sequence complete (Steps 0–7).** v2: all §21 adapters shipped (MCP, LangChain/LangGraph, CrewAI) + full §19 entity API + **Step 3e heavy extraction tier done**. Authoritative reference.
-> **Last updated:** 2026-06-13 (rev 45 — OTEL meter instruments: telemetry/ counters + histograms)
+> **Last updated:** 2026-06-15 (rev 46 — graph community detection: lifecycle/community.py + Dream-State scoping)
 >
 > **Rev 2 decisions:** Python-first core with a thin TypeScript client · v1 scope is Vercel-only · build a walking skeleton first, then a test/eval harness, then thicken each layer.
 >
@@ -1111,8 +1111,7 @@ subgraph (no Pregel, no license, keyless-testable). `POST /v1/salience` recomput
 + persists normalized `centrality` (0..1, hub = 1.0); it boosts the **graph
 retrieval signal** (max of belief/centrality) and is surfaced in `/v1/entity`,
 `/v1/entities`, `/v1/graph`. The dungeon recomputes it on "✦ dream" and sizes
-Graph-Explorer node dots by it. *(Community detection via label-propagation
-remains in the backlog.)*
+Graph-Explorer node dots by it.
 
 ✅ **Core API reference** (rev 43) — [`docs/api.md`](api.md) documents the full
 `/v1` HTTP contract (every endpoint, request/response, ABAC, conventions) + the
@@ -1130,14 +1129,24 @@ decay, consolidation, cache) recorded centrally inside `metrics.emit(...)`, so a
 existing emit sites feed any OpenTelemetry backend (Prometheus/Datadog/Grafana)
 with no call-site changes. No-op without a configured `MeterProvider` (keyless CI).
 
+✅ **Graph community detection** (rev 46) — deterministic **label propagation**
+(`lifecycle/community.py`) over the tenant's `relates_to` subgraph (in-process,
+keyless, like centrality; no Pregel). `POST /v1/community` recomputes + persists a
+dense integer `community` label per entity (surfaced in `/v1/entity`,
+`/v1/entities`, `/v1/graph`). It **scopes Dream State review**: the conflict-confirm
++ supersede is skipped for a flagged pair in **different** communities (structurally
+distant → unlikely the same real-world entity), with a no-op fallback when either is
+unlabeled — so prior behavior is preserved until a community pass runs. *(Dungeon
+Graph-Explorer community coloring remains in the backlog.)*
+
 #### Prioritized (next up)
 
 *Empty — all prioritized items shipped. Promote from the backlog as needed.*
 
 #### Backlog (unprioritized)
 
-- **Graph community detection** — label-propagation over the entity subgraph
-  (in-process, like centrality) to cluster entities before Dream State review (§13).
+- **Dungeon community coloring** — color Graph-Explorer nodes by the entity
+  `community` label (gated), mirroring the centrality node-sizing cue (§9/§13).
 - **Lazy decay at query time** — AQL ranking-time `strength × exp(-λ·Δt)` as the
   *default* decay path (the batch job stays for hard `invalid_at` sweeps, §11).
 - **Ontology evolution** — consolidation proposes new `relates_to` types from

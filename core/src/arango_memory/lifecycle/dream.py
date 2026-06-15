@@ -61,6 +61,12 @@ class DreamResult:
     breaker_tripped: bool = False
 
 
+def _different_community(a: dict[str, Any], b: dict[str, Any]) -> bool:
+    """True only when both entities carry a community label and they differ."""
+    ca, cb = a.get("community"), b.get("community")
+    return ca is not None and cb is not None and ca != cb
+
+
 def run_dream_state(
     db: StandardDatabase,
     *,
@@ -99,6 +105,12 @@ def run_dream_state(
             )
             if target is None or target.get("invalid_at") is not None:
                 clears.append(key)  # nothing left to resolve against
+            elif _different_community(entity, target):
+                # Community detection (§9/§13): two entities in structurally
+                # distinct clusters are unlikely to be the same real-world thing,
+                # so skip the LLM confirm + supersede. No-op when either is
+                # unlabeled (no community pass run yet) → preserves prior behavior.
+                pass
             else:
                 verdict = gen.complete(
                     f"A: {entity['name']}\nB: {target['name']}", system=_CONFLICT_SYSTEM
