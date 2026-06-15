@@ -85,6 +85,7 @@ Vercel Cron hitting the endpoint, or an ops job):
 | **Decay sweep** (§11) | `arango_memory.lifecycle.decay.decay_sweep(db, tenant_id=…)` | Soft-deprecates memories below `DECAY_FLOOR` |
 | **Dream State** (§13) | `POST /v1/dream` or `run_dream_state(...)` | Conflict confirm → supersede, distillation; circuit breaker |
 | **Salience** (§9) | `POST /v1/salience` or `compute_centrality(...)` | Recompute PageRank `centrality` |
+| **Community** (§9/§13) | `POST /v1/community` or `compute_communities(...)` | Recompute label-propagation `community` labels (scopes Dream State) |
 
 Background LLM work (Dream State distillation) needs a real generator —
 set `GENERATION_PROVIDER=anthropic` + `ANTHROPIC_API_KEY` or it no-ops on the fake.

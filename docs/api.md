@@ -29,7 +29,7 @@ Every memory operation is scoped by an **access context**:
 
 **Mutating endpoints require `access_level: "write"`** or they return **`403`**:
 `/v1/store`, `/v1/step`, `/v1/forget`, `/v1/seed`, `/v1/supersede`, `/v1/dream`,
-`/v1/salience`. Reads (`/v1/retrieve`, `/v1/entity*`, `/v1/graph`, `/v1/steps`,
+`/v1/salience`, `/v1/community`. Reads (`/v1/retrieve`, `/v1/entity*`, `/v1/graph`, `/v1/steps`,
 `/v1/stats`) allow `read`.
 
 ---
@@ -195,6 +195,15 @@ in-process (§9; Pregel was removed in ArangoDB 3.12).
 // → { "entities": 37 }
 ```
 
+#### `POST /v1/community` · *write*
+Recompute label-propagation `community` labels (dense integers) over the tenant's
+entity subgraph, in-process (§9/§13). Surfaced on entity/graph reads; used to scope
+Dream State conflict review to same-community pairs.
+```jsonc
+{ "ctx": { "tenant_id": "acme", "agent_id": "a", "access_level": "write" } }
+// → { "entities": 37, "communities": 5 }
+```
+
 ### Administration
 
 #### `POST /v1/forget` · *write*
@@ -249,6 +258,7 @@ supersede(db, new_key="…", old_key="…")
 # Lifecycle
 from arango_memory.lifecycle.dream import run_dream_state          # → DreamResult
 from arango_memory.lifecycle.salience import compute_centrality, pagerank
+from arango_memory.lifecycle.community import compute_communities, label_propagation
 from arango_memory.lifecycle.decay import decay_sweep
 from arango_memory.security.forget import forget, purge
 ```
