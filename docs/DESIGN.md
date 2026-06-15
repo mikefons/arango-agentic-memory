@@ -1,7 +1,7 @@
 # ArangoDB Agentic Memory System — Design Specification
 
 > **Status:** ✅ **v1 build sequence complete (Steps 0–7).** v2: all §21 adapters shipped (MCP, LangChain/LangGraph, CrewAI) + full §19 entity API + **Step 3e heavy extraction tier done**. Authoritative reference.
-> **Last updated:** 2026-06-15 (rev 47 — dungeon community coloring: Graph Explorer node hue by community)
+> **Last updated:** 2026-06-15 (rev 48 — lazy decay folded into BM25 + graph AQL ranking arms)
 >
 > **Rev 2 decisions:** Python-first core with a thin TypeScript client · v1 scope is Vercel-only · build a walking skeleton first, then a test/eval harness, then thicken each layer.
 >
@@ -1003,7 +1003,7 @@ Split into three sub-steps (decided rev 14).
 
 #### Step 4a — Memory decay ✅ DONE
 Episodic decay + spaced repetition (`lifecycle/decay.py`). Delivered:
-- **Lazy decay**: `effective_strength = strength · exp(-λ · Δdays)` applied as a ranking multiplier in retrieval (recency/access boost, §9 stage 5) — always fresh, no batch.
+- **Lazy decay**: `effective_strength = strength · exp(-λ · Δdays)` applied as a ranking multiplier in retrieval (recency/access boost, §9 stage 5) — always fresh, no batch. Folded into the **BM25 + graph AQL arm SORTs** (rev 48) so freshness shapes candidate *selection* (pool membership), plus a uniform post-fusion pass for final magnitude; the vector arm stays index-pure (`APPROX_NEAR_COSINE` can't combine without losing acceleration), reached via the post-fusion pass.
 - **Scheduled sweep**: `decay_sweep` soft-deprecates memories below `decay_floor` (`invalid_at`; never deletes). Callable now; scheduling is an ops concern (Step 7).
 - **Spaced repetition**: surfaced memories get `accessed_at` reset + `access_count++` (Δt → 0).
 - **Config**: `decay_lambda`, `decay_floor`. **Verified**: 70 tests (3 decay + prior 67) — recency ranking, access refresh, sweep soft-deprecation.
@@ -1144,14 +1144,21 @@ a sibling to the centrality node-sizing cue; superseded/review keep their status
 colors. The ✦ dream flow (and the nightly cron) recompute communities **before**
 dreaming so the Dream State scoping gate engages. Always-on, like the centrality cue.
 
+✅ **Lazy decay at query time** (rev 48) — the Ebbinghaus multiplier
+`strength·exp(-λ·Δt)` is folded into the **BM25 + graph retrieval arm SORTs** in
+AQL, so freshness shapes candidate *selection* (pool membership), not only the
+post-fusion reorder it already did. The vector arm stays index-pure
+(`APPROX_NEAR_COSINE` must be the sole sort or it loses index acceleration), reached
+by the retained uniform post-fusion pass that weights final magnitude (RRF discards
+per-arm score magnitude). The scheduled `decay_sweep` remains for hard `invalid_at`
+soft-deprecation.
+
 #### Prioritized (next up)
 
 *Empty — all prioritized items shipped. Promote from the backlog as needed.*
 
 #### Backlog (unprioritized)
 
-- **Lazy decay at query time** — AQL ranking-time `strength × exp(-λ·Δt)` as the
-  *default* decay path (the batch job stays for hard `invalid_at` sweeps, §11).
 - **Ontology evolution** — consolidation proposes new `relates_to` types from
   recurring `associated_with` clusters, with human-in-loop approval before a
   migration adds the edge type (v2 research, flag-gated; extends §13).

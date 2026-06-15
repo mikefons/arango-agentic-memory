@@ -28,6 +28,14 @@ from ..schema.collections import SEARCH_VIEW, ensure_vector_index, has_vector_in
 from ..telemetry import metrics, span
 from .enrich import QueryCache, hyde, should_skip_retrieval
 
+# Lazy decay (§11): the Ebbinghaus multiplier strength·exp(-λ·Δdays) is folded into
+# the ranking SORT so freshness shapes *candidate selection* (pool membership), not
+# only the post-fusion reorder. `@neg_lam` is -λ; `@now` is the reference instant.
+_DECAY = (
+    'NOT_NULL(doc.strength, 1.0) * '
+    'EXP(@neg_lam * DATE_DIFF(NOT_NULL(doc.accessed_at, @now), @now, "s") / 86400.0)'
+)
+
 _BM25_QUERY = f"""
 FOR doc IN {SEARCH_VIEW}
   SEARCH ANALYZER(doc.text IN TOKENS(@query, "text_en")
@@ -35,7 +43,7 @@ FOR doc IN {SEARCH_VIEW}
      AND doc.tenant_id == @tenant_id
      AND doc.agent_id == @agent_id
   FILTER doc.invalid_at == null
-  SORT BM25(doc) DESC
+  SORT BM25(doc) * ({_DECAY}) DESC
   LIMIT @pool
   RETURN {{ key: doc._key, text: doc.text, score: BM25(doc),
             embedding: doc.embedding, type: doc.type,
@@ -75,9 +83,12 @@ FOR start IN @seed_ids
                                           belief = MAX(related.belief),
                                           centrality = MAX(related.centrality) INTO rows = mem
         // closer hops rank higher, scaled 0.5–1.0 by the bridge's salience —
-        // the stronger of corroboration (belief, §12) or PageRank centrality (§9).
+        // the stronger of corroboration (belief, §12) or PageRank centrality (§9) —
+        // then decayed by the connected memory's freshness (§11, lazy decay).
         LET salience = MAX([NOT_NULL(belief, 0), NOT_NULL(centrality, 0)])
-        LET score = (1.0 / (1.0 + hops)) * (0.5 + 0.5 * salience)
+        LET age_days = DATE_DIFF(NOT_NULL(rows[0].accessed_at, @now), @now, "s") / 86400.0
+        LET decay = NOT_NULL(rows[0].strength, 1.0) * EXP(@neg_lam * age_days)
+        LET score = (1.0 / (1.0 + hops)) * (0.5 + 0.5 * salience) * decay
         SORT score DESC
         LIMIT @pool
         RETURN { key: key, score: score,
@@ -313,8 +324,12 @@ def _retrieve_impl(
     else:
         query_vec = emb.embed(query)
 
+    # Reference instant + decay rate shared by the AQL arms and the post-fusion pass.
+    now = utcnow_iso()
+    decay_binds = {"now": now, "neg_lam": -settings.decay_lambda}
+
     scope = {"tenant_id": tenant_id, "agent_id": agent_id, "pool": candidate_pool}
-    bm25_rows = _run(db, _BM25_QUERY, {"query": query, **scope})
+    bm25_rows = _run(db, _BM25_QUERY, {"query": query, **scope, **decay_binds})
 
     ranked_lists = [bm25_rows]
     names = ["bm25"]
@@ -343,6 +358,7 @@ def _retrieve_impl(
                 "agent_id": agent_id,
                 "hops": graph_hops if graph_hops is not None else settings.graph_hops,
                 "pool": candidate_pool,
+                **decay_binds,
             },
         )
         if graph_rows:
@@ -355,7 +371,8 @@ def _retrieve_impl(
 
     # Recency/access boost (§9 stage 5, §11): decay the fused score by time since
     # last access, so stale memories sink in ranking and token-budget priority.
-    now = utcnow_iso()
+    # (The AQL arms above also fold decay into candidate *selection*; this uniform
+    # pass weights final magnitude — RRF discards per-arm score magnitude.)
     for cand in fused:
         cand.fused_score *= effective_strength(
             cand.strength, cand.accessed_at or now, now, settings.decay_lambda

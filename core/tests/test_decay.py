@@ -52,6 +52,36 @@ def test_recent_memory_outranks_stale_on_same_query(
     assert db.collection("memories").get(fresh)["access_count"] >= 2
 
 
+def test_decay_reorders_the_bm25_arm(
+    db: StandardDatabase,
+    wait_for_searchable: Callable[..., RetrieveResult],
+) -> None:
+    # The lazy-decay change folds strength·exp(-λ·Δt) into the BM25 arm SORT, so
+    # freshness shapes candidate *selection* (not just the post-fusion reorder).
+    # Query the arm directly: a stale memory must sink below a fresh one of equal text.
+    from arango_memory.config import settings
+    from arango_memory.models import utcnow_iso
+    from arango_memory.retrieve.search import _BM25_QUERY, _run
+
+    ctx = {"tenant_id": "t_decay_arm", "agent_id": "a"}
+    store(db, content="delta signal fresh", turn_index=0, **ctx)
+    stale = store(db, content="delta signal stale", turn_index=1, **ctx).memory_ids[0]
+    _set_accessed(db, stale, _days_ago(300))
+    wait_for_searchable(db, query="delta signal", **ctx)
+
+    now = utcnow_iso()
+    rows = _run(
+        db,
+        _BM25_QUERY,
+        {
+            "query": "delta signal", "tenant_id": "t_decay_arm", "agent_id": "a",
+            "pool": 10, "now": now, "neg_lam": -settings.decay_lambda,
+        },
+    )
+    texts = [r["text"] for r in rows]
+    assert texts.index("delta signal fresh") < texts.index("delta signal stale")
+
+
 def test_decay_sweep_soft_deprecates_stale_memories(
     db: StandardDatabase,
     wait_for_searchable: Callable[..., RetrieveResult],
