@@ -110,6 +110,11 @@ class Settings(BaseSettings):
     # SCM cap — overflow beyond `working_capacity` promotes the oldest to episodic.
     working_session_ttl_seconds: int = Field(default=3600, ge=1)
     working_capacity: int = Field(default=7, ge=1)
+    # GAM semantic-boundary trigger (DESIGN.md §13): on each turn, compare it to the
+    # session's running topic; below the cosine threshold = a topic shift (flush the
+    # working buffer + flag consolidation due). EWA blends the running topic otherwise.
+    topic_shift_threshold: float = Field(default=0.7, ge=0.0, le=1.0)
+    topic_ewa_alpha: float = Field(default=0.5, gt=0.0, le=1.0)
 
 
 settings = Settings()

@@ -1,7 +1,7 @@
 # ArangoDB Agentic Memory System — Design Specification
 
 > **Status:** ✅ **v1 build sequence complete (Steps 0–7).** v2: all §21 adapters shipped (MCP, LangChain/LangGraph, CrewAI) + full §19 entity API + **Step 3e heavy extraction tier done**. Authoritative reference.
-> **Last updated:** 2026-06-15 (rev 51 — working-memory tier: session TTL + SCM cap)
+> **Last updated:** 2026-06-15 (rev 52 — GAM session-topic trigger: topic-shift flush + consolidation signal)
 >
 > **Rev 2 decisions:** Python-first core with a thin TypeScript client · v1 scope is Vercel-only · build a walking skeleton first, then a test/eval harness, then thicken each layer.
 >
@@ -586,8 +586,15 @@ Dream State confirms contradiction:
 
 ## 13. Consolidation and Dream State
 
-### Trigger: GAM Semantic Boundary
-Consolidation does **not** run per turn. After each turn, embed the turn's topic and compare to the session's running topic embedding; if cosine < 0.7 (topic shift), flush working buffer to episodic and run a consolidation check.
+### Trigger: GAM Semantic Boundary ✅ (rev 52)
+Consolidation does **not** run per turn. `store()` tracks a per-session running
+`topic_embedding` (in the `sessions` collection, EWA-blended each turn). On each turn
+with a `session_id`, it compares the turn vector to that running topic; if
+cosine < `topic_shift_threshold` (0.7) it's a **topic shift**: the session's working
+buffer is **flushed to episodic** (promote-relabel) and the session is flagged
+`consolidation_due` (a `topic_shift` metric is emitted). The "consolidation check" is
+**signal-only** — Dream State stays a separate scheduled/triggered pass, so the write
+path never blocks on an LLM. First turn seeds the topic; idempotent replays are skipped.
 
 ### Consolidation Check
 Per referenced entity: if `mention_count >= threshold` (default 5) → queue for Dream State; else update strength and leave episodic.
@@ -1174,6 +1181,13 @@ end-to-end.
 working scratch mints no entities. Retrieval's existing working tier routes the hits.
 `memory_type` threads the durable queue → worker. See §11.
 
+✅ **GAM session-topic trigger** (rev 52) — `store()` tracks a per-session running
+`topic_embedding` (new `sessions` collection, EWA-blended); when a turn's cosine drops
+below `topic_shift_threshold` (0.7) it **flushes the working buffer to episodic** and
+flags the session `consolidation_due` (emits a `topic_shift` metric). Signal-only +
+inline (reuses the already-computed turn embedding); Dream State stays a separate pass.
+See §13.
+
 ✅ **Lazy decay at query time** (rev 48) — the Ebbinghaus multiplier
 `strength·exp(-λ·Δt)` is folded into the **BM25 + graph retrieval arm SORTs** in
 AQL, so freshness shapes candidate *selection* (pool membership), not only the
@@ -1191,8 +1205,6 @@ soft-deprecation.
 
 - **Dungeon ontology-review UI** — surface `ontology_proposals` in the dungeon for
   one-click approve/reject of proposed relationship types (the human-in-loop step).
-- **GAM session-topic trigger** for Dream State (consolidation is threshold-driven
-  today, §13).
 - **EWA edge weights** — exponentially-weighted-average update for edge `weight`
   (today `1.0`, §12).
 - **Dedicated embedding cache** (+ its hit rate), distinct from the query cache (§16).
