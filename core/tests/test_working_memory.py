@@ -39,8 +39,10 @@ def test_working_memory_extracts_no_entities(db: StandardDatabase) -> None:
 def test_scm_cap_promotes_oldest_to_episodic(db: StandardDatabase) -> None:
     ctx = {"tenant_id": "t_wm4", "agent_id": "a", "session_id": "s1"}
     keys = []
+    # Constant content → no topic shift (distinct turn_index keeps memories distinct),
+    # so this isolates the SCM capacity cap from the GAM topic-shift flush (§13).
     for i in range(settings.working_capacity + 2):  # two over the cap
-        res = store(db, content=f"scratch note {i}", turn_index=i, memory_type="working", **ctx)
+        res = store(db, content="scratch buffer note", turn_index=i, memory_type="working", **ctx)
         keys.append(res.memory_ids[0])
 
     types = [db.collection("memories").get(k)["type"] for k in keys]

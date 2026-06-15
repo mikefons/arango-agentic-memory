@@ -16,7 +16,7 @@ from arango.exceptions import IndexCreateError
 from .migrations import run_migrations
 
 DOCUMENT_COLLECTIONS: tuple[str, ...] = (
-    "episodes", "memories", "entities", "steps", "ontology_proposals",
+    "episodes", "memories", "entities", "steps", "ontology_proposals", "sessions",
 )
 EDGE_COLLECTIONS: tuple[str, ...] = (
     "mentions", "relates_to", "produced_by", "TOUCHED", "TRANSITION", "Supersedes",

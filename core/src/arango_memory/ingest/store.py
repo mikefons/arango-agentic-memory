@@ -7,6 +7,8 @@ prospective indexing, and the durable write queue are added in later steps.
 
 from __future__ import annotations
 
+import hashlib
+import math
 import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -106,6 +108,79 @@ def _enforce_working_capacity(
     return len(list(cursor))
 
 
+# Promote the whole working buffer for a session to episodic (topic-shift flush, §13).
+_FLUSH_WORKING = """
+FOR m IN memories
+  FILTER m.type == "working" AND m.invalid_at == null
+     AND m.tenant_id == @tenant_id AND m.agent_id == @agent_id
+     AND m.session_id == @session_id
+  UPDATE m WITH { type: "episodic", expires_at: null } IN memories
+  RETURN 1
+"""
+
+
+def _cosine(a: list[float], b: list[float]) -> float:
+    dot = sum(x * y for x, y in zip(a, b, strict=False))
+    na = math.sqrt(sum(x * x for x in a))
+    nb = math.sqrt(sum(y * y for y in b))
+    return dot / (na * nb) if na and nb else 0.0
+
+
+def _session_key(tenant_id: str, agent_id: str, session_id: str) -> str:
+    raw = f"{tenant_id}\x1f{agent_id}\x1f{session_id}"
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def _track_session_topic(
+    db: StandardDatabase,
+    *,
+    tenant_id: str,
+    agent_id: str,
+    session_id: str,
+    turn_vec: list[float],
+    now: str,
+) -> bool:
+    """Update the session's running topic; on a topic shift, flush working → episodic.
+
+    Returns True iff a topic shift was detected. The "consolidation check" is
+    signal-only (a `topic_shift` metric + `consolidation_due` flag); Dream State
+    stays a separate scheduled pass so the write path never blocks on an LLM.
+    """
+    sessions = db.collection("sessions")
+    key = _session_key(tenant_id, agent_id, session_id)
+    prior = cast("dict[str, Any] | None", sessions.get(key))
+
+    if prior is None:  # first turn → seed the topic, no shift
+        sessions.insert(
+            {
+                "_key": key, "tenant_id": tenant_id, "agent_id": agent_id,
+                "session_id": session_id, "topic_embedding": turn_vec,
+                "started_at": now, "updated_at": now, "consolidation_due": False,
+            },
+            overwrite_mode="ignore", silent=True,
+        )
+        return False
+
+    shifted = _cosine(turn_vec, prior["topic_embedding"]) < settings.topic_shift_threshold
+    if shifted:
+        flushed = len(list(cast(Cursor, db.aql.execute(
+            _FLUSH_WORKING,
+            bind_vars={"tenant_id": tenant_id, "agent_id": agent_id, "session_id": session_id},
+        ))))
+        sessions.update(
+            {"_key": key, "topic_embedding": turn_vec, "updated_at": now, "consolidation_due": True}
+        )
+        metrics.emit("topic_shift", tenant_id=tenant_id, flushed=flushed)
+    else:
+        alpha = settings.topic_ewa_alpha
+        blended = [
+            alpha * t + (1.0 - alpha) * p
+            for t, p in zip(turn_vec, prior["topic_embedding"], strict=False)
+        ]
+        sessions.update({"_key": key, "topic_embedding": blended, "updated_at": now})
+    return shifted
+
+
 def _store_impl(
     db: StandardDatabase,
     *,
@@ -175,6 +250,15 @@ def _store_impl(
         else None
     )
 
+    turn_vec = emb.embed(content)
+    # GAM semantic boundary (§13): track the session's running topic before writing
+    # this turn's memory, so a detected shift flushes the *prior* working buffer.
+    if is_new and session_id is not None:
+        _track_session_topic(
+            db, tenant_id=tenant_id, agent_id=agent_id, session_id=session_id,
+            turn_vec=turn_vec, now=now,
+        )
+
     mem_key = f"{key}-mem"
     memory = {
         "_key": mem_key,
@@ -192,7 +276,7 @@ def _store_impl(
         "agent_id": agent_id,
         "tenant_id": tenant_id,
         "schema_version": "0.1.0",
-        "embedding": emb.embed(content),
+        "embedding": turn_vec,
         "embedding_model": emb.model,
         "embedding_version": emb.version,
         "prospective_queries": prospective,
