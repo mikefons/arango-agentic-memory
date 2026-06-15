@@ -1,7 +1,7 @@
 # ArangoDB Agentic Memory System — Design Specification
 
 > **Status:** ✅ **v1 build sequence complete (Steps 0–7).** v2: all §21 adapters shipped (MCP, LangChain/LangGraph, CrewAI) + full §19 entity API + **Step 3e heavy extraction tier done**. Authoritative reference.
-> **Last updated:** 2026-06-15 (rev 48 — lazy decay folded into BM25 + graph AQL ranking arms)
+> **Last updated:** 2026-06-15 (rev 49 — ontology evolution: relationship-type proposals + human-in-loop approval)
 >
 > **Rev 2 decisions:** Python-first core with a thin TypeScript client · v1 scope is Vercel-only · build a walking skeleton first, then a test/eval harness, then thicken each layer.
 >
@@ -1144,6 +1144,17 @@ a sibling to the centrality node-sizing cue; superseded/review keep their status
 colors. The ✦ dream flow (and the nightly cron) recompute communities **before**
 dreaming so the Dream State scoping gate engages. Always-on, like the centrality cue.
 
+✅ **Ontology evolution** (rev 49, flag-gated v2 research) — `lifecycle/ontology.py`
+groups `associated_with` co-occurrence edges by endpoint **label-pair**, and (when
+`ontology_evolution` is on) asks the generator to name the relationship a recurring
+cluster (≥ `ontology_min_support`) represents, recording a **proposal** in the new
+`ontology_proposals` collection — it never mutates the graph on its own. Human-in-loop
+API: `POST /v1/ontology/scan` (propose), `GET /v1/ontology/proposals` (review),
+`POST /v1/ontology/approve` (relabel the tenant's matching `associated_with` edges to
+the proposed type — a scoped data migration; edge "types" are attribute values, not
+collections) / `…/reject`. Off + 404 by default; keyless (the Fake generator proposes
+nothing). *(A Dungeon ontology-review UI remains in the backlog.)*
+
 ✅ **Lazy decay at query time** (rev 48) — the Ebbinghaus multiplier
 `strength·exp(-λ·Δt)` is folded into the **BM25 + graph retrieval arm SORTs** in
 AQL, so freshness shapes candidate *selection* (pool membership), not only the
@@ -1159,9 +1170,8 @@ soft-deprecation.
 
 #### Backlog (unprioritized)
 
-- **Ontology evolution** — consolidation proposes new `relates_to` types from
-  recurring `associated_with` clusters, with human-in-loop approval before a
-  migration adds the edge type (v2 research, flag-gated; extends §13).
+- **Dungeon ontology-review UI** — surface `ontology_proposals` in the dungeon for
+  one-click approve/reject of proposed relationship types (the human-in-loop step).
 - **Working-memory tier** — a `working` memory type + session TTL + the SCM
   7-item cap (§5/§14).
 - **GAM session-topic trigger** for Dream State (consolidation is threshold-driven

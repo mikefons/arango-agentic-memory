@@ -27,6 +27,12 @@ from ..ingest.worker import WriteWorker
 from ..lifecycle.community import compute_communities
 from ..lifecycle.conflict import supersede
 from ..lifecycle.dream import run_dream_state
+from ..lifecycle.ontology import (
+    approve_proposal,
+    list_proposals,
+    propose_relationship_types,
+    reject_proposal,
+)
 from ..lifecycle.salience import compute_centrality
 from ..retrieve.enrich import QueryCache
 from ..retrieve.search import retrieve
@@ -220,6 +226,26 @@ class CommunityResponse(BaseModel):
     communities: int = 0
 
 
+# ── /v1/ontology (ontology evolution, §13 — flag-gated v2) ─
+class OntologyScanRequest(BaseModel):
+    ctx: AccessContext
+
+
+class OntologyScanResponse(BaseModel):
+    clusters: int = 0
+    proposed: int = 0
+
+
+class OntologyDecisionRequest(BaseModel):
+    ctx: AccessContext
+    key: str
+
+
+def _require_ontology() -> None:
+    if not settings.ontology_evolution:
+        raise HTTPException(status_code=404, detail="ontology evolution is disabled")
+
+
 # ── Route handlers ────────────────────────────────────────
 async def health(client: ArangoMemoryClient = Depends(get_client)) -> dict[str, object]:
     return {"status": "ok", "arango": client.ping(), "mode": settings.memory_mode}
@@ -393,6 +419,53 @@ async def community_endpoint(
     )
 
 
+async def ontology_scan_endpoint(
+    req: OntologyScanRequest,
+    client: ArangoMemoryClient = Depends(get_client),
+    generator: Generator = Depends(get_generator_dep),
+) -> OntologyScanResponse:
+    """Propose typed relationships from co-occurrence clusters (§13) — write-only, flag-gated."""
+    _require_ontology()
+    _require_write(req.ctx)
+    result = propose_relationship_types(
+        client.db, tenant_id=req.ctx.tenant_id, generator=generator
+    )
+    return OntologyScanResponse(
+        clusters=result.get("clusters", 0), proposed=result.get("proposed", 0)
+    )
+
+
+async def ontology_proposals_endpoint(
+    tenant_id: str,
+    status: str | None = None,
+    access_level: Literal["read", "write"] = "read",
+    client: ArangoMemoryClient = Depends(get_client),
+) -> list[dict[str, Any]]:
+    """List relationship proposals for human review (§13) — flag-gated."""
+    _require_ontology()
+    return list_proposals(client.db, tenant_id=tenant_id, status=status)
+
+
+async def ontology_approve_endpoint(
+    req: OntologyDecisionRequest,
+    client: ArangoMemoryClient = Depends(get_client),
+) -> dict[str, Any]:
+    """Approve a proposal → relabel the tenant's matching co-occurrence edges — write-only."""
+    _require_ontology()
+    _require_write(req.ctx)
+    return approve_proposal(client.db, tenant_id=req.ctx.tenant_id, key=req.key)
+
+
+async def ontology_reject_endpoint(
+    req: OntologyDecisionRequest,
+    client: ArangoMemoryClient = Depends(get_client),
+) -> dict[str, Any]:
+    """Reject a proposal (no graph change) — write-only."""
+    _require_ontology()
+    _require_write(req.ctx)
+    return reject_proposal(client.db, tenant_id=req.ctx.tenant_id, key=req.key)
+
+
 async def retrieve_endpoint(
     req: RetrieveRequest,
     client: ArangoMemoryClient = Depends(get_client),
@@ -482,6 +555,13 @@ def create_app(client: ArangoMemoryClient | None = None) -> FastAPI:
     app.add_api_route(
         "/v1/community", community_endpoint, methods=["POST"], response_model=CommunityResponse
     )
+    app.add_api_route(
+        "/v1/ontology/scan", ontology_scan_endpoint, methods=["POST"],
+        response_model=OntologyScanResponse,
+    )
+    app.add_api_route("/v1/ontology/proposals", ontology_proposals_endpoint, methods=["GET"])
+    app.add_api_route("/v1/ontology/approve", ontology_approve_endpoint, methods=["POST"])
+    app.add_api_route("/v1/ontology/reject", ontology_reject_endpoint, methods=["POST"])
     return app
 
 

@@ -53,7 +53,8 @@ need no API keys.
 **Behavior knobs** — retrieval: `MAX_MEMORY_TOKENS` (1500), `K` (10), `GRAPH_HOPS`
 (2), `VECTOR_N_LISTS` (256); lifecycle: `DECAY_LAMBDA` (0.02), `DECAY_FLOOR` (0.1),
 `CONSOLIDATION_MENTION_THRESHOLD` (5), `DREAM_BREAKER_THRESHOLD` (0.5),
-`CORROBORATION_BASE` (0.5); conflict: `ENTITY_MERGE_THRESHOLD` (0.9),
+`CORROBORATION_BASE` (0.5), `ONTOLOGY_EVOLUTION` (`false`),
+`ONTOLOGY_MIN_SUPPORT` (3); conflict: `ENTITY_MERGE_THRESHOLD` (0.9),
 `ENTITY_FLAG_THRESHOLD` (0.6); durable writes: `WRITE_MAX_RETRIES` (5),
 `WRITE_BACKOFF_BASE` (0.5); security: `REDACT_PII` (`true`).
 
@@ -86,6 +87,7 @@ Vercel Cron hitting the endpoint, or an ops job):
 | **Dream State** (§13) | `POST /v1/dream` or `run_dream_state(...)` | Conflict confirm → supersede, distillation; circuit breaker |
 | **Salience** (§9) | `POST /v1/salience` or `compute_centrality(...)` | Recompute PageRank `centrality` |
 | **Community** (§9/§13) | `POST /v1/community` or `compute_communities(...)` | Recompute label-propagation `community` labels (scopes Dream State) |
+| **Ontology scan** (§13, flag) | `POST /v1/ontology/scan` or `propose_relationship_types(...)` | Propose typed relationships from `associated_with` clusters (needs `ONTOLOGY_EVOLUTION=true` + a real generator; human approves) |
 
 Background LLM work (Dream State distillation) needs a real generator —
 set `GENERATION_PROVIDER=anthropic` + `ANTHROPIC_API_KEY` or it no-ops on the fake.

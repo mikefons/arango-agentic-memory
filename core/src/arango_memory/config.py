@@ -82,6 +82,11 @@ class Settings(BaseSettings):
     # Consolidation / Dream State (DESIGN.md §13).
     consolidation_mention_threshold: int = Field(default=5, ge=1)
     dream_breaker_threshold: float = Field(default=0.5, ge=0.0, le=1.0)
+    # Ontology evolution (DESIGN.md §13, v2 research): propose typed relationships
+    # from recurring associated_with clusters, human-in-loop. Off by default.
+    ontology_evolution: bool = False
+    # Min distinct associated_with edges per label-pair to propose a type.
+    ontology_min_support: int = Field(default=3, ge=1)
 
     # Security (DESIGN.md §17): redact PII at ingestion before anything is persisted.
     redact_pii: bool = True
