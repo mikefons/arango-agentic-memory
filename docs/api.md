@@ -29,7 +29,7 @@ Every memory operation is scoped by an **access context**:
 
 **Mutating endpoints require `access_level: "write"`** or they return **`403`**:
 `/v1/store`, `/v1/step`, `/v1/forget`, `/v1/seed`, `/v1/supersede`, `/v1/dream`,
-`/v1/salience`, `/v1/community`. Reads (`/v1/retrieve`, `/v1/entity*`, `/v1/graph`, `/v1/steps`,
+`/v1/salience`, `/v1/community`, `/v1/ontology/*`. Reads (`/v1/retrieve`, `/v1/entity*`, `/v1/graph`, `/v1/steps`,
 `/v1/stats`) allow `read`.
 
 ---
@@ -204,6 +204,31 @@ Dream State conflict review to same-community pairs.
 // → { "entities": 37, "communities": 5 }
 ```
 
+#### `POST /v1/ontology/scan` · *write* · *flag-gated*
+Propose typed relationships from recurring `associated_with` clusters (§13). **404
+unless `ONTOLOGY_EVOLUTION=true`**; needs a real generator to produce useful labels.
+Records proposals; never mutates the graph.
+```jsonc
+{ "ctx": { "tenant_id": "acme", "agent_id": "a", "access_level": "write" } }
+// → { "clusters": 4, "proposed": 2 }
+```
+
+#### `GET /v1/ontology/proposals` · *read* · *flag-gated*
+List relationship proposals for review. Params: `tenant_id`, optional `status`
+(`pending`/`approved`/`rejected`).
+```jsonc
+// → [ { "label_a": "Company", "label_b": "Person", "proposed_relationship": "works_at",
+//       "support": 7, "status": "pending", ... } ]
+```
+
+#### `POST /v1/ontology/approve` · *write* · *flag-gated*
+Approve a proposal → relabel the tenant's matching `associated_with` edges to the
+proposed type. `POST /v1/ontology/reject` marks it rejected (no graph change).
+```jsonc
+{ "ctx": { "tenant_id": "acme", "agent_id": "a", "access_level": "write" }, "key": "acme__Company__Person" }
+// → { "status": "approved", "relationship": "works_at", "relabeled": 7 }
+```
+
 ### Administration
 
 #### `POST /v1/forget` · *write*
@@ -259,6 +284,7 @@ supersede(db, new_key="…", old_key="…")
 from arango_memory.lifecycle.dream import run_dream_state          # → DreamResult
 from arango_memory.lifecycle.salience import compute_centrality, pagerank
 from arango_memory.lifecycle.community import compute_communities, label_propagation
+from arango_memory.lifecycle.ontology import propose_relationship_types, approve_proposal
 from arango_memory.lifecycle.decay import decay_sweep
 from arango_memory.security.forget import forget, purge
 ```
