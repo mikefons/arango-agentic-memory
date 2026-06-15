@@ -20,6 +20,17 @@ export interface GraphNodeRaw {
   invalid_at?: string | null;
   belief?: number;
   centrality?: number;
+  community?: number;
+}
+
+/**
+ * A stable, well-spread hue for a community label (golden-angle around the wheel),
+ * mirroring the centrality node-sizing cue. Returns `null` when unlabeled
+ * (`undefined` or the `-1` sentinel) so the node keeps its default accent.
+ */
+export function communityColor(community: number | undefined | null): string | null {
+  if (community == null || community < 0) return null;
+  return `hsl(${Math.round((community * 137.508) % 360)} 60% 58%)`;
 }
 
 export interface GraphEdgeRaw {
