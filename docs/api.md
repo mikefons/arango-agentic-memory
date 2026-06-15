@@ -68,7 +68,9 @@ Persist one turn (episode + episodic memory + extracted entities/relations).
   "content": "Alice moved to Berlin in 2019",
   "ctx": { "tenant_id": "acme", "agent_id": "a", "access_level": "write" },
   "turn_index": 0,                // optional, default 0 (part of the idempotency key)
-  "source_reliability": 1.0       // optional 0..1 (§8/§12) — weights corroboration → belief
+  "source_reliability": 1.0,      // optional 0..1 (§8/§12) — weights corroboration → belief
+  "memory_type": "episodic"       // optional: "episodic" | "working" (§5/§14) — working
+                                  //   memory is session-scoped (TTL) + SCM-capped, mints no entities
 }
 // response
 { "status": "queued", "episode_id": "<key>", "memory_ids": ["<key>-mem"] }
@@ -262,7 +264,8 @@ db = ArangoMemoryClient().connect()          # env-driven (ARANGO_URL, ARANGO_DB
 from arango_memory.ingest.store import store
 store(db, content="…", tenant_id="t", agent_id="a",
       session_id=None, turn_index=0, mode="lite",
-      message_type=None, source_reliability=1.0)          # → StoreResult(episode_id, memory_ids, entity_ids)
+      message_type=None, source_reliability=1.0,
+      memory_type="episodic")                             # → StoreResult(episode_id, memory_ids, entity_ids)
 
 from arango_memory.ingest.procedural import record_step, get_steps
 record_step(db, tool_name="search", arguments={}, outcome="success",

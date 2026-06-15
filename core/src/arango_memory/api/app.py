@@ -93,6 +93,7 @@ class StoreRequest(BaseModel):
     ctx: AccessContext
     turn_index: int = 0
     source_reliability: float = 1.0
+    memory_type: Literal["episodic", "working"] = "episodic"
 
 
 class StoreResponse(BaseModel):
@@ -266,6 +267,7 @@ async def store_endpoint(
         session_id=req.ctx.session_id,
         turn_index=req.turn_index,
         source_reliability=req.source_reliability,
+        memory_type=req.memory_type,
     )
     queue.enqueue(intent)
     return StoreResponse(episode_id=intent.key, memory_ids=[f"{intent.key}-mem"])

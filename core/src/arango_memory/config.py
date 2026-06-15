@@ -106,6 +106,10 @@ class Settings(BaseSettings):
     # The sweep soft-deprecates memories whose effective strength drops below floor.
     decay_lambda: float = Field(default=0.02, ge=0.0)
     decay_floor: float = Field(default=0.1, ge=0.0, le=1.0)
+    # Working memory (DESIGN.md §5/§14): a `working` type with a session TTL and the
+    # SCM cap — overflow beyond `working_capacity` promotes the oldest to episodic.
+    working_session_ttl_seconds: int = Field(default=3600, ge=1)
+    working_capacity: int = Field(default=7, ge=1)
 
 
 settings = Settings()
