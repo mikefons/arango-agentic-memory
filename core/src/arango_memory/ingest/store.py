@@ -9,7 +9,10 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass
+from datetime import datetime, timedelta
+from typing import Any, cast
 
+from arango.cursor import Cursor
 from arango.database import StandardDatabase
 
 from ..config import settings
@@ -44,6 +47,7 @@ def store(
     mode: str = "lite",
     message_type: str | None = None,
     source_reliability: float = 1.0,
+    memory_type: str = "episodic",
 ) -> StoreResult:
     """Instrumented write (DESIGN.md §18): `memory.write` span + `write` metric.
 
@@ -68,9 +72,38 @@ def store(
             mode=mode,
             message_type=message_type,
             source_reliability=source_reliability,
+            memory_type=memory_type,
         )
     metrics.emit("write", duration_ms=(time.perf_counter() - started) * 1000.0)
     return result
+
+
+# SCM cap (§14): keep at most `working_capacity` active working memories per
+# (tenant, agent, session); promote the oldest overflow to episodic (clearing the
+# TTL) — "overflow compresses oldest to episodic".
+_ENFORCE_CAPACITY = """
+FOR m IN memories
+  FILTER m.type == "working" AND m.invalid_at == null
+     AND m.tenant_id == @tenant_id AND m.agent_id == @agent_id
+     AND m.session_id == @session_id
+  SORT m.created_at DESC
+  LIMIT @capacity, 2147483647
+  UPDATE m WITH { type: "episodic", expires_at: null } IN memories
+  RETURN 1
+"""
+
+
+def _enforce_working_capacity(
+    db: StandardDatabase, *, tenant_id: str, agent_id: str, session_id: str | None
+) -> int:
+    bind: dict[str, Any] = {
+        "tenant_id": tenant_id,
+        "agent_id": agent_id,
+        "session_id": session_id,
+        "capacity": settings.working_capacity,
+    }
+    cursor = cast(Cursor, db.aql.execute(_ENFORCE_CAPACITY, bind_vars=bind))
+    return len(list(cursor))
 
 
 def _store_impl(
@@ -87,6 +120,7 @@ def _store_impl(
     mode: str = "lite",
     message_type: str | None = None,
     source_reliability: float = 1.0,
+    memory_type: str = "episodic",
 ) -> StoreResult:
     """Persist one turn as an episode + episodic memory, with extracted entities.
 
@@ -131,17 +165,29 @@ def _store_impl(
     }
     db.collection("episodes").insert(episode, overwrite_mode="ignore", silent=True)
 
+    # Working memory (§5/§14): a session-scoped scratch tier that auto-expires via a
+    # TTL index. Episodic memories carry expires_at=null (the TTL index ignores them).
+    is_working = memory_type == "working"
+    expires_at = (
+        (datetime.fromisoformat(now) + timedelta(seconds=settings.working_session_ttl_seconds))
+        .isoformat()
+        if is_working
+        else None
+    )
+
     mem_key = f"{key}-mem"
     memory = {
         "_key": mem_key,
         "idempotency_key": mem_key,
         "text": content,
-        "type": "episodic",
+        "type": "working" if is_working else "episodic",
         "strength": 1.0,
         "access_count": 1,
         "created_at": now,
         "accessed_at": now,
         "invalid_at": None,
+        "expires_at": expires_at,
+        "session_id": session_id,
         "source_episode_id": key,
         "agent_id": agent_id,
         "tenant_id": tenant_id,
@@ -153,8 +199,12 @@ def _store_impl(
     }
     db.collection("memories").insert(memory, overwrite_mode="ignore", silent=True)
 
+    if is_new and is_working:
+        _enforce_working_capacity(db, tenant_id=tenant_id, agent_id=agent_id, session_id=session_id)
+
     entity_ids: list[str] = []
-    if is_new:
+    # Working memory is ephemeral scratch — it never mints durable semantic entities.
+    if is_new and not is_working:
         entity_ids = write_entities(
             db,
             memory_key=mem_key,

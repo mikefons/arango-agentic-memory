@@ -27,6 +27,7 @@ class WriteIntent:
     session_id: str | None = None
     turn_index: int = 0
     source_reliability: float = 1.0
+    memory_type: str = "episodic"
     attempts: int = 0
 
     @property
@@ -48,6 +49,7 @@ class WriteIntent:
             session_id=self.session_id,
             turn_index=self.turn_index,
             source_reliability=self.source_reliability,
+            memory_type=self.memory_type,
             attempts=self.attempts + 1,
         )
 

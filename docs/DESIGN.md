@@ -1,7 +1,7 @@
 # ArangoDB Agentic Memory System — Design Specification
 
 > **Status:** ✅ **v1 build sequence complete (Steps 0–7).** v2: all §21 adapters shipped (MCP, LangChain/LangGraph, CrewAI) + full §19 entity API + **Step 3e heavy extraction tier done**. Authoritative reference.
-> **Last updated:** 2026-06-15 (rev 50 — dungeon ontology-review UI: approve/reject proposals)
+> **Last updated:** 2026-06-15 (rev 51 — working-memory tier: session TTL + SCM cap)
 >
 > **Rev 2 decisions:** Python-first core with a thin TypeScript client · v1 scope is Vercel-only · build a walking skeleton first, then a test/eval harness, then thicken each layer.
 >
@@ -528,9 +528,14 @@ Default: **lite**. Opt into full explicitly.
 
 ## 11. Memory Lifecycle
 
-### Working Memory
-- `type: "working"`, `expires_at` = session end (TTL index auto-deletes)
-- Max 7 active episodes (SCM model); overflow compresses oldest to episodic
+### Working Memory ✅ (rev 51)
+- `type: "working"`, `expires_at` = `created_at + working_session_ttl_seconds`; a TTL
+  index on `memories.expires_at` auto-deletes (episodic memories store `null` → ignored).
+- Max `working_capacity` (default 7) active per (tenant, agent, session) — the SCM
+  cap; overflow promotes the **oldest** working memory to `episodic` (clears its TTL).
+- Written via `store(memory_type="working")` / `POST /v1/store {"memory_type":"working"}`;
+  ephemeral scratch **mints no entities**. Retrieval already routes `working`-type hits
+  into the working token-budget tier (§9).
 
 ### Episodic Memory
 - Promoted from working at session end or topic shift
@@ -1162,6 +1167,13 @@ through `/api/ontology` → the core's flag-gated endpoints; when `ONTOLOGY_EVOL
 is off the core 404s and the tab shows a disabled note. Closes the ontology feature
 end-to-end.
 
+✅ **Working-memory tier** (rev 51) — a session-scoped `working` memory type
+(`store(memory_type="working")` / `POST /v1/store`): `expires_at` + a TTL index on
+`memories.expires_at` auto-expire it (episodic stores `null` → ignored), the SCM cap
+(`working_capacity`, default 7) promotes the oldest overflow back to `episodic`, and
+working scratch mints no entities. Retrieval's existing working tier routes the hits.
+`memory_type` threads the durable queue → worker. See §11.
+
 ✅ **Lazy decay at query time** (rev 48) — the Ebbinghaus multiplier
 `strength·exp(-λ·Δt)` is folded into the **BM25 + graph retrieval arm SORTs** in
 AQL, so freshness shapes candidate *selection* (pool membership), not only the
@@ -1179,8 +1191,6 @@ soft-deprecation.
 
 - **Dungeon ontology-review UI** — surface `ontology_proposals` in the dungeon for
   one-click approve/reject of proposed relationship types (the human-in-loop step).
-- **Working-memory tier** — a `working` memory type + session TTL + the SCM
-  7-item cap (§5/§14).
 - **GAM session-topic trigger** for Dream State (consolidation is threshold-driven
   today, §13).
 - **EWA edge weights** — exponentially-weighted-average update for edge `weight`

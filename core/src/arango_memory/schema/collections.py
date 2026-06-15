@@ -84,6 +84,11 @@ def ensure_schema(db: StandardDatabase) -> None:
                 "name": "idx_idempotency",
             }
         )
+    # Working-memory TTL (DESIGN.md §5/§14): auto-expire docs once `expires_at`
+    # passes. Episodic memories store expires_at=null, which the TTL index ignores.
+    db.collection("memories").add_index(
+        {"type": "ttl", "fields": ["expires_at"], "expireAfter": 0, "name": "idx_working_ttl"}
+    )
     # Entity natural-key dedup for UPSERT (DESIGN.md §5, §8).
     db.collection("entities").add_index(
         {

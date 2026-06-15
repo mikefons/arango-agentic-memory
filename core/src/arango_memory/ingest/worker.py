@@ -98,6 +98,7 @@ class WriteWorker:
                 generator=self._generator,
                 mode=settings.memory_mode,
                 source_reliability=intent.source_reliability,
+                memory_type=intent.memory_type,
             )
 
     def drain(self) -> int:
