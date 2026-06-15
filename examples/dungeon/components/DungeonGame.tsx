@@ -166,6 +166,8 @@ export function DungeonGame() {
   const runDream = useCallback(async () => {
     setDreaming(true);
     try {
+      // detect communities first so Dream State can scope conflict review to them
+      await fetch("/api/community", { method: "POST" }).catch(() => undefined);
       const res = await fetch("/api/dream", { method: "POST" });
       const d = (await res.json()) as {
         reviewed?: number;

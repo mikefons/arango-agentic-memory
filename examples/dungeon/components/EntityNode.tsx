@@ -1,5 +1,5 @@
 import { Handle, Position, type Node, type NodeProps } from "@xyflow/react";
-import { isSuperseded, type GraphNodeRaw } from "@/lib/explorer";
+import { communityColor, isSuperseded, type GraphNodeRaw } from "@/lib/explorer";
 
 export interface EntityNodeData extends Record<string, unknown> {
   node: GraphNodeRaw;
@@ -19,10 +19,16 @@ export function EntityNode({ data }: NodeProps<EntityFlowNode>) {
 
   // size the accent dot by PageRank centrality (salience cue; 6–14px)
   const dot = 6 + Math.round((node.centrality ?? 0) * 8);
+  // hue the dot by community (label-propagation cue); superseded/review keep
+  // their status colors (those CSS rules don't set an inline background).
+  const hue = isSuperseded(node) || node.needs_review ? null : communityColor(node.community);
   return (
     <div className={cls.join(" ")} data-label={node.label}>
       <Handle type="target" position={Position.Top} className="gx-handle" />
-      <span className="gx-dot" style={{ width: dot, height: dot }} />
+      <span
+        className="gx-dot"
+        style={{ width: dot, height: dot, ...(hue ? { background: hue } : {}) }}
+      />
       <span className="gx-name">{node.name}</span>
       <span className="gx-label">{node.label}</span>
       <Handle type="source" position={Position.Bottom} className="gx-handle" />

@@ -1,7 +1,7 @@
 # ArangoDB Agentic Memory System — Design Specification
 
 > **Status:** ✅ **v1 build sequence complete (Steps 0–7).** v2: all §21 adapters shipped (MCP, LangChain/LangGraph, CrewAI) + full §19 entity API + **Step 3e heavy extraction tier done**. Authoritative reference.
-> **Last updated:** 2026-06-15 (rev 46 — graph community detection: lifecycle/community.py + Dream-State scoping)
+> **Last updated:** 2026-06-15 (rev 47 — dungeon community coloring: Graph Explorer node hue by community)
 >
 > **Rev 2 decisions:** Python-first core with a thin TypeScript client · v1 scope is Vercel-only · build a walking skeleton first, then a test/eval harness, then thicken each layer.
 >
@@ -1136,8 +1136,13 @@ dense integer `community` label per entity (surfaced in `/v1/entity`,
 `/v1/entities`, `/v1/graph`). It **scopes Dream State review**: the conflict-confirm
 + supersede is skipped for a flagged pair in **different** communities (structurally
 distant → unlikely the same real-world entity), with a no-op fallback when either is
-unlabeled — so prior behavior is preserved until a community pass runs. *(Dungeon
-Graph-Explorer community coloring remains in the backlog.)*
+unlabeled — so prior behavior is preserved until a community pass runs.
+
+✅ **Dungeon community coloring** (rev 47) — the Graph Explorer hues each entity
+dot by its `community` label (deterministic golden-angle HSL via `communityColor`),
+a sibling to the centrality node-sizing cue; superseded/review keep their status
+colors. The ✦ dream flow (and the nightly cron) recompute communities **before**
+dreaming so the Dream State scoping gate engages. Always-on, like the centrality cue.
 
 #### Prioritized (next up)
 
@@ -1145,8 +1150,6 @@ Graph-Explorer community coloring remains in the backlog.)*
 
 #### Backlog (unprioritized)
 
-- **Dungeon community coloring** — color Graph-Explorer nodes by the entity
-  `community` label (gated), mirroring the centrality node-sizing cue (§9/§13).
 - **Lazy decay at query time** — AQL ranking-time `strength × exp(-λ·Δt)` as the
   *default* decay path (the batch job stays for hard `invalid_at` sweeps, §11).
 - **Ontology evolution** — consolidation proposes new `relates_to` types from

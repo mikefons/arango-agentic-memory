@@ -122,6 +122,17 @@ export function salience(tenantId: string, agentId: string): Promise<{ entities:
   });
 }
 
+/** Recompute label-propagation community labels for the tenant's entities (§9/§13). */
+export function community(
+  tenantId: string,
+  agentId: string,
+): Promise<{ entities: number; communities: number }> {
+  return coreFetch("/v1/community", {
+    method: "POST",
+    body: JSON.stringify({ ctx: { tenant_id: tenantId, agent_id: agentId, access_level: "write" } }),
+  });
+}
+
 /** Record `new` superseding `old` (bi-temporal §12) — the "caught a lie" primitive. */
 export function supersede(newKey: string, oldKey: string, ctx: Ctx): Promise<{ status: string }> {
   return coreFetch("/v1/supersede", {

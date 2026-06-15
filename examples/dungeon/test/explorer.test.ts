@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  communityColor,
   filterGraph,
   isSuperseded,
   relationshipKinds,
@@ -55,6 +56,20 @@ describe("filterGraph", () => {
       relationships: new Set(["associated_with"]),
     });
     expect(out.edges.every((e) => e.relationship === "associated_with")).toBe(true);
+  });
+});
+
+describe("communityColor", () => {
+  it("returns null for unlabeled entities", () => {
+    expect(communityColor(undefined)).toBeNull();
+    expect(communityColor(null)).toBeNull();
+    expect(communityColor(-1)).toBeNull();
+  });
+
+  it("returns a stable, distinct hue per community", () => {
+    expect(communityColor(0)).toBe("hsl(0 60% 58%)");
+    expect(communityColor(0)).toBe(communityColor(0)); // deterministic
+    expect(communityColor(1)).not.toBe(communityColor(0));
   });
 });
 
