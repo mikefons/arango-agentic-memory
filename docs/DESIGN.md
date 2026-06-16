@@ -1,7 +1,7 @@
 # ArangoDB Agentic Memory System — Design Specification
 
 > **Status:** ✅ **v1 build sequence complete (Steps 0–7).** v2: all §21 adapters shipped (MCP, LangChain/LangGraph, CrewAI) + full §19 entity API + **Step 3e heavy extraction tier done**. Authoritative reference.
-> **Last updated:** 2026-06-15 (rev 55 — hallucination / noise-reduction eval harness; backlog cleared)
+> **Last updated:** 2026-06-15 (rev 55 — hallucination / noise-reduction eval harness; real-data benchmark queued)
 >
 > **Rev 2 decisions:** Python-first core with a thin TypeScript client · v1 scope is Vercel-only · build a walking skeleton first, then a test/eval harness, then thicken each layer.
 >
@@ -1248,7 +1248,28 @@ soft-deprecation.
 
 #### Backlog (unprioritized)
 
-*Empty — every roadmap item has shipped (revs 41–55).*
+- **Real-data benchmark run (LoCoMo)** — the harnesses exist ([benchmark.py](../core/src/arango_memory/eval/benchmark.py),
+  [halu.py](../core/src/arango_memory/eval/halu.py)); this is the BYO-dataset run + the
+  glue around it (§23):
+  - **Dataset converter** `eval/datasets/locomo_convert.py` — map real LoCoMo
+    (`session_N` keys, `evidence`/category codes) → our `load_dataset` schema. Derive
+    `gold_fact` from the **cited evidence turn** (not the synthesized answer, or Recall@k
+    is unfairly punished by paraphrase); map category codes → single/multi-hop/temporal/
+    adversarial. Hand-verify ~10 converted samples before trusting a run.
+  - **Real providers**: `EMBEDDING_PROVIDER=openai` (+ key); full mode + halu need
+    `GENERATION_PROVIDER=anthropic` (+ key); a real ArangoDB with the vector index
+    trained (LoCoMo crosses `VECTOR_N_LISTS`).
+  - **Run + interpret**: lite first (isolates retrieval), then full + halu. Treat
+    **Recall@k + tokens-injected** as the primary signals; top-hit token-F1 reads low
+    on synthesized answers, so report it as directional. Watch the per-category
+    breakdown (multi-hop/temporal vs single-hop).
+  - **Repeatability**: `make benchmark` target + `docs/benchmarking.md` (acquisition +
+    license note — LoCoMo is BYO/externally licensed, **never commit it**; gitignore
+    `eval/datasets/*.json`). Optional: capture core-retrieval p99 latency (§23 targets)
+    — the runner doesn't time it yet.
+  - First move: converter + a hand-verified 10-sample lite run on real embeddings,
+    before spending on full-mode LLM calls. Keyless-testable on a synthetic
+    LoCoMo-shaped fixture so the converter lands CI-green without the real dataset/keys.
 
 *Shipped in v2:* MCP server, LangChain/LangGraph, CrewAI (+ G-Memory tiers), the
 full §19 entity API, Step 3e extraction tier, the Memory Dungeon reference app.
