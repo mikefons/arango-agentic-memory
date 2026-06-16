@@ -1,7 +1,7 @@
 # ArangoDB Agentic Memory System — Design Specification
 
 > **Status:** ✅ **v1 build sequence complete (Steps 0–7).** v2: all §21 adapters shipped (MCP, LangChain/LangGraph, CrewAI) + full §19 entity API + **Step 3e heavy extraction tier done**. Authoritative reference.
-> **Last updated:** 2026-06-15 (rev 55 — hallucination / noise-reduction eval harness; real-data benchmark queued)
+> **Last updated:** 2026-06-15 (rev 55 — hallucination / noise-reduction eval harness; benchmark + hardening queued)
 >
 > **Rev 2 decisions:** Python-first core with a thin TypeScript client · v1 scope is Vercel-only · build a walking skeleton first, then a test/eval harness, then thicken each layer.
 >
@@ -1270,6 +1270,34 @@ soft-deprecation.
   - First move: converter + a hand-verified 10-sample lite run on real embeddings,
     before spending on full-mode LLM calls. Keyless-testable on a synthetic
     LoCoMo-shaped fixture so the converter lands CI-green without the real dataset/keys.
+
+- **Hardening → deployable service.** The core is feature-complete but carries the
+  keyless/demo posture; these turn it production-ready. Suggested order:
+  **auth → durable queue → index/latency audit.**
+  - **Tier 1 — security + reliability (gates deployability):**
+    - **Authentication** — today ABAC is *self-asserted*: `access_level` and
+      `tenant_id` are request fields the caller sets, with no auth layer, so any
+      client reaching `/v1` can claim write to any tenant. Add auth middleware
+      (API key / bearer / mTLS) that authenticates the principal and **derives
+      `tenant_id` + `access_level` from the verified identity** instead of the body.
+    - **Rate limiting + request-size caps** per tenant (no limits today → DoS surface).
+    - **Durable queue** — implement the Redis/SQS backend behind the existing
+      `WriteQueue` Protocol (§15); the in-process queue drops queued-but-uncommitted
+      intents on crash. Add **graceful shutdown** that drains the worker before exit.
+    - **Multi-instance** — support N stateless API instances over a shared durable
+      queue + DB (in-process caches degrade gracefully cold); document it (ops.md).
+    - **Structured logging + correlation IDs** across write/retrieve (today: OTEL spans only).
+  - **Tier 2 — performance & correctness:**
+    - **AQL index audit** — `EXPLAIN` the graph-traversal + arm queries; back every
+      `tenant_id`/`agent_id`/`invalid_at` filter with a persistent index.
+    - **Latency percentiles** — capture p99 vs the §23 targets (hang it on the OTEL meters).
+    - **Batch embedding** — `store()` embeds entity names one-at-a-time; use `embed_batch`.
+  - **Tier 3 — testing depth:** concurrency / multi-tenant isolation under load (§22),
+    failure injection (DB drop mid-write → dead-letter), authz tests (post-auth), a
+    perf regression gate; decouple a few assertions from FakeEmbedder quirks.
+  - **Tier 4 — release & DX:** semver tags + CHANGELOG; publish the Python core +
+    `@arango-memory/vercel` + the container image (with SBOM/dep scan); surface
+    FastAPI `/docs` (OpenAPI) from `api.md`; a sample OTEL collector + dashboard config.
 
 *Shipped in v2:* MCP server, LangChain/LangGraph, CrewAI (+ G-Memory tiers), the
 full §19 entity API, Step 3e extraction tier, the Memory Dungeon reference app.
