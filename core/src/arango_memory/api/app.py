@@ -37,6 +37,7 @@ from ..lifecycle.salience import compute_centrality
 from ..retrieve.enrich import QueryCache
 from ..retrieve.search import retrieve
 from ..schema.collections import ensure_schema
+from ..security.auth import require_api_key
 from ..security.forget import forget
 from ..stats import stats
 
@@ -523,7 +524,11 @@ def create_app(client: ArangoMemoryClient | None = None) -> FastAPI:
         finally:
             worker.stop()
 
-    app = FastAPI(title="arango-memory core", version="0.1.0", lifespan=lifespan)
+    # Authn (§17): enforced only when API keys are configured; /health stays open.
+    app = FastAPI(
+        title="arango-memory core", version="0.1.0", lifespan=lifespan,
+        dependencies=[Depends(require_api_key)],
+    )
     app.state.client = mem_client
     app.state.embedder = embedder
     app.state.generator = generator

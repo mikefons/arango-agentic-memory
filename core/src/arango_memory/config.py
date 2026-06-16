@@ -4,8 +4,15 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import Field
+from pydantic import BaseModel, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class ApiKeyEntry(BaseModel):
+    """What an API key grants (DESIGN.md §17): a single tenant + read/write scope."""
+
+    tenant_id: str
+    scope: Literal["read", "write"] = "read"
 
 
 class Settings(BaseSettings):
@@ -123,6 +130,11 @@ class Settings(BaseSettings):
     # recurring entity names / repeated queries skip the provider. Pure perf, safe.
     embedding_cache: bool = True
     embedding_cache_size: int = Field(default=10000, ge=1)
+    # API authentication (DESIGN.md §17): a bearer key → tenant + scope map. Empty =
+    # auth **off** (body-asserted ABAC, the keyless dev/CI/demo posture). When set,
+    # `/v1` requires `Authorization: Bearer <key>`; tenant/scope come from the key.
+    # Env (JSON): API_KEYS='{"k_abc":{"tenant_id":"acme","scope":"write"}}'.
+    api_keys: dict[str, ApiKeyEntry] = Field(default_factory=dict)
 
 
 settings = Settings()
