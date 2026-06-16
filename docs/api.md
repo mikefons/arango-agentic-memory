@@ -27,10 +27,27 @@ Every memory operation is scoped by an **access context**:
 }
 ```
 
-**Mutating endpoints require `access_level: "write"`** or they return **`403`**:
+**Mutating endpoints require write access** or they return **`403`**:
 `/v1/store`, `/v1/step`, `/v1/forget`, `/v1/seed`, `/v1/supersede`, `/v1/dream`,
 `/v1/salience`, `/v1/community`, `/v1/ontology/*`. Reads (`/v1/retrieve`, `/v1/entity*`, `/v1/graph`, `/v1/steps`,
-`/v1/stats`) allow `read`.
+`/v1/stats`) allow read.
+
+---
+
+## Authentication (§17)
+
+Static **bearer API keys**, configured on the core via `API_KEYS` (a JSON map
+`key → {tenant_id, scope}`, scope `read`|`write`). Send `Authorization: Bearer <key>`.
+
+- **Open by default** — when no keys are configured the core runs **open**: the
+  request's `tenant_id`/`access_level` are trusted (the keyless dev/CI/demo posture).
+- **Enforced** — once `API_KEYS` is set, every `/v1` route needs a valid key (`401`
+  otherwise; `/health` stays public). The caller's **identity comes from the key**:
+  the request's `tenant_id` must match the key's tenant (else `403`), and a write
+  needs a `write`-scoped key — the body can no longer assert identity or escalate.
+- Clients pass it through: Vercel adapter `arangoMemory({ apiKey })`, the dungeon
+  `CORE_API_KEY`, the MCP server `ARANGO_MEMORY_API_KEY`.
+- *(JWT/OIDC is a roadmap follow-on; bearer keys are the dependency-free default.)*
 
 ---
 
