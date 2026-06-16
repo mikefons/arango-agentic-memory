@@ -1,7 +1,7 @@
 # ArangoDB Agentic Memory System — Design Specification
 
 > **Status:** ✅ **v1 build sequence complete (Steps 0–7).** v2: all §21 adapters shipped (MCP, LangChain/LangGraph, CrewAI) + full §19 entity API + **Step 3e heavy extraction tier done**. Authoritative reference.
-> **Last updated:** 2026-06-15 (rev 54 — dedicated embedding cache: per-tenant memoized embed())
+> **Last updated:** 2026-06-15 (rev 55 — hallucination / noise-reduction eval harness; backlog cleared)
 >
 > **Rev 2 decisions:** Python-first core with a thin TypeScript client · v1 scope is Vercel-only · build a walking skeleton first, then a test/eval harness, then thicken each layer.
 >
@@ -889,6 +889,16 @@ Recall@k, Deducible Score, Hallucination Rate, Noise Reduction Rate
 Tokens injected / turn ≤ 1,500   (85–90% reduction vs full-context)
 ```
 
+**Harnesses.** Retrieval-side deterministic metrics (Recall@k, token-F1,
+tokens-injected, per-category) → `eval/benchmark.py` (gates a nightly run vs the
+targets above). **Hallucination Rate + Noise-Reduction Rate** (rev 55) →
+`eval/halu.py`: the full agent loop (retrieve → `generate_answer` → `judge_answer`)
+with an **injectable generator + judge** (keyless `FakeGenerator` in CI, Haiku for a
+real run). Hallucination Rate = answers with a claim unsupported by retrieved context;
+Noise-Reduction Rate = answers that stayed focused on the relevant fact. Report-only
+by default (§23 sets no numeric targets for these two); `--max-hallucination` /
+`--min-nrr` optionally gate. CLI: `python -m arango_memory.eval.halu <dataset>`.
+
 ### Latency targets (corrected Rev 2 — split by path)
 - **Core retrieval** (DB ops only: vector + BM25 + graph + fusion + assembly): **p99 ≤ 200ms**
 - **Augmented retrieval** (full mode, incl. adaptive gate + HyDE LLM calls, warm cache): **p99 ≤ 1.5s**
@@ -1216,6 +1226,13 @@ names, repeated queries, and idempotent replays skip the provider. Keyed by
 defense); distinct from the HyDE/gate `QueryCache`. Exposes `hit_rate` + an
 `embedding_cache` metric (+ OTEL meter). See §16.
 
+✅ **Hallucination / Noise-Reduction eval** (rev 55) — `eval/halu.py` adds the full
+agent-loop harness the deterministic LoCoMo runner couldn't: retrieve →
+`generate_answer` → `judge_answer`, with an injectable generator + judge (keyless in
+CI, Haiku for real). Reports **Hallucination Rate** (unsupported claims) +
+**Noise-Reduction Rate** (stayed focused on the relevant fact); report-only with
+optional `--max-hallucination` / `--min-nrr` gates. CLI mirrors `benchmark.py`. See §23.
+
 ✅ **Lazy decay at query time** (rev 48) — the Ebbinghaus multiplier
 `strength·exp(-λ·Δt)` is folded into the **BM25 + graph retrieval arm SORTs** in
 AQL, so freshness shapes candidate *selection* (pool membership), not only the
@@ -1231,8 +1248,7 @@ soft-deprecation.
 
 #### Backlog (unprioritized)
 
-- **Hallucination-Rate / Noise-Reduction eval** — a generated-answer + LLM-judge
-  harness (§23).
+*Empty — every roadmap item has shipped (revs 41–55).*
 
 *Shipped in v2:* MCP server, LangChain/LangGraph, CrewAI (+ G-Memory tiers), the
 full §19 entity API, Step 3e extraction tier, the Memory Dungeon reference app.
