@@ -1,7 +1,7 @@
 # ArangoDB Agentic Memory System — Design Specification
 
 > **Status:** ✅ **v1 build sequence complete (Steps 0–7).** v2: all §21 adapters shipped (MCP, LangChain/LangGraph, CrewAI) + full §19 entity API + **Step 3e heavy extraction tier done**. Authoritative reference.
-> **Last updated:** 2026-06-15 (rev 55 — hallucination / noise-reduction eval harness; benchmark + hardening queued)
+> **Last updated:** 2026-06-16 (rev 56 — bearer API-key authentication: authn + key-derived authz + clients)
 >
 > **Rev 2 decisions:** Python-first core with a thin TypeScript client · v1 scope is Vercel-only · build a walking skeleton first, then a test/eval harness, then thicken each layer.
 >
@@ -1275,11 +1275,16 @@ soft-deprecation.
   keyless/demo posture; these turn it production-ready. Suggested order:
   **auth → durable queue → index/latency audit.**
   - **Tier 1 — security + reliability (gates deployability):**
-    - **Authentication** — today ABAC is *self-asserted*: `access_level` and
-      `tenant_id` are request fields the caller sets, with no auth layer, so any
-      client reaching `/v1` can claim write to any tenant. Add auth middleware
-      (API key / bearer / mTLS) that authenticates the principal and **derives
-      `tenant_id` + `access_level` from the verified identity** instead of the body.
+    - ✅ **Authentication** (rev 56) — static **bearer API keys** (`security/auth.py`,
+      `API_KEYS` config: `key → {tenant_id, scope}`). Open by default (keyless
+      dev/CI/demo); when configured, `/v1` requires `Authorization: Bearer <key>`
+      (`401`/`/health` exempt) and `tenant_id` + `access_level` are **derived from the
+      verified key**, not the body (`403` on tenant mismatch / read-key write), closing
+      the self-assertion hole. Threaded through the Vercel / dungeon / MCP clients.
+      *(JWT/OIDC is the follow-on below.)*
+    - **JWT / OIDC authentication** — validate signed tokens from an external IdP
+      (claims → tenant/scope) as an alternative to static keys, for federated/SSO
+      deployments. Slots in alongside the bearer-key path in `security/auth.py`.
     - **Rate limiting + request-size caps** per tenant (no limits today → DoS surface).
     - **Durable queue** — implement the Redis/SQS backend behind the existing
       `WriteQueue` Protocol (§15); the in-process queue drops queued-but-uncommitted

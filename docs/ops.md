@@ -59,7 +59,20 @@ need no API keys.
 `WEIGHT_EWA_ALPHA` (0.5), `WEIGHT_LAMBDA` (0.02); embedding cache:
 `EMBEDDING_CACHE` (`true`), `EMBEDDING_CACHE_SIZE` (10000); conflict: `ENTITY_MERGE_THRESHOLD` (0.9),
 `ENTITY_FLAG_THRESHOLD` (0.6); durable writes: `WRITE_MAX_RETRIES` (5),
-`WRITE_BACKOFF_BASE` (0.5); security: `REDACT_PII` (`true`).
+`WRITE_BACKOFF_BASE` (0.5); security: `REDACT_PII` (`true`), `API_KEYS` (unset = auth
+open).
+
+**Authentication (§17)** — bearer API keys. Set `API_KEYS` to a JSON map to enforce:
+```bash
+API_KEYS='{"k_acme_live":{"tenant_id":"acme","scope":"write"},
+           "k_acme_ro":{"tenant_id":"acme","scope":"read"}}'
+```
+Unset → **open** (body-trusted, the keyless default). Set → `/v1` requires
+`Authorization: Bearer <key>` (`401` otherwise), and `tenant_id`/`access_level` are
+taken from the key, not the request (`403` on tenant mismatch or read-key write).
+`/health` stays public. **Rotation:** add the new key alongside the old, roll
+clients over, then drop the old key (both are valid while both are listed). Keep
+keys in the host env / a gitignored `.env`, never in the image or VCS.
 
 > **Secrets:** never commit keys. Use the host's environment or a gitignored
 > `.env`. The repo's gitleaks hook + CI secret scan guard against leaks.
