@@ -1,7 +1,7 @@
 # ArangoDB Agentic Memory System — Design Specification
 
 > **Status:** ✅ **v1 build sequence complete (Steps 0–7).** v2: all §21 adapters shipped (MCP, LangChain/LangGraph, CrewAI) + full §19 entity API + **Step 3e heavy extraction tier done**. Authoritative reference.
-> **Last updated:** 2026-06-16 (rev 56 — bearer API-key authentication: authn + key-derived authz + clients)
+> **Last updated:** 2026-06-16 (rev 57 — durable write queue: claim/ack + ArangoDB-backed backend)
 >
 > **Rev 2 decisions:** Python-first core with a thin TypeScript client · v1 scope is Vercel-only · build a walking skeleton first, then a test/eval harness, then thicken each layer.
 >
@@ -650,9 +650,10 @@ The schema supports this in v1; the CrewAI adapter that exercises it shipped in 
 Memory writes from the adapter are **asynchronous but durable**, not fire-and-forget:
 
 - The adapter enqueues a write intent (idempotency-keyed) and returns immediately — the agent turn never blocks on memory.
-- A core-side worker drains the queue and commits to ArangoDB with retry + exponential backoff.
+- A core-side worker **claims** an intent, commits to ArangoDB with retry + exponential backoff, then **acks** it (claim→ack, not a destructive pop, so a crash between claim and ack redelivers — rev 57).
 - Persistent failures land in a **dead-letter** record (`failed_writes`; the leading underscore from earlier revs is dropped — ArangoDB reserves `_*` for system collections) for inspection/replay via `ops`.
-- Because writes are idempotency-keyed, replays cannot duplicate.
+- Because writes are idempotency-keyed, replays/redeliveries cannot duplicate (at-least-once is safe).
+- **Queue backend** (rev 57, `WRITE_QUEUE_BACKEND`): `memory` (in-process, default — dev/CI; loses unacked work on crash) or `arango` (a durable `write_intents` collection — leased claims, survives restarts, multi-instance-safe via an exclusive-locked claim; **set in production**). Both sit behind the `WriteQueue` Protocol (`enqueue`/`claim`/`ack`/`nack`); **Redis/SQS** are drop-in adapters (roadmap).
 
 For the walking skeleton, the "queue" may be in-process; production uses a durable queue (e.g., Redis/SQS) — the interface is identical.
 
@@ -1286,9 +1287,11 @@ soft-deprecation.
       (claims → tenant/scope) as an alternative to static keys, for federated/SSO
       deployments. Slots in alongside the bearer-key path in `security/auth.py`.
     - **Rate limiting + request-size caps** per tenant (no limits today → DoS surface).
-    - **Durable queue** — implement the Redis/SQS backend behind the existing
-      `WriteQueue` Protocol (§15); the in-process queue drops queued-but-uncommitted
-      intents on crash. Add **graceful shutdown** that drains the worker before exit.
+    - ✅ **Durable queue** (rev 57) — `ArangoQueue` (a `write_intents` collection)
+      behind the `WriteQueue` Protocol, selected by `WRITE_QUEUE_BACKEND=arango`:
+      claim→ack leasing survives a crash between accept and commit (redelivers on
+      lease expiry; at-least-once, idempotency-safe). `memory` stays the dev/CI
+      default. **Redis/SQS** remain drop-in adapters behind the same Protocol.
     - **Multi-instance** — support N stateless API instances over a shared durable
       queue + DB (in-process caches degrade gracefully cold); document it (ops.md).
     - **Structured logging + correlation IDs** across write/retrieve (today: OTEL spans only).
