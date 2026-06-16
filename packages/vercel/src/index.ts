@@ -33,6 +33,15 @@ export interface ArangoMemoryOptions {
   retrieveTimeoutMs?: number;
   /** Record completed tool calls as procedural memory (DESIGN.md §11). Default true. */
   captureToolTraces?: boolean;
+  /** Bearer API key for the core (DESIGN.md §17). Omit when the core runs open (keyless). */
+  apiKey?: string;
+}
+
+/** Core request headers; adds `Authorization: Bearer` only when a key is configured. */
+function jsonHeaders(apiKey?: string): Record<string, string> {
+  const headers: Record<string, string> = { 'content-type': 'application/json' };
+  if (apiKey) headers.authorization = `Bearer ${apiKey}`;
+  return headers;
 }
 
 type Ctx = { tenant_id: string; agent_id: string; session_id?: string };
@@ -109,6 +118,7 @@ function collectCompletedTools(prompt: LanguageModelV2Prompt): CompletedTool[] {
 
 async function captureToolTraces(
   coreUrl: string,
+  headers: Record<string, string>,
   ctx: Ctx,
   prompt: LanguageModelV2Prompt,
   state: CaptureState,
@@ -119,7 +129,7 @@ async function captureToolTraces(
     try {
       const res = await fetch(`${coreUrl}/v1/step`, {
         method: 'POST',
-        headers: { 'content-type': 'application/json' },
+        headers,
         body: JSON.stringify({
           tool_name: tool.toolName,
           arguments: tool.args,
@@ -148,8 +158,10 @@ export function arangoMemory(options: ArangoMemoryOptions): LanguageModelV2Middl
     maxMemoryTokens,
     retrieveTimeoutMs = 800,
     captureToolTraces: capture = true,
+    apiKey,
   } = options;
   const ctx: Ctx = { tenant_id: tenantId, agent_id: agentId, session_id: sessionId };
+  const headers = jsonHeaders(apiKey);
   const state: CaptureState = { seen: new Set() };
 
   return {
@@ -162,7 +174,7 @@ export function arangoMemory(options: ArangoMemoryOptions): LanguageModelV2Middl
         const timer = setTimeout(() => controller.abort(), retrieveTimeoutMs);
         const res = await fetch(`${coreUrl}/v1/retrieve`, {
           method: 'POST',
-          headers: { 'content-type': 'application/json' },
+          headers,
           body: JSON.stringify({
             query,
             ctx: { ...ctx, access_level: 'read' },
@@ -182,26 +194,31 @@ export function arangoMemory(options: ArangoMemoryOptions): LanguageModelV2Middl
     // AFTER generateText: store the turn + capture completed tools (non-blocking).
     wrapGenerate: async ({ doGenerate, params }) => {
       const result = await doGenerate();
-      void storeTurn(coreUrl, ctx, lastUserText(params.prompt));
-      if (capture) void captureToolTraces(coreUrl, ctx, params.prompt, state);
+      void storeTurn(coreUrl, headers, ctx, lastUserText(params.prompt));
+      if (capture) void captureToolTraces(coreUrl, headers, ctx, params.prompt, state);
       return result;
     },
 
     // AFTER streamText: same, once the stream is handed off.
     wrapStream: async ({ doStream, params }) => {
       const out = await doStream();
-      void storeTurn(coreUrl, ctx, lastUserText(params.prompt));
-      if (capture) void captureToolTraces(coreUrl, ctx, params.prompt, state);
+      void storeTurn(coreUrl, headers, ctx, lastUserText(params.prompt));
+      if (capture) void captureToolTraces(coreUrl, headers, ctx, params.prompt, state);
       return out;
     },
   };
 }
 
-function storeTurn(coreUrl: string, ctx: Ctx, content: string): Promise<void> {
+function storeTurn(
+  coreUrl: string,
+  headers: Record<string, string>,
+  ctx: Ctx,
+  content: string,
+): Promise<void> {
   if (!content) return Promise.resolve();
   return fetch(`${coreUrl}/v1/store`, {
     method: 'POST',
-    headers: { 'content-type': 'application/json' },
+    headers,
     body: JSON.stringify({ content, ctx: { ...ctx, access_level: 'write' } }),
   })
     .then(() => undefined)
