@@ -22,7 +22,7 @@ from ..generation import Generator, get_generator
 from ..graph_api import tenant_graph
 from ..ingest.extract import get_extractor
 from ..ingest.procedural import get_steps
-from ..ingest.queue import InProcessQueue, StepIntent, WriteIntent, WriteQueue
+from ..ingest.queue import ArangoQueue, InProcessQueue, StepIntent, WriteIntent, WriteQueue
 from ..ingest.worker import WriteWorker
 from ..lifecycle.community import compute_communities
 from ..lifecycle.conflict import supersede
@@ -547,11 +547,21 @@ def create_app(client: ArangoMemoryClient | None = None) -> FastAPI:
     generator = get_generator()
     extractor = get_extractor()
     cache = QueryCache()
-    queue = InProcessQueue()
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         ensure_schema(mem_client.connect())
+        # Build the queue after the schema exists (the durable backend needs its
+        # collection). "arango" survives restarts; "memory" is the dev/CI default.
+        queue: WriteQueue
+        if settings.write_queue_backend == "arango":
+            queue = ArangoQueue(
+                ArangoMemoryClient(mem_client.config).connect(),
+                lease_seconds=settings.write_lease_seconds,
+            )
+        else:
+            queue = InProcessQueue()
+        app.state.queue = queue
         worker = WriteWorker(
             queue, worker_client.connect(),
             embedder=embedder, extractor=extractor, generator=generator,
@@ -572,7 +582,7 @@ def create_app(client: ArangoMemoryClient | None = None) -> FastAPI:
     app.state.embedder = embedder
     app.state.generator = generator
     app.state.cache = cache
-    app.state.queue = queue
+    # app.state.queue is set in the lifespan (after the schema exists).
 
     app.add_api_route("/health", health, methods=["GET"])
     app.add_api_route("/v1/store", store_endpoint, methods=["POST"], response_model=StoreResponse)

@@ -12,14 +12,21 @@ is the in-memory default (fast, zero-config; loses unacked work on process death
 
 from __future__ import annotations
 
+import dataclasses
 import hashlib
 import itertools
 import threading
+import uuid
 from collections import deque
 from dataclasses import dataclass
-from typing import Any, Protocol
+from datetime import datetime, timedelta
+from typing import Any, Protocol, cast
 
-from ..models import idempotency_key
+from arango.cursor import Cursor
+from arango.database import StandardDatabase
+
+from ..models import idempotency_key, utcnow_iso
+from ..schema.collections import WRITE_QUEUE_COLLECTION
 
 
 @dataclass(frozen=True)
@@ -132,3 +139,82 @@ class InProcessQueue:
     def __len__(self) -> int:
         with self._lock:
             return len(self._pending)
+
+
+def _to_intent(kind: str, data: dict[str, Any]) -> Intent:
+    return StepIntent(**data) if kind == "step" else WriteIntent(**data)
+
+
+# Claim the oldest free (unleased or lease-expired) intent and lease it, atomically.
+# OPTIONS{exclusive} serialises claims so two workers can't grab the same intent.
+_CLAIM = """
+FOR d IN @@coll
+  FILTER d.leased_until == null OR d.leased_until < @now
+  SORT d.enqueued_at
+  LIMIT 1
+  UPDATE d WITH { leased_until: @lease_until } IN @@coll OPTIONS { exclusive: true }
+  RETURN NEW
+"""
+
+_PENDING = """
+RETURN LENGTH(
+  FOR d IN @@coll FILTER d.leased_until == null OR d.leased_until < @now RETURN 1
+)
+"""
+
+
+class ArangoQueue:
+    """Durable write queue backed by a `write_intents` collection (DESIGN.md §15).
+
+    Survives restarts: `enqueue` persists, `claim` leases (so a crash between claim
+    and ack lets the lease expire and the intent redeliver), `ack` deletes, `nack`
+    releases. A lock serialises access since the request threads (enqueue) and the
+    worker thread (claim/ack) share one connection.
+    """
+
+    def __init__(self, db: StandardDatabase, *, lease_seconds: int) -> None:
+        self._db = db
+        self._lease_seconds = lease_seconds
+        self._lock = threading.Lock()
+
+    def enqueue(self, intent: Intent) -> None:
+        doc = {
+            "_key": uuid.uuid4().hex,
+            "kind": "step" if isinstance(intent, StepIntent) else "write",
+            "intent": dataclasses.asdict(intent),
+            "enqueued_at": utcnow_iso(),
+            "leased_until": None,
+        }
+        with self._lock:
+            self._db.collection(WRITE_QUEUE_COLLECTION).insert(doc, silent=True)
+
+    def claim(self) -> Claim | None:
+        now = utcnow_iso()
+        lease_until = (
+            datetime.fromisoformat(now) + timedelta(seconds=self._lease_seconds)
+        ).isoformat()
+        bind: dict[str, Any] = {
+            "@coll": WRITE_QUEUE_COLLECTION, "now": now, "lease_until": lease_until
+        }
+        with self._lock:
+            rows = list(cast(Cursor, self._db.aql.execute(_CLAIM, bind_vars=bind)))
+        if not rows:
+            return None
+        doc = rows[0]
+        return Claim(intent=_to_intent(doc["kind"], doc["intent"]), handle=doc["_key"])
+
+    def ack(self, claim: Claim) -> None:
+        with self._lock:
+            self._db.collection(WRITE_QUEUE_COLLECTION).delete(claim.handle, ignore_missing=True)
+
+    def nack(self, claim: Claim) -> None:
+        with self._lock:
+            self._db.collection(WRITE_QUEUE_COLLECTION).update(
+                {"_key": claim.handle, "leased_until": None}, silent=True
+            )
+
+    def __len__(self) -> int:
+        bind: dict[str, Any] = {"@coll": WRITE_QUEUE_COLLECTION, "now": utcnow_iso()}
+        with self._lock:
+            rows = cast(Cursor, self._db.aql.execute(_PENDING, bind_vars=bind))
+            return int(next(iter(rows)))

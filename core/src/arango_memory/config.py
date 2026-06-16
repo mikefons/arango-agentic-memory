@@ -135,6 +135,12 @@ class Settings(BaseSettings):
     # `/v1` requires `Authorization: Bearer <key>`; tenant/scope come from the key.
     # Env (JSON): API_KEYS='{"k_abc":{"tenant_id":"acme","scope":"write"}}'.
     api_keys: dict[str, ApiKeyEntry] = Field(default_factory=dict)
+    # Durable write queue (DESIGN.md §15). "memory" = in-process (fast, zero-config —
+    # the dev/CI default; loses unacked work on crash). "arango" = a durable
+    # `write_intents` collection that survives restarts (set this in production).
+    write_queue_backend: Literal["memory", "arango"] = "memory"
+    # How long a claimed intent stays leased before it's reclaimable (crash recovery).
+    write_lease_seconds: int = Field(default=60, ge=1)
 
 
 settings = Settings()
