@@ -20,14 +20,43 @@ def test_retried_bumps_attempts_without_mutating() -> None:
     assert intent.attempts == 0  # frozen — original unchanged
 
 
-def test_queue_is_fifo() -> None:
+def test_claim_is_fifo_and_ack_removes() -> None:
     queue = InProcessQueue()
     first = WriteIntent(content="a", tenant_id="t", agent_id="ag")
     second = WriteIntent(content="b", tenant_id="t", agent_id="ag")
     queue.enqueue(first)
     queue.enqueue(second)
-    assert len(queue) == 2
-    assert queue.pop() is first
-    assert queue.pop() is second
-    assert queue.pop() is None
+    assert len(queue) == 2  # pending excludes claimed
+
+    c1 = queue.claim()
+    assert c1 is not None and c1.intent is first
+    assert len(queue) == 1  # claimed → no longer pending
+    queue.ack(c1)
+
+    c2 = queue.claim()
+    assert c2 is not None and c2.intent is second
+    queue.ack(c2)
+    assert queue.claim() is None
     assert len(queue) == 0
+
+
+def test_nack_returns_intent_to_the_front() -> None:
+    queue = InProcessQueue()
+    intent = WriteIntent(content="x", tenant_id="t", agent_id="ag")
+    queue.enqueue(intent)
+
+    claim = queue.claim()
+    assert claim is not None and len(queue) == 0
+    queue.nack(claim)  # release the lease
+    assert len(queue) == 1
+    again = queue.claim()
+    assert again is not None and again.intent is intent  # redelivered
+
+
+def test_ack_is_idempotent() -> None:
+    queue = InProcessQueue()
+    queue.enqueue(WriteIntent(content="x", tenant_id="t", agent_id="ag"))
+    claim = queue.claim()
+    assert claim is not None
+    queue.ack(claim)
+    queue.ack(claim)  # double-ack is a no-op, never raises

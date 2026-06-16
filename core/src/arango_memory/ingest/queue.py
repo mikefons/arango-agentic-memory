@@ -1,14 +1,19 @@
 """Durable write queue (DESIGN.md §15).
 
 The adapter enqueues an idempotency-keyed write intent and returns immediately;
-a worker drains the queue and commits to ArangoDB (see `worker.py`). The queue
-is in-process for now — the `WriteQueue` Protocol is the seam a durable backend
-(Redis/SQS) slots into later without touching callers.
+a worker **claims** an intent, commits it to ArangoDB, then **acks** it (see
+`worker.py`). The claim→ack contract (not a destructive `pop`) is what makes
+durability possible: a crash between claim and ack leaves the intent leased, so a
+durable backend can redeliver it — commits are idempotency-keyed, so at-least-once
+delivery never duplicates. The `WriteQueue` Protocol is the seam a durable backend
+(ArangoDB, then Redis/SQS) slots into without touching callers; `InProcessQueue`
+is the in-memory default (fast, zero-config; loses unacked work on process death).
 """
 
 from __future__ import annotations
 
 import hashlib
+import itertools
 import threading
 from collections import deque
 from dataclasses import dataclass
@@ -76,27 +81,54 @@ class StepIntent:
 Intent = WriteIntent | StepIntent
 
 
+@dataclass(frozen=True)
+class Claim:
+    """A leased intent: the work plus an opaque `handle` the backend acks/nacks by."""
+
+    intent: Intent
+    handle: str
+
+
 class WriteQueue(Protocol):
     def enqueue(self, intent: Intent) -> None: ...
-    def pop(self) -> Intent | None: ...
-    def __len__(self) -> int: ...
+    def claim(self) -> Claim | None: ...
+    def ack(self, claim: Claim) -> None: ...
+    def nack(self, claim: Claim) -> None: ...
+    def __len__(self) -> int: ...  # pending (unclaimed) intents
 
 
 class InProcessQueue:
-    """Thread-safe FIFO queue backed by a deque."""
+    """Thread-safe FIFO queue with in-memory leasing (claim → ack/nack)."""
 
     def __init__(self) -> None:
-        self._items: deque[Intent] = deque()
+        self._pending: deque[Intent] = deque()
+        self._inflight: dict[str, Intent] = {}
+        self._handles = itertools.count()
         self._lock = threading.Lock()
 
     def enqueue(self, intent: Intent) -> None:
         with self._lock:
-            self._items.append(intent)
+            self._pending.append(intent)
 
-    def pop(self) -> Intent | None:
+    def claim(self) -> Claim | None:
         with self._lock:
-            return self._items.popleft() if self._items else None
+            if not self._pending:
+                return None
+            intent = self._pending.popleft()
+            handle = str(next(self._handles))
+            self._inflight[handle] = intent
+            return Claim(intent=intent, handle=handle)
+
+    def ack(self, claim: Claim) -> None:
+        with self._lock:
+            self._inflight.pop(claim.handle, None)
+
+    def nack(self, claim: Claim) -> None:
+        """Release a leased intent back to the front of the queue (e.g. on shutdown)."""
+        with self._lock:
+            if self._inflight.pop(claim.handle, None) is not None:
+                self._pending.appendleft(claim.intent)
 
     def __len__(self) -> int:
         with self._lock:
-            return len(self._items)
+            return len(self._pending)

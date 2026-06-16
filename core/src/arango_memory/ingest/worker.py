@@ -104,8 +104,9 @@ class WriteWorker:
     def drain(self) -> int:
         """Process all currently queued intents synchronously. Returns count handled."""
         handled = 0
-        while (intent := self._queue.pop()) is not None:
-            self.process(intent)
+        while (claim := self._queue.claim()) is not None:
+            self.process(claim.intent)  # commits or dead-letters; either way it's done
+            self._queue.ack(claim)
             handled += 1
         return handled
 
@@ -152,8 +153,9 @@ class WriteWorker:
 
     def _run(self) -> None:
         while not self._stop.is_set():
-            intent = self._queue.pop()
-            if intent is None:
+            claim = self._queue.claim()
+            if claim is None:
                 self._stop.wait(_POLL_INTERVAL)
                 continue
-            self.process(intent)
+            self.process(claim.intent)  # finishes the in-flight intent before re-checking stop
+            self._queue.ack(claim)
