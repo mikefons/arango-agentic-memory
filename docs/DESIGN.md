@@ -1,7 +1,7 @@
 # ArangoDB Agentic Memory System — Design Specification
 
 > **Status:** ✅ **v1 build sequence complete (Steps 0–7).** v2: all §21 adapters shipped (MCP, LangChain/LangGraph, CrewAI) + full §19 entity API + **Step 3e heavy extraction tier done**. Authoritative reference.
-> **Last updated:** 2026-06-15 (rev 52 — GAM session-topic trigger: topic-shift flush + consolidation signal)
+> **Last updated:** 2026-06-15 (rev 53 — EWA edge weights: recency-decayed relation strength + graph fold)
 >
 > **Rev 2 decisions:** Python-first core with a thin TypeScript client · v1 scope is Vercel-only · build a walking skeleton first, then a test/eval harness, then thicken each layer.
 >
@@ -579,7 +579,13 @@ Dream State confirms contradiction:
   5. A retained for audit — never hard-deleted
 ```
 
-- **EWA weights:** newer `ingestion_time` → higher edge weight; agent prioritizes most recent confirmed fact.
+- **EWA weights:** ✅ (rev 53) each corroboration updates the `relates_to` edge
+  `weight` via a **recency-decayed EWA** in the `_RELATE` upsert —
+  `weight = α·1 + (1−α)·OLD.weight·exp(−λ·Δdays(last_seen→now))` (seed = α). Stale
+  relations decay toward 0; recently/frequently confirmed ones approach 1. The graph
+  retrieval arm folds the bridging edges' mean weight into the bridge salience
+  (`MAX(belief, centrality, weight)`), so the agent prioritizes recently-confirmed
+  relations; surfaced in `/v1/graph` edges. Knobs: `weight_ewa_alpha`, `weight_lambda`.
 - **Deterministic override:** human-edited config wins over LLM-extracted facts (checked first at retrieval).
 
 ---
@@ -1188,6 +1194,12 @@ flags the session `consolidation_due` (emits a `topic_shift` metric). Signal-onl
 inline (reuses the already-computed turn embedding); Dream State stays a separate pass.
 See §13.
 
+✅ **EWA edge weights** (rev 53) — `relates_to` edge `weight` is now a recency-decayed
+exponentially-weighted average updated in the `_RELATE` upsert (was a constant 1.0):
+`α·1 + (1−α)·OLD.weight·exp(−λ·Δt)` (seed α). The graph retrieval arm folds the mean
+bridging-edge weight into the bridge salience (`MAX(belief, centrality, weight)`) so
+recently-confirmed relations rank higher (§12), and it's surfaced in `/v1/graph` edges.
+
 ✅ **Lazy decay at query time** (rev 48) — the Ebbinghaus multiplier
 `strength·exp(-λ·Δt)` is folded into the **BM25 + graph retrieval arm SORTs** in
 AQL, so freshness shapes candidate *selection* (pool membership), not only the
@@ -1203,10 +1215,6 @@ soft-deprecation.
 
 #### Backlog (unprioritized)
 
-- **Dungeon ontology-review UI** — surface `ontology_proposals` in the dungeon for
-  one-click approve/reject of proposed relationship types (the human-in-loop step).
-- **EWA edge weights** — exponentially-weighted-average update for edge `weight`
-  (today `1.0`, §12).
 - **Dedicated embedding cache** (+ its hit rate), distinct from the query cache (§16).
 - **Hallucination-Rate / Noise-Reduction eval** — a generated-answer + LLM-judge
   harness (§23).

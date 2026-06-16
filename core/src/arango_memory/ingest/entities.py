@@ -71,6 +71,10 @@ UPDATE {
   corroboration: NOT_NULL(OLD.corroboration, 1) + 1,
   reliability_sum: NOT_NULL(OLD.reliability_sum, 0) + @rel,
   belief: 1 - POW(1 - @base, NOT_NULL(OLD.reliability_sum, 0) + @rel),
+  // EWA edge weight (§12): blend a fresh 1.0 with the time-decayed prior, so
+  // recently/frequently confirmed relations weigh more than stale ones.
+  weight: @w_alpha + (1 - @w_alpha) * NOT_NULL(OLD.weight, @w_alpha)
+          * EXP(@w_neg_lam * DATE_DIFF(NOT_NULL(OLD.last_seen, @now), @now, "s") / 86400.0),
   relationship: @relationship,
   last_seen: @now
 }
@@ -144,12 +148,14 @@ def _relate(
         "valid_time": valid_time or now,
         "valid_time_explicit": valid_time is not None,
         "invalid_at": None,
-        "weight": 1.0,
+        "weight": settings.weight_ewa_alpha,  # EWA seed (§12)
         "last_seen": now,
     }
     bind: dict[str, Any] = {
         "key": key, "doc": doc, "relationship": relationship,
         "rel": rel, "base": base, "now": now,
+        "w_alpha": settings.weight_ewa_alpha,
+        "w_neg_lam": -settings.weight_lambda,
     }
     db.aql.execute(_RELATE, bind_vars=bind)
 

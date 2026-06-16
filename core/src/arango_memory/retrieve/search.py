@@ -79,13 +79,17 @@ FOR start IN @seed_ids
            AND mem.agent_id == @agent_id
            AND mem.invalid_at == null
            AND mem._key NOT IN @seed_keys
+        // mean EWA weight of the bridging relates_to edges (§12); 0 for the 0-hop self.
+        LET path_w = LENGTH(p.edges) == 0 ? 0 : AVERAGE(p.edges[*].weight)
         COLLECT key = mem._key AGGREGATE hops = MIN(LENGTH(p.edges)),
                                           belief = MAX(related.belief),
-                                          centrality = MAX(related.centrality) INTO rows = mem
+                                          centrality = MAX(related.centrality),
+                                          weight = MAX(path_w) INTO rows = mem
         // closer hops rank higher, scaled 0.5–1.0 by the bridge's salience —
-        // the stronger of corroboration (belief, §12) or PageRank centrality (§9) —
-        // then decayed by the connected memory's freshness (§11, lazy decay).
-        LET salience = MAX([NOT_NULL(belief, 0), NOT_NULL(centrality, 0)])
+        // the strongest of corroboration (belief, §12), PageRank centrality (§9),
+        // or recency-weighted relation strength (EWA weight, §12) — then decayed by
+        // the connected memory's freshness (§11, lazy decay).
+        LET salience = MAX([NOT_NULL(belief, 0), NOT_NULL(centrality, 0), NOT_NULL(weight, 0)])
         LET age_days = DATE_DIFF(NOT_NULL(rows[0].accessed_at, @now), @now, "s") / 86400.0
         LET decay = NOT_NULL(rows[0].strength, 1.0) * EXP(@neg_lam * age_days)
         LET score = (1.0 / (1.0 + hops)) * (0.5 + 0.5 * salience) * decay

@@ -115,6 +115,10 @@ class Settings(BaseSettings):
     # working buffer + flag consolidation due). EWA blends the running topic otherwise.
     topic_shift_threshold: float = Field(default=0.7, ge=0.0, le=1.0)
     topic_ewa_alpha: float = Field(default=0.5, gt=0.0, le=1.0)
+    # EWA edge weight (DESIGN.md §12): each corroboration blends in a fresh 1.0 and
+    # time-decays the prior, so recently/frequently confirmed relations weigh more.
+    weight_ewa_alpha: float = Field(default=0.5, gt=0.0, le=1.0)
+    weight_lambda: float = Field(default=0.02, ge=0.0)
 
 
 settings = Settings()

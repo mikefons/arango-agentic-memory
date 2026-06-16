@@ -32,7 +32,7 @@ FOR edge IN @@coll
   LET t = PARSE_IDENTIFIER(edge._to).key
   FILTER f IN @keys AND t IN @keys
   RETURN { source: f, target: t, relationship: edge.relationship, kind: @kind,
-           corroboration: edge.corroboration, belief: edge.belief }
+           corroboration: edge.corroboration, belief: edge.belief, weight: edge.weight }
 """
 
 
