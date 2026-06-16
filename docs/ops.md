@@ -56,7 +56,8 @@ need no API keys.
 `CORROBORATION_BASE` (0.5), `ONTOLOGY_EVOLUTION` (`false`),
 `ONTOLOGY_MIN_SUPPORT` (3); working memory: `WORKING_SESSION_TTL_SECONDS` (3600),
 `WORKING_CAPACITY` (7), `TOPIC_SHIFT_THRESHOLD` (0.7), `TOPIC_EWA_ALPHA` (0.5),
-`WEIGHT_EWA_ALPHA` (0.5), `WEIGHT_LAMBDA` (0.02); conflict: `ENTITY_MERGE_THRESHOLD` (0.9),
+`WEIGHT_EWA_ALPHA` (0.5), `WEIGHT_LAMBDA` (0.02); embedding cache:
+`EMBEDDING_CACHE` (`true`), `EMBEDDING_CACHE_SIZE` (10000); conflict: `ENTITY_MERGE_THRESHOLD` (0.9),
 `ENTITY_FLAG_THRESHOLD` (0.6); durable writes: `WRITE_MAX_RETRIES` (5),
 `WRITE_BACKOFF_BASE` (0.5); security: `REDACT_PII` (`true`).
 
@@ -119,11 +120,13 @@ Run `embeddings-migrate` after switching `EMBEDDING_PROVIDER`/`EMBEDDING_MODEL`
 - **OTEL meters** — counters + histograms under the `memory.*` namespace
   (`memory.writes`, `memory.retrievals` + `memory.retrieval.duration`/`.results`/
   `.tokens` histograms, `memory.degraded`, `memory.conflicts`, `memory.decay.pruned`,
-  `memory.consolidations`, `memory.cache.lookups`). Recorded automatically from the
+  `memory.consolidations`, `memory.cache.lookups`, `memory.embedding_cache.lookups`).
+  Recorded automatically from the
   emitter; export them by configuring a `MeterProvider` (e.g. the Prometheus or OTLP
   exporter) in the host process — no-op otherwise.
 - **`MemoryMetrics`** event emitter — `retrieval`/`write`/`degraded`/`decay`/
-  `consolidation`/`conflict`/`cache`/`graph` events; subscribe in-process.
+  `consolidation`/`conflict`/`cache`/`embedding_cache`/`topic_shift`/`graph` events;
+  subscribe in-process.
 
 ---
 

@@ -24,6 +24,7 @@ from arango.database import StandardDatabase
 
 from ..config import settings
 from ..embedding import Embedder
+from ..embedding_cache import embed_cached
 from ..models import utcnow_iso
 from ..telemetry import metrics
 from .extract import ExtractedEntity, Extractor, cooccurring_pairs
@@ -192,7 +193,7 @@ def write_entities(
     detected = 0
 
     for ent in extracted:
-        vec = embedder.embed(ent.name)
+        vec = embed_cached(embedder, ent.name, tenant_id=tenant_id)
         match, sim = _best_match(vec, existing, exclude=(ent.name, ent.label))
 
         if match is not None and sim >= settings.entity_merge_threshold:

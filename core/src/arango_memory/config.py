@@ -119,6 +119,10 @@ class Settings(BaseSettings):
     # time-decays the prior, so recently/frequently confirmed relations weigh more.
     weight_ewa_alpha: float = Field(default=0.5, gt=0.0, le=1.0)
     weight_lambda: float = Field(default=0.02, ge=0.0)
+    # Dedicated embedding cache (DESIGN.md §16): memoize embed(text) per tenant so
+    # recurring entity names / repeated queries skip the provider. Pure perf, safe.
+    embedding_cache: bool = True
+    embedding_cache_size: int = Field(default=10000, ge=1)
 
 
 settings = Settings()
