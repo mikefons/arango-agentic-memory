@@ -23,7 +23,12 @@ from .tools import CoreClient
 def build_server(client: CoreClient | None = None) -> FastMCP:
     """Build the MCP server. Tests inject a client; production uses httpx over HTTP."""
     base_url = os.environ.get("ARANGO_MEMORY_CORE_URL", "http://localhost:8080")
-    http = client or cast(CoreClient, httpx.Client(base_url=base_url, timeout=30.0))
+    # Bearer key when the core enforces auth (§17); omitted when it runs open (keyless).
+    api_key = os.environ.get("ARANGO_MEMORY_API_KEY")
+    headers = {"authorization": f"Bearer {api_key}"} if api_key else {}
+    http = client or cast(
+        CoreClient, httpx.Client(base_url=base_url, timeout=30.0, headers=headers)
+    )
     server = FastMCP("arango-memory")
 
     @server.tool()
