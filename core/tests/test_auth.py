@@ -14,7 +14,11 @@ from arango_memory.config import ApiKeyEntry, settings
 def with_keys() -> Iterator[None]:
     """Enable enforced mode for one test, then restore the open default."""
     original = settings.api_keys
-    settings.api_keys = {"k_write": ApiKeyEntry(tenant_id="tenant_a", scope="write")}
+    settings.api_keys = {
+        "k_write": ApiKeyEntry(tenant_id="tenant_a", scope="write"),
+        "k_read": ApiKeyEntry(tenant_id="tenant_a", scope="read"),
+        "k_other": ApiKeyEntry(tenant_id="tenant_b", scope="write"),
+    }
     yield
     settings.api_keys = original
 
@@ -53,3 +57,35 @@ def test_get_endpoint_also_enforced(api: TestClient, with_keys: None) -> None:
         "/v1/stats", params={"tenant_id": "tenant_a"}, headers={"authorization": "Bearer k_write"}
     )
     assert ok.status_code == 200
+
+
+# ── authz: identity derives from the key (AUTH-2) ─────────
+def test_cross_tenant_write_is_403(api: TestClient, with_keys: None) -> None:
+    # tenant_b's key trying to write into tenant_a (via the body) → 403.
+    assert _store(api, {"authorization": "Bearer k_other"}) == 403
+
+
+def test_cross_tenant_read_is_403(api: TestClient, with_keys: None) -> None:
+    res = api.get(
+        "/v1/stats", params={"tenant_id": "tenant_a"}, headers={"authorization": "Bearer k_other"}
+    )
+    assert res.status_code == 403  # tenant_b key can't read tenant_a
+
+
+def test_read_scoped_key_cannot_write(api: TestClient, with_keys: None) -> None:
+    assert _store(api, {"authorization": "Bearer k_read"}) == 403  # read scope, write endpoint
+
+
+def test_read_scoped_key_can_read(api: TestClient, with_keys: None) -> None:
+    res = api.get(
+        "/v1/stats", params={"tenant_id": "tenant_a"}, headers={"authorization": "Bearer k_read"}
+    )
+    assert res.status_code == 200
+
+
+def test_body_access_level_ignored_in_enforced_mode(api: TestClient, with_keys: None) -> None:
+    # The body claims write, but the read-scoped key governs → 403 (body can't escalate).
+    ctx = {"tenant_id": "tenant_a", "agent_id": "a", "access_level": "write"}
+    res = api.post("/v1/store", json={"content": "x", "ctx": ctx},
+                   headers={"authorization": "Bearer k_read"})
+    assert res.status_code == 403
