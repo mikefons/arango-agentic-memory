@@ -13,6 +13,7 @@ from arango.cursor import Cursor
 from arango.database import StandardDatabase
 
 from .embedding import Embedder, get_embedder
+from .embedding_cache import embed_cached
 from .models import utcnow_iso
 
 # Public projection — never exposes embeddings (§17).
@@ -119,7 +120,7 @@ def seed(
             "label": "Concept",
             "tenant_id": tenant_id,
             "agent_id": agent_id,
-            "embedding": emb.embed(name),
+            "embedding": embed_cached(emb, name, tenant_id=tenant_id),
             "embedding_model": emb.model,
             "embedding_version": emb.version,
             "mention_count": 1,

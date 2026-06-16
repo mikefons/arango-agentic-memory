@@ -75,6 +75,9 @@ class _Meters:
         self.cache_lookups = _meter.create_counter(
             "memory.cache.lookups", unit="1", description="Enrichment cache lookups"
         )
+        self.embedding_cache_lookups = _meter.create_counter(
+            "memory.embedding_cache.lookups", unit="1", description="Embedding cache lookups"
+        )
 
     def record(self, event: str, payload: dict[str, Any]) -> None:
         if event == "write":
@@ -110,6 +113,8 @@ class _Meters:
                     self.consolidation_changes.add(count, {"kind": kind})
         elif event == "cache":
             self.cache_lookups.add(1, {"hit": bool(payload.get("hit", False))})
+        elif event == "embedding_cache":
+            self.embedding_cache_lookups.add(1, {"hit": bool(payload.get("hit", False))})
 
 
 _meters = _Meters()

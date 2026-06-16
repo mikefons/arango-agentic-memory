@@ -21,6 +21,7 @@ from arango.database import StandardDatabase
 
 from ..config import settings
 from ..embedding import Embedder, get_embedder
+from ..embedding_cache import embed_cached
 from ..generation import Generator, get_generator
 from ..lifecycle.decay import effective_strength, reset_access
 from ..models import utcnow_iso
@@ -326,7 +327,7 @@ def _retrieve_impl(
             return RetrieveResult()
         query_vec = hyde(query, generator=gen, embedder=emb, cache=cache).embedding
     else:
-        query_vec = emb.embed(query)
+        query_vec = embed_cached(emb, query, tenant_id=tenant_id)
 
     # Reference instant + decay rate shared by the AQL arms and the post-fusion pass.
     now = utcnow_iso()

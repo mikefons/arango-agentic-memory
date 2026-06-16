@@ -19,6 +19,7 @@ from arango.database import StandardDatabase
 
 from ..config import settings
 from ..embedding import Embedder, get_embedder
+from ..embedding_cache import embed_cached
 from ..generation import Generator, get_generator
 from ..models import idempotency_key, utcnow_iso
 from ..security.redact import redact
@@ -250,7 +251,7 @@ def _store_impl(
         else None
     )
 
-    turn_vec = emb.embed(content)
+    turn_vec = embed_cached(emb, content, tenant_id=tenant_id)
     # GAM semantic boundary (§13): track the session's running topic before writing
     # this turn's memory, so a detected shift flushes the *prior* working buffer.
     if is_new and session_id is not None:

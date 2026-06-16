@@ -1,7 +1,7 @@
 # ArangoDB Agentic Memory System — Design Specification
 
 > **Status:** ✅ **v1 build sequence complete (Steps 0–7).** v2: all §21 adapters shipped (MCP, LangChain/LangGraph, CrewAI) + full §19 entity API + **Step 3e heavy extraction tier done**. Authoritative reference.
-> **Last updated:** 2026-06-15 (rev 53 — EWA edge weights: recency-decayed relation strength + graph fold)
+> **Last updated:** 2026-06-15 (rev 54 — dedicated embedding cache: per-tenant memoized embed())
 >
 > **Rev 2 decisions:** Python-first core with a thin TypeScript client · v1 scope is Vercel-only · build a walking skeleton first, then a test/eval harness, then thicken each layer.
 >
@@ -680,8 +680,17 @@ Principle: **memory is an enhancement, never a dependency.** Every memory failur
 | Retrieval LLM calls (adaptive gate + HyDE) | 0 | 0–2 (cached) |
 | Extraction LLM calls (Haiku fallback) | 0 | 0–1 |
 | Prospective indexing LLM calls | 0 | 0–3 |
-| Embedding calls (query + new memories) | 1–N | 1–N |
+| Embedding calls (query + new memories) | 1–N (cached) | 1–N (cached) |
 | Background (Dream State) LLM calls | amortized, not per-turn | amortized |
+
+✅ **Dedicated embedding cache** (rev 54): a process-level LRU
+(`embedding_cache.py`, `embed_cached()`) memoizes `embed(text)` so recurring inputs —
+above all the **entity names** re-embedded on every mention, plus repeated queries and
+idempotent replays — skip the provider. Keyed by `(tenant_id, model, version,
+dimensions, sha256(text))` — **per-tenant namespacing** is the §24 timing-attack
+defense. Distinct from the `QueryCache` (HyDE/gate LLM results); exposes `hit_rate` +
+an `embedding_cache` metric (+ OTEL meter). Knobs: `embedding_cache` (on),
+`embedding_cache_size` (10000).
 
 - **Lite:** ~1 embedding call on the hot path, no hot-path LLM calls. Predictable and cheap.
 - **Full:** up to ~6 LLM calls per turn worst-case, mitigated by caching (HyDE/adaptive-gate keyed by query hash) and by extraction/prospective indexing being conditional.
@@ -1200,6 +1209,13 @@ exponentially-weighted average updated in the `_RELATE` upsert (was a constant 1
 bridging-edge weight into the bridge salience (`MAX(belief, centrality, weight)`) so
 recently-confirmed relations rank higher (§12), and it's surfaced in `/v1/graph` edges.
 
+✅ **Dedicated embedding cache** (rev 54) — a process-level per-tenant LRU
+(`embedding_cache.py`, `embed_cached()`) memoizes `embed(text)` so recurring entity
+names, repeated queries, and idempotent replays skip the provider. Keyed by
+`(tenant_id, model, version, dimensions, text-hash)` (per-tenant = §24 timing-attack
+defense); distinct from the HyDE/gate `QueryCache`. Exposes `hit_rate` + an
+`embedding_cache` metric (+ OTEL meter). See §16.
+
 ✅ **Lazy decay at query time** (rev 48) — the Ebbinghaus multiplier
 `strength·exp(-λ·Δt)` is folded into the **BM25 + graph retrieval arm SORTs** in
 AQL, so freshness shapes candidate *selection* (pool membership), not only the
@@ -1215,7 +1231,6 @@ soft-deprecation.
 
 #### Backlog (unprioritized)
 
-- **Dedicated embedding cache** (+ its hit rate), distinct from the query cache (§16).
 - **Hallucination-Rate / Noise-Reduction eval** — a generated-answer + LLM-judge
   harness (§23).
 
