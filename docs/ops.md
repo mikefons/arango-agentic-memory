@@ -59,7 +59,8 @@ need no API keys.
 `WEIGHT_EWA_ALPHA` (0.5), `WEIGHT_LAMBDA` (0.02); embedding cache:
 `EMBEDDING_CACHE` (`true`), `EMBEDDING_CACHE_SIZE` (10000); conflict: `ENTITY_MERGE_THRESHOLD` (0.9),
 `ENTITY_FLAG_THRESHOLD` (0.6); durable writes: `WRITE_MAX_RETRIES` (5),
-`WRITE_BACKOFF_BASE` (0.5); security: `REDACT_PII` (`true`), `API_KEYS` (unset = auth
+`WRITE_BACKOFF_BASE` (0.5), `WRITE_QUEUE_BACKEND` (`memory`; set `arango` in prod),
+`WRITE_LEASE_SECONDS` (60); security: `REDACT_PII` (`true`), `API_KEYS` (unset = auth
 open).
 
 **Authentication (§17)** — bearer API keys. Set `API_KEYS` to a JSON map to enforce:
@@ -81,14 +82,31 @@ keys in the host env / a gitignored `.env`, never in the image or VCS.
 
 ## Durable write path & dead letters (§15)
 
-`/v1/store` and `/v1/step` enqueue idempotency-keyed intents; an in-process worker
-commits with exponential backoff (`WRITE_MAX_RETRIES` / `WRITE_BACKOFF_BASE`).
-Persistent failures land in the **`failed_writes`** collection (dead-letter).
+`/v1/store` and `/v1/step` enqueue idempotency-keyed intents; a worker **claims** one,
+commits with exponential backoff (`WRITE_MAX_RETRIES` / `WRITE_BACKOFF_BASE`), then
+**acks** it. Persistent failures land in the **`failed_writes`** collection
+(dead-letter). Idempotency keys make retries/replays safe — they can't duplicate.
 
 ```bash
 python -m arango_memory.ops replay      # re-enqueue + commit dead-lettered writes
 ```
-Idempotency keys make replays safe — they cannot duplicate.
+
+### Queue backend (`WRITE_QUEUE_BACKEND`)
+- **`memory`** (default) — in-process; fast and zero-config for dev/CI. Intents that
+  are enqueued but not yet committed are **lost if the process dies** (the client
+  already got `{status:queued}`). Fine for a single-instance demo.
+- **`arango`** — **set this in production.** Intents persist to a `write_intents`
+  collection; `claim` leases an intent (`WRITE_LEASE_SECONDS`, default 60) and `ack`
+  deletes it only after commit, so a crash between accept and commit **redelivers**
+  after the lease expires (at-least-once; idempotency keys dedupe). Survives restarts.
+
+**Multi-instance:** run N stateless API instances + worker(s) over the **same**
+`arango` queue + DB; the exclusive-locked `claim` prevents two workers taking the
+same intent (the in-process caches just run cold per instance). The `memory` backend
+is single-process only.
+
+**Redis/SQS** slot in behind the same `WriteQueue` protocol (`enqueue`/`claim`/`ack`/
+`nack`) when queue throughput outgrows ArangoDB — roadmap, not built.
 
 ---
 
