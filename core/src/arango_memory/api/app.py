@@ -75,9 +75,24 @@ class AccessContext(BaseModel):
     access_level: Literal["read", "write"] = "read"
 
 
-def _require_write(ctx: AccessContext) -> None:
-    """ABAC (§17): mutating endpoints require write access."""
-    if ctx.access_level != "write":
+def _authorize(
+    request: Request, *, tenant_id: str, access_level: str = "read", write: bool = False
+) -> None:
+    """ABAC + authn (§17).
+
+    Enforced mode (an API key authenticated the caller): identity comes from the
+    **key** — the body's `tenant_id` must match it, and a write needs a write-scoped
+    key. Open mode (no keys configured): the body-asserted `access_level` governs
+    writes, exactly as before.
+    """
+    principal = getattr(request.state, "principal", None)
+    if principal is None:  # open mode — body-asserted ABAC (unchanged)
+        if write and access_level != "write":
+            raise HTTPException(status_code=403, detail="write access required")
+        return
+    if tenant_id != principal.tenant_id:
+        raise HTTPException(status_code=403, detail="tenant mismatch")
+    if write and principal.scope != "write":
         raise HTTPException(status_code=403, detail="write access required")
 
 
@@ -254,10 +269,11 @@ async def health(client: ArangoMemoryClient = Depends(get_client)) -> dict[str, 
 
 
 async def store_endpoint(
+    request: Request,
     req: StoreRequest,
     queue: WriteQueue = Depends(get_queue_dep),
 ) -> StoreResponse:
-    _require_write(req.ctx)
+    _authorize(request, tenant_id=req.ctx.tenant_id, access_level=req.ctx.access_level, write=True)
     # Durable write path (§15): enqueue and return immediately; the worker
     # commits asynchronously. Keys are deterministic from the idempotency key,
     # so they're known without committing; entity_ids are resolved async.
@@ -275,10 +291,11 @@ async def store_endpoint(
 
 
 async def step_endpoint(
+    request: Request,
     req: StepRequest,
     queue: WriteQueue = Depends(get_queue_dep),
 ) -> StepResponse:
-    _require_write(req.ctx)
+    _authorize(request, tenant_id=req.ctx.tenant_id, access_level=req.ctx.access_level, write=True)
     intent = StepIntent(
         tool_name=req.tool_name,
         arguments=req.arguments,
@@ -294,12 +311,14 @@ async def step_endpoint(
 
 
 async def steps_endpoint(
+    request: Request,
     tenant_id: str,
     agent_id: str,
     tool_name: str | None = None,
     limit: int = 20,
     client: ArangoMemoryClient = Depends(get_client),
 ) -> StepsResponse:
+    _authorize(request, tenant_id=tenant_id)
     steps = get_steps(
         client.db, tenant_id=tenant_id, agent_id=agent_id, tool_name=tool_name, limit=limit
     )
@@ -307,28 +326,32 @@ async def steps_endpoint(
 
 
 async def forget_endpoint(
+    request: Request,
     req: ForgetRequest,
     client: ArangoMemoryClient = Depends(get_client),
 ) -> ForgetResponse:
     # Right to be forgotten (§17) — destructive, so requires write access.
-    if req.access_level != "write":
-        raise HTTPException(status_code=403, detail="write access required")
+    _authorize(request, tenant_id=req.tenant_id, access_level=req.access_level, write=True)
     counts = forget(client.db, tenant_id=req.tenant_id, agent_id=req.agent_id)
     return ForgetResponse(counts=counts)
 
 
 async def stats_endpoint(
+    request: Request,
     tenant_id: str,
     client: ArangoMemoryClient = Depends(get_client),
 ) -> StatsResponse:
+    _authorize(request, tenant_id=tenant_id)
     return StatsResponse(counts=stats(client.db, tenant_id=tenant_id))
 
 
 async def entity_endpoint(
+    request: Request,
     entity_id: str,
     tenant_id: str,
     client: ArangoMemoryClient = Depends(get_client),
 ) -> EntityResponse:
+    _authorize(request, tenant_id=tenant_id)
     found = get_entity(client.db, entity_id=entity_id, tenant_id=tenant_id)
     if found is None:
         raise HTTPException(status_code=404, detail="entity not found")
@@ -336,12 +359,14 @@ async def entity_endpoint(
 
 
 async def entities_endpoint(
+    request: Request,
     tenant_id: str,
     agent_id: str | None = None,
     label: str | None = None,
     limit: int = 50,
     client: ArangoMemoryClient = Depends(get_client),
 ) -> EntitiesResponse:
+    _authorize(request, tenant_id=tenant_id)
     rows = list_entities(
         client.db, tenant_id=tenant_id, agent_id=agent_id, label=label, limit=limit
     )
@@ -349,11 +374,12 @@ async def entities_endpoint(
 
 
 async def seed_endpoint(
+    request: Request,
     req: SeedRequest,
     client: ArangoMemoryClient = Depends(get_client),
     embedder: Embedder = Depends(get_embedder_dep),
 ) -> SeedResponse:
-    _require_write(req.ctx)
+    _authorize(request, tenant_id=req.ctx.tenant_id, access_level=req.ctx.access_level, write=True)
     ids = seed(
         client.db,
         profile=req.profile,
@@ -365,31 +391,35 @@ async def seed_endpoint(
 
 
 async def supersede_endpoint(
+    request: Request,
     req: SupersedeRequest,
     client: ArangoMemoryClient = Depends(get_client),
 ) -> SupersedeResponse:
     """Record `new` superseding `old` (Supersedes edge + soft-deprecate old, §12)."""
-    _require_write(req.ctx)
+    _authorize(request, tenant_id=req.ctx.tenant_id, access_level=req.ctx.access_level, write=True)
     supersede(client.db, new_key=req.new_key, old_key=req.old_key)
     return SupersedeResponse()
 
 
 async def graph_endpoint(
+    request: Request,
     tenant_id: str,
     client: ArangoMemoryClient = Depends(get_client),
 ) -> GraphResponse:
     """The tenant's full semantic graph (entities + relates_to/Supersedes), §11."""
+    _authorize(request, tenant_id=tenant_id)
     g = tenant_graph(client.db, tenant_id=tenant_id)
     return GraphResponse(nodes=g["nodes"], edges=g["edges"])
 
 
 async def dream_endpoint(
+    request: Request,
     req: DreamRequest,
     client: ArangoMemoryClient = Depends(get_client),
     generator: Generator = Depends(get_generator_dep),
 ) -> DreamResponse:
     """Run Dream State consolidation for the tenant (§13) — mutating, write-only."""
-    _require_write(req.ctx)
+    _authorize(request, tenant_id=req.ctx.tenant_id, access_level=req.ctx.access_level, write=True)
     r = run_dream_state(client.db, tenant_id=req.ctx.tenant_id, generator=generator)
     return DreamResponse(
         reviewed=r.reviewed,
@@ -401,21 +431,23 @@ async def dream_endpoint(
 
 
 async def salience_endpoint(
+    request: Request,
     req: SalienceRequest,
     client: ArangoMemoryClient = Depends(get_client),
 ) -> SalienceResponse:
     """Recompute PageRank centrality for the tenant's entities (§9/§13) — write-only."""
-    _require_write(req.ctx)
+    _authorize(request, tenant_id=req.ctx.tenant_id, access_level=req.ctx.access_level, write=True)
     result = compute_centrality(client.db, tenant_id=req.ctx.tenant_id)
     return SalienceResponse(entities=result.get("entities", 0))
 
 
 async def community_endpoint(
+    request: Request,
     req: CommunityRequest,
     client: ArangoMemoryClient = Depends(get_client),
 ) -> CommunityResponse:
     """Recompute LPA community labels for the tenant's entities (§9/§13) — write-only."""
-    _require_write(req.ctx)
+    _authorize(request, tenant_id=req.ctx.tenant_id, access_level=req.ctx.access_level, write=True)
     result = compute_communities(client.db, tenant_id=req.ctx.tenant_id)
     return CommunityResponse(
         entities=result.get("entities", 0), communities=result.get("communities", 0)
@@ -423,13 +455,14 @@ async def community_endpoint(
 
 
 async def ontology_scan_endpoint(
+    request: Request,
     req: OntologyScanRequest,
     client: ArangoMemoryClient = Depends(get_client),
     generator: Generator = Depends(get_generator_dep),
 ) -> OntologyScanResponse:
     """Propose typed relationships from co-occurrence clusters (§13) — write-only, flag-gated."""
     _require_ontology()
-    _require_write(req.ctx)
+    _authorize(request, tenant_id=req.ctx.tenant_id, access_level=req.ctx.access_level, write=True)
     result = propose_relationship_types(
         client.db, tenant_id=req.ctx.tenant_id, generator=generator
     )
@@ -439,6 +472,7 @@ async def ontology_scan_endpoint(
 
 
 async def ontology_proposals_endpoint(
+    request: Request,
     tenant_id: str,
     status: str | None = None,
     access_level: Literal["read", "write"] = "read",
@@ -446,36 +480,41 @@ async def ontology_proposals_endpoint(
 ) -> list[dict[str, Any]]:
     """List relationship proposals for human review (§13) — flag-gated."""
     _require_ontology()
+    _authorize(request, tenant_id=tenant_id)
     return list_proposals(client.db, tenant_id=tenant_id, status=status)
 
 
 async def ontology_approve_endpoint(
+    request: Request,
     req: OntologyDecisionRequest,
     client: ArangoMemoryClient = Depends(get_client),
 ) -> dict[str, Any]:
     """Approve a proposal → relabel the tenant's matching co-occurrence edges — write-only."""
     _require_ontology()
-    _require_write(req.ctx)
+    _authorize(request, tenant_id=req.ctx.tenant_id, access_level=req.ctx.access_level, write=True)
     return approve_proposal(client.db, tenant_id=req.ctx.tenant_id, key=req.key)
 
 
 async def ontology_reject_endpoint(
+    request: Request,
     req: OntologyDecisionRequest,
     client: ArangoMemoryClient = Depends(get_client),
 ) -> dict[str, Any]:
     """Reject a proposal (no graph change) — write-only."""
     _require_ontology()
-    _require_write(req.ctx)
+    _authorize(request, tenant_id=req.ctx.tenant_id, access_level=req.ctx.access_level, write=True)
     return reject_proposal(client.db, tenant_id=req.ctx.tenant_id, key=req.key)
 
 
 async def retrieve_endpoint(
+    request: Request,
     req: RetrieveRequest,
     client: ArangoMemoryClient = Depends(get_client),
     embedder: Embedder = Depends(get_embedder_dep),
     generator: Generator = Depends(get_generator_dep),
     cache: QueryCache = Depends(get_cache_dep),
 ) -> RetrieveResponse:
+    _authorize(request, tenant_id=req.ctx.tenant_id, access_level=req.ctx.access_level)
     result = retrieve(
         client.db,
         query=req.query,
