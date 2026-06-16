@@ -17,6 +17,7 @@ from .migrations import run_migrations
 
 DOCUMENT_COLLECTIONS: tuple[str, ...] = (
     "episodes", "memories", "entities", "steps", "ontology_proposals", "sessions",
+    "write_intents",
 )
 EDGE_COLLECTIONS: tuple[str, ...] = (
     "mentions", "relates_to", "produced_by", "TOUCHED", "TRANSITION", "Supersedes",
@@ -25,6 +26,9 @@ EDGE_COLLECTIONS: tuple[str, ...] = (
 # Dead-letter for writes that exhaust retries (DESIGN.md §15). Named without a
 # leading underscore (ArangoDB reserves "_*" for system collections).
 DEAD_LETTER_COLLECTION = "failed_writes"
+
+# Durable write-queue backlog (DESIGN.md §15) — used by the ArangoQueue backend.
+WRITE_QUEUE_COLLECTION = "write_intents"
 
 SEARCH_VIEW = "memory_search_view"
 VECTOR_FIELD = "embedding"
