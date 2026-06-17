@@ -1,7 +1,7 @@
 # ArangoDB Agentic Memory System — Design Specification
 
 > **Status:** ✅ **v1 build sequence complete (Steps 0–7).** v2: all §21 adapters shipped (MCP, LangChain/LangGraph, CrewAI) + full §19 entity API + **Step 3e heavy extraction tier done**. Authoritative reference.
-> **Last updated:** 2026-06-17 (rev 60 — AQL index audit: persistent scope indexes + `ops explain`)
+> **Last updated:** 2026-06-17 (rev 61 — latency percentiles: in-process p50/p95/p99 on `/health`)
 >
 > **Rev 2 decisions:** Python-first core with a thin TypeScript client · v1 scope is Vercel-only · build a walking skeleton first, then a test/eval harness, then thicken each layer.
 >
@@ -1315,7 +1315,11 @@ soft-deprecation.
       `tenant_id`/`agent_id`/`invalid_at` filter (memories/entities/episodes/
       write_intents/ontology_proposals); `python -m arango_memory.ops explain` EXPLAINs
       the hot queries and flags any full collection scan.
-    - **Latency percentiles** — capture p99 vs the §23 targets (hang it on the OTEL meters).
+    - ✅ **Latency percentiles** (rev 61) — an in-process `LatencyRecorder` keeps a
+      rolling window of recent op latencies and reports p50/p95/p99 per mode
+      (`retrieval.lite`/`.full`/`write`) on `/health.latency_ms`, so tail latency is
+      checkable against the §23 targets without an OTEL exporter (the duration
+      histograms still feed one when configured). Per-instance window.
     - **Batch embedding** — `store()` embeds entity names one-at-a-time; use `embed_batch`.
   - **Tier 3 — testing depth:** concurrency / multi-tenant isolation under load (§22),
     failure injection (DB drop mid-write → dead-letter), authz tests (post-auth), a

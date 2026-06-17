@@ -74,9 +74,11 @@ budget → **`429`** with a `Retry-After` header. `/health` is exempt from both.
 ## HTTP endpoints
 
 ### `GET /health`
-Liveness + DB reachability.
+Liveness + DB reachability + process-global latency (p50/p95/p99 ms per op over a
+rolling in-process window; empty until traffic flows). See §23 targets.
 ```json
-{ "status": "ok", "arango": true, "mode": "lite" }
+{ "status": "ok", "arango": true, "mode": "lite",
+  "latency_ms": { "retrieval.lite": { "count": 128, "p50": 41.0, "p95": 88.0, "p99": 120.0 } } }
 ```
 
 ### Ingestion
