@@ -9,12 +9,13 @@ Commands:
   vector-rebuild     drop + recreate the Faiss IVF index
   embeddings-migrate re-embed docs on a model change (stale only), then rebuild
   replay             re-enqueue + commit dead-lettered writes (§15)
+  explain            EXPLAIN the hot-path queries; flag full-collection scans (§6)
 """
 
 from __future__ import annotations
 
 import argparse
-from typing import cast
+from typing import Any, cast
 
 from arango.cursor import Cursor
 from arango.database import StandardDatabase
@@ -71,6 +72,65 @@ def migrate_embeddings(
     return counts
 
 
+# Representative hot-path queries (DESIGN.md §6 index audit). Each scopes a
+# document collection by some prefix of (tenant_id, agent_id, invalid_at); EXPLAIN
+# confirms the planner uses a persistent index rather than a full scan. Kept as
+# self-contained skeletons (not the live constants) so EXPLAIN needs no warm
+# corpus or vector index — the scope FILTER is what the audit checks.
+_HOT_QUERIES: tuple[tuple[str, str, dict[str, Any]], ...] = (
+    (
+        "memories scope (vector/working/forget arm)",
+        "FOR doc IN memories FILTER doc.tenant_id == @t AND doc.agent_id == @a "
+        "AND doc.invalid_at == null RETURN doc._key",
+        {"t": "demo", "a": "default"},
+    ),
+    (
+        "entities scope (dream/community/salience/ontology)",
+        "FOR e IN entities FILTER e.tenant_id == @t AND e.invalid_at == null RETURN e._key",
+        {"t": "demo"},
+    ),
+    (
+        "episodes by session (langchain history)",
+        "FOR e IN episodes FILTER e.tenant_id == @t AND e.agent_id == @a "
+        "AND e.session_id == @s RETURN e._key",
+        {"t": "demo", "a": "default", "s": "s1"},
+    ),
+    (
+        "write_intents claim (durable queue)",
+        "FOR d IN write_intents FILTER d.leased_until == null OR d.leased_until < @now "
+        "RETURN d._key",
+        {"now": "2026-01-01T00:00:00Z"},
+    ),
+    (
+        "ontology_proposals list",
+        "FOR p IN ontology_proposals FILTER p.tenant_id == @t AND p.status == @st RETURN p._key",
+        {"t": "demo", "st": "pending"},
+    ),
+)
+
+
+def explain_hot_queries(db: StandardDatabase) -> list[dict[str, object]]:
+    """EXPLAIN each hot-path query; report whether the planner uses an index.
+
+    Returns one row per query with the index names hit and a `full_scan` flag
+    (an `EnumerateCollectionNode` in the plan means no index was used). Pure
+    inspection — `explain` never executes the query.
+    """
+    rows: list[dict[str, object]] = []
+    for label, query, bind_vars in _HOT_QUERIES:
+        plan = cast("dict[str, Any]", db.aql.explain(query, bind_vars=bind_vars))
+        nodes = cast("list[dict[str, Any]]", plan.get("nodes", []))
+        indexes = [
+            idx["name"]
+            for node in nodes
+            for idx in node.get("indexes", [])
+            if node.get("type") == "IndexNode"
+        ]
+        full_scan = any(node.get("type") == "EnumerateCollectionNode" for node in nodes)
+        rows.append({"query": label, "indexes": indexes, "full_scan": full_scan})
+    return rows
+
+
 def replay_dead_letters(
     db: StandardDatabase,
     *,
@@ -94,6 +154,7 @@ def _build_parser() -> argparse.ArgumentParser:
     sub.add_parser("vector-rebuild", help="drop + recreate the Faiss vector index")
     sub.add_parser("embeddings-migrate", help="re-embed stale docs, then rebuild the index")
     sub.add_parser("replay", help="re-enqueue + commit dead-lettered writes")
+    sub.add_parser("explain", help="EXPLAIN hot-path queries; flag full-collection scans")
     return parser
 
 
@@ -115,6 +176,10 @@ def main(argv: list[str] | None = None) -> int:
             db, embedder=embedder, extractor=get_extractor(), generator=get_generator()
         )
         print(f"replayed: {replayed}")
+    elif args.command == "explain":
+        for row in explain_hot_queries(db):
+            status = "FULL SCAN" if row["full_scan"] else f"index={row['indexes']}"
+            print(f"{'⚠' if row['full_scan'] else '✓'} {row['query']}: {status}")
     return 0
 
 

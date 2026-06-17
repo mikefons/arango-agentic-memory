@@ -111,6 +111,7 @@ def ensure_schema(db: StandardDatabase) -> None:
             "name": "idx_step_natural_key",
         }
     )
+    _ensure_scope_indexes(db)
 
     _ensure_search_view(db)
     if not db.has_graph(GRAPH_NAME):
@@ -118,6 +119,32 @@ def ensure_schema(db: StandardDatabase) -> None:
 
     # Apply any versioned migrations on top of the idempotent baseline (§6).
     run_migrations(db)
+
+
+def _ensure_scope_indexes(db: StandardDatabase) -> None:
+    """Persistent indexes backing the hot-path scope filters (DESIGN.md §6 audit).
+
+    Every retrieval arm, lifecycle pass, and admin scan filters on some prefix of
+    `(tenant_id, agent_id, invalid_at)` (or a collection-specific key). The unique
+    natural-key / idempotency indexes only cover their own field orders, so without
+    these a tenant-scoped query degrades to a full collection scan. Non-unique
+    persistent indexes; idempotent (re-adding an existing index is a no-op).
+    """
+    for collection, name, fields in (
+        # Vector arm + working buffer + forget + stats all scope memories this way.
+        ("memories", "idx_mem_scope", ["tenant_id", "agent_id", "invalid_at"]),
+        # Dream / community / salience / ontology / entity API / forget scan entities.
+        ("entities", "idx_entity_scope", ["tenant_id", "invalid_at"]),
+        # LangChain history reads a session's episodes in order.
+        ("episodes", "idx_episode_session", ["tenant_id", "agent_id", "session_id"]),
+        # ArangoQueue claim/pending scan for expired or unleased intents (§15).
+        ("write_intents", "idx_intent_lease", ["leased_until"]),
+        # Ontology review lists proposals by tenant + status.
+        ("ontology_proposals", "idx_proposal_scope", ["tenant_id", "status"]),
+    ):
+        db.collection(collection).add_index(
+            {"type": "persistent", "fields": fields, "name": name}
+        )
 
 
 def has_vector_index(db: StandardDatabase) -> bool:

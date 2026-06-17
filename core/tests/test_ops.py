@@ -10,6 +10,7 @@ from arango_memory.ingest.store import store
 from arango_memory.models import utcnow_iso
 from arango_memory.ops import (
     _build_parser,
+    explain_hot_queries,
     migrate_embeddings,
     rebuild_vector_index,
     replay_dead_letters,
@@ -74,8 +75,18 @@ def test_replay_dead_letters_commits_and_clears(db: StandardDatabase) -> None:
     assert committed != []
 
 
+def test_explain_hot_queries_use_indexes_not_full_scans(db: StandardDatabase) -> None:
+    rows = explain_hot_queries(db)
+    assert {row["query"] for row in rows}  # non-empty audit set
+    offenders = [row["query"] for row in rows if row["full_scan"]]
+    assert offenders == [], f"hot queries falling back to full collection scan: {offenders}"
+    # Every audited query resolves through a named persistent index.
+    assert all(row["indexes"] for row in rows)
+
+
 def test_cli_parser_recognizes_commands() -> None:
     parser = _build_parser()
     assert parser.parse_args(["vector-rebuild"]).command == "vector-rebuild"
     assert parser.parse_args(["embeddings-migrate"]).command == "embeddings-migrate"
     assert parser.parse_args(["replay"]).command == "replay"
+    assert parser.parse_args(["explain"]).command == "explain"
