@@ -27,6 +27,7 @@ from ..generation import Generator, get_generator
 from ..models import utcnow_iso
 from ..schema.collections import DEAD_LETTER_COLLECTION
 from ..telemetry import metrics
+from ..telemetry.logging import logger, request_id_var, tenant_var
 from .extract import Extractor, get_extractor
 from .procedural import record_step
 from .queue import Intent, StepIntent, WriteIntent, WriteQueue
@@ -60,17 +61,25 @@ class WriteWorker:
     # ── Processing ────────────────────────────────────────
     def process(self, intent: Intent) -> bool:
         """Commit one intent with retry/backoff. Returns True if committed."""
+        # Correlation for any log lines from this commit (worker runs off-request);
+        # reset after so `drain()` (called on the request/test thread) doesn't leak.
+        rid_token = request_id_var.set(intent.key)
+        tenant_token = tenant_var.set(intent.tenant_id)
         last_error: Exception | None = None
-        for attempt in range(self._max_retries):
-            try:
-                self._commit(intent)
-                return True
-            except Exception as exc:  # noqa: BLE001 — durability: isolate all write failures
-                last_error = exc
-                if attempt < self._max_retries - 1 and self._backoff > 0:
-                    time.sleep(self._backoff * (2**attempt))
-        self._dead_letter(intent, last_error)
-        return False
+        try:
+            for attempt in range(self._max_retries):
+                try:
+                    self._commit(intent)
+                    return True
+                except Exception as exc:  # noqa: BLE001 — durability: isolate write failures
+                    last_error = exc
+                    if attempt < self._max_retries - 1 and self._backoff > 0:
+                        time.sleep(self._backoff * (2**attempt))
+            self._dead_letter(intent, last_error)
+            return False
+        finally:
+            request_id_var.reset(rid_token)
+            tenant_var.reset(tenant_token)
 
     def _commit(self, intent: Intent) -> None:
         if isinstance(intent, StepIntent):
@@ -122,6 +131,14 @@ class WriteWorker:
             },
             overwrite_mode="replace",
             silent=True,
+        )
+        logger.error(
+            "write dead-lettered",
+            extra={
+                "kind": "step" if isinstance(intent, StepIntent) else "write",
+                "key": intent.key,
+                "error": str(error),
+            },
         )
         metrics.emit("write", dead_lettered=True)
 

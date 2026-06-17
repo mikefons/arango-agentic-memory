@@ -24,6 +24,15 @@ service + ArangoDB). See [`api.md`](api.md) for the request contract and
 `uvicorn arango_memory.api.app:app --host 0.0.0.0 --port 8080` is the entrypoint
 (the module-level `app = create_app()` boots the schema + write worker on startup).
 
+**Multiple instances.** The API is stateless, so scale out by running N instances
+against the **same** ArangoDB — required: `WRITE_QUEUE_BACKEND=arango` (the in-memory
+queue is per-process), so every instance's worker shares one durable backlog and the
+exclusive-locked `claim` prevents double-processing. The in-process caches (query +
+embedding) and the rate limiter are **per-instance** (they run cold per process; the
+effective rate limit is N×) — a shared Redis layer for cross-instance caching + rate
+limiting is on the roadmap. Correlation ids (`X-Request-ID`) thread requests across
+instances in your log pipeline.
+
 ---
 
 ## Configuration (environment)
@@ -158,6 +167,13 @@ Run `embeddings-migrate` after switching `EMBEDDING_PROVIDER`/`EMBEDDING_MODEL`
 - **`MemoryMetrics`** event emitter — `retrieval`/`write`/`degraded`/`decay`/
   `consolidation`/`conflict`/`cache`/`embedding_cache`/`topic_shift`/`graph` events;
   subscribe in-process.
+- **Structured logs** (§18) — stdlib logging on the `arango_memory` logger:
+  `LOG_FORMAT=text` (human, dev/CI default) or `json` (one object/line for log
+  pipelines), at `LOG_LEVEL` (INFO). Every line carries a **`request_id`**
+  (correlation id) + **`tenant`**. A `RequestLogMiddleware` assigns/echoes
+  `X-Request-ID` (honoring an inbound one) and logs an access line per request
+  (method/path/status/`duration_ms`); the worker's **dead-letter** and **degraded
+  retrieve** paths log too, sharing the id. `/health` isn't access-logged.
 
 ---
 

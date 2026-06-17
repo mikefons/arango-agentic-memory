@@ -40,6 +40,7 @@ from ..schema.collections import ensure_schema
 from ..security.auth import require_api_key
 from ..security.forget import forget
 from ..stats import stats
+from ..telemetry.logging import RequestLogMiddleware, configure_logging, tenant_var
 from .limits import RequestSizeLimitMiddleware, rate_limit
 
 
@@ -86,6 +87,7 @@ def _authorize(
     key. Open mode (no keys configured): the body-asserted `access_level` governs
     writes, exactly as before.
     """
+    tenant_var.set(tenant_id)  # correlation: tag this request's logs with the tenant
     principal = getattr(request.state, "principal", None)
     if principal is None:  # open mode — body-asserted ABAC (unchanged)
         if write and access_level != "write":
@@ -542,6 +544,7 @@ def create_app(client: ArangoMemoryClient | None = None) -> FastAPI:
     Tests pass a client configured for an ephemeral container; production and
     `make dev` call with no argument and get the env-driven default.
     """
+    configure_logging()  # structured logs + correlation ids (§18)
     mem_client = client or ArangoMemoryClient()
     worker_client = ArangoMemoryClient(mem_client.config)  # own connection for the worker thread
     embedder = get_embedder()
@@ -582,6 +585,9 @@ def create_app(client: ArangoMemoryClient | None = None) -> FastAPI:
     )
     # Request-size cap (§17): reject oversized bodies before they're buffered.
     app.add_middleware(RequestSizeLimitMiddleware)
+    # Correlation id + access log, added last so it's the OUTERMOST layer (even a 413
+    # gets a request id + access line). §18.
+    app.add_middleware(RequestLogMiddleware)
     app.state.client = mem_client
     app.state.embedder = embedder
     app.state.generator = generator
