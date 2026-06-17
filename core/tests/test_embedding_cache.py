@@ -2,14 +2,19 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 
 import pytest
 from arango.database import StandardDatabase
 
 from arango_memory.config import settings
 from arango_memory.embedding import FakeEmbedder
-from arango_memory.embedding_cache import EmbeddingCache, embed_cached, embedding_cache
+from arango_memory.embedding_cache import (
+    EmbeddingCache,
+    embed_batch_cached,
+    embed_cached,
+    embedding_cache,
+)
 from arango_memory.ingest.store import store
 from arango_memory.telemetry import metrics
 
@@ -18,10 +23,16 @@ class _CountingEmbedder(FakeEmbedder):
     def __init__(self, dimensions: int = 256) -> None:
         super().__init__(dimensions=dimensions)
         self.calls = 0
+        self.batch_calls = 0
 
     def embed(self, text: str) -> list[float]:
         self.calls += 1
         return super().embed(text)
+
+    def embed_batch(self, texts: Sequence[str]) -> list[list[float]]:
+        self.batch_calls += 1
+        base = FakeEmbedder.embed  # avoid bumping `calls` via the overridden embed
+        return [base(self, t) for t in texts]
 
 
 # ── unit (no DB) ──────────────────────────────────────────
@@ -67,6 +78,32 @@ def test_emits_metric() -> None:
     assert [e["hit"] for e in events] == [False, True]
 
 
+def test_embed_many_one_batch_call_for_misses() -> None:
+    cache, emb = EmbeddingCache(), _CountingEmbedder()
+    vecs = cache.embed_many(emb, ["a", "b", "a", "c"], tenant_id="t")
+    assert set(vecs) == {"a", "b", "c"}      # deduped
+    assert emb.batch_calls == 1              # single provider round-trip
+    assert emb.calls == 0                    # never used the one-at-a-time path
+    # A second pass is all hits → no new batch call.
+    cache.embed_many(emb, ["a", "b", "c"], tenant_id="t")
+    assert emb.batch_calls == 1
+
+
+def test_embed_many_batches_only_the_misses() -> None:
+    cache, emb = EmbeddingCache(), _CountingEmbedder()
+    cache.embed(emb, "a", tenant_id="t")     # warm "a"
+    captured: list[int] = []
+    original = emb.embed_batch
+
+    def spy(texts: Sequence[str]) -> list[list[float]]:
+        captured.append(len(texts))
+        return original(texts)
+
+    emb.embed_batch = spy  # type: ignore[method-assign]
+    cache.embed_many(emb, ["a", "b", "c"], tenant_id="t")
+    assert captured == [2]  # only "b","c" were embedded; "a" served from cache
+
+
 @pytest.fixture
 def _restore_flag() -> Iterator[None]:
     original = settings.embedding_cache
@@ -82,6 +119,16 @@ def test_disabled_flag_bypasses_cache(_restore_flag: None) -> None:
     embed_cached(emb, "z", tenant_id="t")
     embed_cached(emb, "z", tenant_id="t")
     assert emb.calls == 2  # no memoization when disabled
+    assert embedding_cache.hit_rate == 0.0  # singleton untouched
+
+
+def test_embed_batch_cached_disabled_still_batches(_restore_flag: None) -> None:
+    embedding_cache.clear()
+    settings.embedding_cache = False
+    emb = _CountingEmbedder()
+    vecs = embed_batch_cached(emb, ["a", "b", "a"], tenant_id="t")
+    assert set(vecs) == {"a", "b"}
+    assert emb.batch_calls == 1            # one provider call even with cache off
     assert embedding_cache.hit_rate == 0.0  # singleton untouched
 
 

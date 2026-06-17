@@ -24,7 +24,7 @@ from arango.database import StandardDatabase
 
 from ..config import settings
 from ..embedding import Embedder
-from ..embedding_cache import embed_cached
+from ..embedding_cache import embed_batch_cached
 from ..models import utcnow_iso
 from ..telemetry import metrics
 from .extract import ExtractedEntity, Extractor, cooccurring_pairs
@@ -192,8 +192,14 @@ def write_entities(
     key_by_name: dict[str, str] = {}
     detected = 0
 
+    # Embed all distinct entity names up front — one provider call for the misses
+    # (§16 batch embedding), keeping per-name cache semantics intact.
+    vec_by_name = embed_batch_cached(
+        embedder, [ent.name for ent in extracted], tenant_id=tenant_id
+    )
+
     for ent in extracted:
-        vec = embed_cached(embedder, ent.name, tenant_id=tenant_id)
+        vec = vec_by_name[ent.name]
         match, sim = _best_match(vec, existing, exclude=(ent.name, ent.label))
 
         if match is not None and sim >= settings.entity_merge_threshold:
