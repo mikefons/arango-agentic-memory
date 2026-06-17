@@ -141,6 +141,10 @@ class Settings(BaseSettings):
     write_queue_backend: Literal["memory", "arango"] = "memory"
     # How long a claimed intent stays leased before it's reclaimable (crash recovery).
     write_lease_seconds: int = Field(default=60, ge=1)
+    # Abuse limits (DESIGN.md §17). Request-size cap is always on (a memory turn is
+    # far smaller than 1 MiB); rate limiting is opt-in (0 = off — the dev/CI default).
+    max_request_bytes: int = Field(default=1_048_576, ge=1)
+    rate_limit_per_minute: int = Field(default=0, ge=0)
 
 
 settings = Settings()

@@ -40,6 +40,7 @@ from ..schema.collections import ensure_schema
 from ..security.auth import require_api_key
 from ..security.forget import forget
 from ..stats import stats
+from .limits import RequestSizeLimitMiddleware, rate_limit
 
 
 def get_client(request: Request) -> ArangoMemoryClient:
@@ -573,11 +574,14 @@ def create_app(client: ArangoMemoryClient | None = None) -> FastAPI:
         finally:
             worker.stop()
 
-    # Authn (§17): enforced only when API keys are configured; /health stays open.
+    # Authn then rate limit (§17): require_api_key runs first so rate_limit can key
+    # off the authenticated tenant. Both no-op unless configured; /health stays open.
     app = FastAPI(
         title="arango-memory core", version="0.1.0", lifespan=lifespan,
-        dependencies=[Depends(require_api_key)],
+        dependencies=[Depends(require_api_key), Depends(rate_limit)],
     )
+    # Request-size cap (§17): reject oversized bodies before they're buffered.
+    app.add_middleware(RequestSizeLimitMiddleware)
     app.state.client = mem_client
     app.state.embedder = embedder
     app.state.generator = generator

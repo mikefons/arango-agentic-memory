@@ -61,7 +61,7 @@ need no API keys.
 `ENTITY_FLAG_THRESHOLD` (0.6); durable writes: `WRITE_MAX_RETRIES` (5),
 `WRITE_BACKOFF_BASE` (0.5), `WRITE_QUEUE_BACKEND` (`memory`; set `arango` in prod),
 `WRITE_LEASE_SECONDS` (60); security: `REDACT_PII` (`true`), `API_KEYS` (unset = auth
-open).
+open), `MAX_REQUEST_BYTES` (1 MiB), `RATE_LIMIT_PER_MINUTE` (0 = off).
 
 **Authentication (§17)** — bearer API keys. Set `API_KEYS` to a JSON map to enforce:
 ```bash
@@ -171,6 +171,12 @@ Run `embeddings-migrate` after switching `EMBEDDING_PROVIDER`/`EMBEDDING_MODEL`
   drops the vector index to self-heal).
 - **ABAC** — mutating endpoints require `access_level: "write"` (see `api.md`).
 - **Embeddings** are never returned over the API (inversion defense).
+- **Abuse limits** — `MAX_REQUEST_BYTES` (default 1 MiB, always on) rejects oversized
+  bodies with **`413`** before they're buffered. `RATE_LIMIT_PER_MINUTE` (`0` = off)
+  throttles per **tenant** (authenticated) or **client IP** (open mode) with **`429`**
+  + `Retry-After`; `/health` is exempt. The limiter is **per-instance** (in-process) —
+  with N instances the effective limit is N×; a shared (Redis) limiter for a true
+  cross-instance cap is on the roadmap.
 
 ---
 

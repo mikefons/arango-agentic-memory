@@ -1,7 +1,7 @@
 # ArangoDB Agentic Memory System — Design Specification
 
 > **Status:** ✅ **v1 build sequence complete (Steps 0–7).** v2: all §21 adapters shipped (MCP, LangChain/LangGraph, CrewAI) + full §19 entity API + **Step 3e heavy extraction tier done**. Authoritative reference.
-> **Last updated:** 2026-06-16 (rev 57 — durable write queue: claim/ack + ArangoDB-backed backend)
+> **Last updated:** 2026-06-16 (rev 58 — abuse limits: request-size cap + per-tenant rate limiting)
 >
 > **Rev 2 decisions:** Python-first core with a thin TypeScript client · v1 scope is Vercel-only · build a walking skeleton first, then a test/eval harness, then thicken each layer.
 >
@@ -1286,7 +1286,11 @@ soft-deprecation.
     - **JWT / OIDC authentication** — validate signed tokens from an external IdP
       (claims → tenant/scope) as an alternative to static keys, for federated/SSO
       deployments. Slots in alongside the bearer-key path in `security/auth.py`.
-    - **Rate limiting + request-size caps** per tenant (no limits today → DoS surface).
+    - ✅ **Rate limiting + request-size caps** (rev 58) — a `Content-Length` middleware
+      rejects bodies over `MAX_REQUEST_BYTES` (1 MiB, on) with `413`; a `rate_limit`
+      dependency (after auth) throttles per tenant / IP over `RATE_LIMIT_PER_MINUTE`
+      (`0`=off, opt-in) with `429`+`Retry-After`. In-process (per-instance) — a shared
+      Redis limiter for a cross-instance cap is the follow-on.
     - ✅ **Durable queue** (rev 57) — `ArangoQueue` (a `write_intents` collection)
       behind the `WriteQueue` Protocol, selected by `WRITE_QUEUE_BACKEND=arango`:
       claim→ack leasing survives a crash between accept and commit (redelivers on
