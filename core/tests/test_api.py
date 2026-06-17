@@ -18,6 +18,7 @@ def test_health(api: TestClient) -> None:
     assert body["status"] == "ok"
     assert body["arango"] is True
     assert body["mode"] == "lite"
+    assert isinstance(body["latency_ms"], dict)  # process-global p50/p95/p99 (§23)
 
 
 def test_store_response_shape(api: TestClient) -> None:

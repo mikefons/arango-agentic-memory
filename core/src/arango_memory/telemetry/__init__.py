@@ -15,6 +15,9 @@ No built-in dashboard — users wire their own backend.
 
 from __future__ import annotations
 
+import math
+import threading
+from collections import deque
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from typing import Any
@@ -27,6 +30,55 @@ _tracer = trace.get_tracer("arango_memory")
 _meter = otel_metrics.get_meter("arango_memory")
 
 Handler = Callable[..., None]
+
+
+class LatencyRecorder:
+    """In-process p50/p95/p99 over recent latencies, keyed by operation (§18/§23).
+
+    The OTEL duration histograms only yield percentiles through a configured
+    exporter; this keeps a bounded ring of the most recent samples per key so the
+    process can self-report tail latency (e.g. on `/health`) against the §23
+    targets with no collector. Thread-safe (the write worker records off-thread).
+    """
+
+    def __init__(self, window: int = 1024) -> None:
+        self._window = window
+        self._samples: dict[str, deque[float]] = {}
+        self._lock = threading.Lock()
+
+    def record(self, key: str, ms: float) -> None:
+        with self._lock:
+            ring = self._samples.get(key)
+            if ring is None:
+                ring = self._samples[key] = deque(maxlen=self._window)
+            ring.append(ms)
+
+    @staticmethod
+    def _quantile(ordered: list[float], q: float) -> float:
+        # Nearest-rank: the smallest sample with rank ≥ q. `ordered` is non-empty.
+        rank = max(1, math.ceil(q * len(ordered)))
+        return round(ordered[rank - 1], 1)
+
+    def snapshot(self) -> dict[str, dict[str, float]]:
+        """Per-key {count, p50, p95, p99} over the current window (ms)."""
+        with self._lock:
+            frozen = {key: sorted(ring) for key, ring in self._samples.items() if ring}
+        return {
+            key: {
+                "count": len(ordered),
+                "p50": self._quantile(ordered, 0.50),
+                "p95": self._quantile(ordered, 0.95),
+                "p99": self._quantile(ordered, 0.99),
+            }
+            for key, ordered in frozen.items()
+        }
+
+    def clear(self) -> None:
+        with self._lock:
+            self._samples.clear()
+
+
+latency = LatencyRecorder()
 
 
 class _Meters:
@@ -87,11 +139,13 @@ class _Meters:
                 self.writes.add(1, {"outcome": "ok"})
             if (duration := payload.get("duration_ms")) is not None:
                 self.write_duration.record(duration)
+                latency.record("write", duration)
         elif event == "retrieval":
             attrs = {"mode": payload.get("mode", "unknown")}
             self.retrievals.add(1, attrs)
             if (duration := payload.get("duration_ms")) is not None:
                 self.retrieval_duration.record(duration, attrs)
+                latency.record(f"retrieval.{attrs['mode']}", duration)
             if (results := payload.get("results_k")) is not None:
                 self.retrieval_results.record(results, attrs)
             if (tokens := payload.get("tokens_injected")) is not None:
@@ -151,4 +205,4 @@ def span(name: str, **attrs: Any) -> Iterator[Span]:
         yield current
 
 
-__all__ = ["MemoryMetrics", "metrics", "span"]
+__all__ = ["LatencyRecorder", "MemoryMetrics", "latency", "metrics", "span"]

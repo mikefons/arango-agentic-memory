@@ -40,6 +40,7 @@ from ..schema.collections import ensure_schema
 from ..security.auth import require_api_key
 from ..security.forget import forget
 from ..stats import stats
+from ..telemetry import latency
 from ..telemetry.logging import RequestLogMiddleware, configure_logging, tenant_var
 from .limits import RequestSizeLimitMiddleware, rate_limit
 
@@ -268,7 +269,15 @@ def _require_ontology() -> None:
 
 # ── Route handlers ────────────────────────────────────────
 async def health(client: ArangoMemoryClient = Depends(get_client)) -> dict[str, object]:
-    return {"status": "ok", "arango": client.ping(), "mode": settings.memory_mode}
+    # `latency` is process-global p50/p95/p99 over recent ops (§18/§23), surfaced
+    # here (not /v1/stats, which is per-tenant) so operators can read tail latency
+    # against the §23 targets without an OTEL exporter. Empty until traffic flows.
+    return {
+        "status": "ok",
+        "arango": client.ping(),
+        "mode": settings.memory_mode,
+        "latency_ms": latency.snapshot(),
+    }
 
 
 async def store_endpoint(

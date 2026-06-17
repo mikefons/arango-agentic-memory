@@ -10,7 +10,7 @@ from arango.database import StandardDatabase
 import arango_memory.retrieve.search as search_mod
 from arango_memory.ingest.store import store
 from arango_memory.retrieve.search import RetrieveResult, retrieve
-from arango_memory.telemetry import MemoryMetrics, metrics
+from arango_memory.telemetry import LatencyRecorder, MemoryMetrics, latency, metrics
 
 
 @pytest.fixture(autouse=True)
@@ -31,6 +31,46 @@ def test_emitter_dispatches_and_clears() -> None:
     m.clear()
     m.emit("x", a=3)
     assert seen == [{"a": 1}]  # handler removed
+
+
+# ── latency recorder (unit) ───────────────────────────────
+def test_latency_recorder_quantiles_nearest_rank() -> None:
+    rec = LatencyRecorder()
+    for ms in range(1, 101):  # 1..100ms
+        rec.record("retrieval.lite", float(ms))
+    snap = rec.snapshot()["retrieval.lite"]
+    assert snap["count"] == 100
+    assert snap["p50"] == 50.0
+    assert snap["p95"] == 95.0
+    assert snap["p99"] == 99.0
+
+
+def test_latency_recorder_window_evicts_oldest() -> None:
+    rec = LatencyRecorder(window=10)
+    for ms in range(100):
+        rec.record("write", float(ms))
+    snap = rec.snapshot()["write"]
+    assert snap["count"] == 10  # only the last 10 retained
+    assert snap["p99"] == 99.0  # newest samples
+
+
+def test_latency_snapshot_skips_empty_keys() -> None:
+    rec = LatencyRecorder()
+    assert rec.snapshot() == {}
+
+
+def test_retrieval_feeds_global_latency_per_mode(
+    db: StandardDatabase,
+    wait_for_searchable: Callable[..., RetrieveResult],
+) -> None:
+    latency.clear()
+    ctx = {"tenant_id": "t_lat", "agent_id": "a"}
+    store(db, content="latency probe text", **ctx)
+    wait_for_searchable(db, query="latency", **ctx)
+    retrieve(db, query="latency", **ctx)
+    snap = latency.snapshot()
+    assert "retrieval.lite" in snap
+    assert snap["retrieval.lite"]["count"] >= 1
 
 
 # ── instrumentation (integration) ─────────────────────────

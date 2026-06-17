@@ -153,7 +153,12 @@ Run `embeddings-migrate` after switching `EMBEDDING_PROVIDER`/`EMBEDDING_MODEL`
 
 ## Observability (§18)
 
-- **`GET /health`** — liveness + DB reachability (`{status, arango, mode}`).
+- **`GET /health`** — liveness + DB reachability + process-global latency
+  (`{status, arango, mode, latency_ms}`). `latency_ms` holds p50/p95/p99 (ms) over
+  a rolling window per operation (`retrieval.lite`, `retrieval.full`, `write`),
+  for checking tail latency against the §23 targets (**core retrieval p99 ≤ 200ms;
+  lite end-to-end ≤ 250ms**) without an OTEL exporter. Empty until traffic flows;
+  it's a rolling **in-process** window, so it's per-instance.
 - **`GET /v1/stats?tenant_id=`** — per-tenant collection counts.
 - **OTEL spans** — emitted around `memory.write` / `memory.retrieve`; **no-op
   unless** an OpenTelemetry provider is configured in the host process.
