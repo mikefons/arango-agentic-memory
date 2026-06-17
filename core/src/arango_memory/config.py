@@ -145,6 +145,10 @@ class Settings(BaseSettings):
     # far smaller than 1 MiB); rate limiting is opt-in (0 = off — the dev/CI default).
     max_request_bytes: int = Field(default=1_048_576, ge=1)
     rate_limit_per_minute: int = Field(default=0, ge=0)
+    # Structured logging (DESIGN.md §18). "text" = human-readable (dev/CI default);
+    # "json" = one JSON object per line for log pipelines (set in production).
+    log_level: str = "INFO"
+    log_format: Literal["text", "json"] = "text"
 
 
 settings = Settings()

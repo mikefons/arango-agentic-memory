@@ -27,6 +27,7 @@ from ..lifecycle.decay import effective_strength, reset_access
 from ..models import utcnow_iso
 from ..schema.collections import SEARCH_VIEW, ensure_vector_index, has_vector_index
 from ..telemetry import metrics, span
+from ..telemetry.logging import logger
 from .enrich import QueryCache, hyde, should_skip_retrieval
 
 # Lazy decay (§11): the Ebbinghaus multiplier strength·exp(-λ·Δdays) is folded into
@@ -285,6 +286,7 @@ def retrieve(
             )
     except Exception as exc:  # noqa: BLE001 — §15: memory failures never break the turn
         metrics.emit("degraded", op="retrieve", reason=type(exc).__name__)
+        logger.warning("retrieve degraded", extra={"reason": type(exc).__name__})
         return RetrieveResult()
     metrics.emit(
         "retrieval",

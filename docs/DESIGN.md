@@ -1,7 +1,7 @@
 # ArangoDB Agentic Memory System — Design Specification
 
 > **Status:** ✅ **v1 build sequence complete (Steps 0–7).** v2: all §21 adapters shipped (MCP, LangChain/LangGraph, CrewAI) + full §19 entity API + **Step 3e heavy extraction tier done**. Authoritative reference.
-> **Last updated:** 2026-06-16 (rev 58 — abuse limits: request-size cap + per-tenant rate limiting)
+> **Last updated:** 2026-06-16 (rev 59 — structured logging + correlation IDs; multi-instance documented)
 >
 > **Rev 2 decisions:** Python-first core with a thin TypeScript client · v1 scope is Vercel-only · build a walking skeleton first, then a test/eval harness, then thicken each layer.
 >
@@ -733,7 +733,12 @@ Dream State operates only on stored structured metadata, never raw user input. R
 
 ## 18. Observability
 
-OpenTelemetry spans + metrics. No built-in dashboard — users plug into their backend.
+OpenTelemetry spans + metrics, plus **structured logging** (rev 59): stdlib logging
+on the `arango_memory` logger, `LOG_FORMAT=text|json` / `LOG_LEVEL`. A
+`RequestLogMiddleware` assigns a correlation id (`X-Request-ID`, honoring an inbound
+one and echoing it) and emits one access line per request; every record — including
+the worker's dead-letter and a degraded retrieve — carries `request_id` + `tenant`
+via contextvars. No built-in dashboard — users plug into their backend.
 
 **Spans:** `memory.retrieve`, `memory.write`, `memory.consolidate`, `memory.decay`, `memory.embed`
 
@@ -1296,9 +1301,15 @@ soft-deprecation.
       claim→ack leasing survives a crash between accept and commit (redelivers on
       lease expiry; at-least-once, idempotency-safe). `memory` stays the dev/CI
       default. **Redis/SQS** remain drop-in adapters behind the same Protocol.
-    - **Multi-instance** — support N stateless API instances over a shared durable
-      queue + DB (in-process caches degrade gracefully cold); document it (ops.md).
-    - **Structured logging + correlation IDs** across write/retrieve (today: OTEL spans only).
+    - ✅ **Multi-instance** (rev 59) — the API is stateless; run N instances over a
+      shared `arango` queue + DB (exclusive-locked `claim` prevents double-processing).
+      In-process caches + rate limiter are per-instance (cold per process / N× limit) —
+      a shared Redis layer is the follow-on. Documented in ops.md.
+    - ✅ **Structured logging + correlation IDs** (rev 59) — stdlib JSON/text logs
+      (`LOG_FORMAT`/`LOG_LEVEL`) on the `arango_memory` logger; a `RequestLogMiddleware`
+      assigns/echoes `X-Request-ID` and access-logs each request; every line (incl.
+      worker dead-letter + degraded retrieve) carries `request_id` + `tenant` via
+      contextvars. No new dependency. (§18)
   - **Tier 2 — performance & correctness:**
     - **AQL index audit** — `EXPLAIN` the graph-traversal + arm queries; back every
       `tenant_id`/`agent_id`/`invalid_at` filter with a persistent index.
