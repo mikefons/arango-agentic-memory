@@ -49,6 +49,10 @@ Static **bearer API keys**, configured on the core via `API_KEYS` (a JSON map
   `CORE_API_KEY`, the MCP server `ARANGO_MEMORY_API_KEY`.
 - *(JWT/OIDC is a roadmap follow-on; bearer keys are the dependency-free default.)*
 
+**Abuse limits (§17).** Bodies over `MAX_REQUEST_BYTES` (default 1 MiB) → **`413`**.
+With `RATE_LIMIT_PER_MINUTE > 0`, requests over the per-tenant (or per-IP, open mode)
+budget → **`429`** with a `Retry-After` header. `/health` is exempt from both.
+
 ---
 
 ## Conventions
