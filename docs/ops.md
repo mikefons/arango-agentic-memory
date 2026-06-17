@@ -202,3 +202,18 @@ Run `embeddings-migrate` after switching `EMBEDDING_PROVIDER`/`EMBEDDING_MODEL`
 and applies registered migrations (`schema/migrations.py`; `MIGRATIONS` is empty at
 v1 — future schema changes register a `Migration`). Back up with
 `arangodump` / restore with `arangorestore` per ArangoDB's standard tooling.
+
+### Index audit (§6)
+
+Every hot-path query scopes a collection by some prefix of
+`(tenant_id, agent_id, invalid_at)` (or a collection-specific key), so each is
+backed by a persistent index created in `ensure_schema`: `idx_mem_scope`
+(memories), `idx_entity_scope` (entities), `idx_episode_session` (episodes),
+`idx_intent_lease` (write_intents), `idx_proposal_scope` (ontology_proposals) —
+alongside the unique natural-key/idempotency indexes. The BM25 arm is served by
+the ArangoSearch view (`tenant_id`/`agent_id` are indexed view fields).
+
+Verify the planner actually uses them against a live DB:
+```bash
+python -m arango_memory.ops explain      # ⚠ flags any hot query falling back to a full scan
+```
