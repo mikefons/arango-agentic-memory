@@ -1,7 +1,7 @@
 # ArangoDB Agentic Memory System — Design Specification
 
 > **Status:** ✅ **v1 build sequence complete (Steps 0–7).** v2: all §21 adapters shipped (MCP, LangChain/LangGraph, CrewAI) + full §19 entity API + **Step 3e heavy extraction tier done**. Authoritative reference.
-> **Last updated:** 2026-06-17 (rev 61 — latency percentiles: in-process p50/p95/p99 on `/health`)
+> **Last updated:** 2026-06-17 (rev 62 — batch embedding: one `embed_batch` call per write's entity names)
 >
 > **Rev 2 decisions:** Python-first core with a thin TypeScript client · v1 scope is Vercel-only · build a walking skeleton first, then a test/eval harness, then thicken each layer.
 >
@@ -1320,7 +1320,10 @@ soft-deprecation.
       (`retrieval.lite`/`.full`/`write`) on `/health.latency_ms`, so tail latency is
       checkable against the §23 targets without an OTEL exporter (the duration
       histograms still feed one when configured). Per-instance window.
-    - **Batch embedding** — `store()` embeds entity names one-at-a-time; use `embed_batch`.
+    - ✅ **Batch embedding** (rev 62) — a write's distinct entity names are embedded in
+      one `embed_batch` provider call via `embed_batch_cached` (cache-aware: only
+      misses are sent, per-name hit/miss metrics preserved), instead of one call per
+      name. Collapses N provider round-trips per write to ≤1.
   - **Tier 3 — testing depth:** concurrency / multi-tenant isolation under load (§22),
     failure injection (DB drop mid-write → dead-letter), authz tests (post-auth), a
     perf regression gate; decouple a few assertions from FakeEmbedder quirks.
