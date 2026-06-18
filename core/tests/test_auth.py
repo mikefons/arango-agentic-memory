@@ -89,3 +89,24 @@ def test_body_access_level_ignored_in_enforced_mode(api: TestClient, with_keys: 
     res = api.post("/v1/store", json={"content": "x", "ctx": ctx},
                    headers={"authorization": "Bearer k_read"})
     assert res.status_code == 403
+
+
+# ── authz breadth: every tenant-scoped read enforces the key's tenant ──
+@pytest.mark.parametrize(
+    "path, params",
+    [
+        ("/v1/stats", {"tenant_id": "tenant_a"}),
+        ("/v1/steps", {"tenant_id": "tenant_a", "agent_id": "a"}),
+        ("/v1/entities", {"tenant_id": "tenant_a"}),
+        ("/v1/graph", {"tenant_id": "tenant_a"}),
+    ],
+)
+def test_cross_tenant_read_is_403_across_endpoints(
+    api: TestClient, with_keys: None, path: str, params: dict[str, str]
+) -> None:
+    # tenant_b's key may not read tenant_a on ANY tenant-scoped GET (data-layer scoping),
+    other = api.get(path, params=params, headers={"authorization": "Bearer k_other"})
+    assert other.status_code == 403, f"{path} leaked across tenants"
+    # …while the owning tenant's key is admitted.
+    own = api.get(path, params=params, headers={"authorization": "Bearer k_write"})
+    assert own.status_code == 200, f"{path} rejected the owning tenant"
