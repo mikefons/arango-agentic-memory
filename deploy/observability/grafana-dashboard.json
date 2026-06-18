@@ -1,0 +1,80 @@
+{
+  "__inputs": [
+    {
+      "name": "DS_PROMETHEUS",
+      "label": "Prometheus",
+      "description": "Prometheus scraping the OTEL collector",
+      "type": "datasource",
+      "pluginId": "prometheus",
+      "pluginName": "Prometheus"
+    }
+  ],
+  "title": "arango-memory core",
+  "uid": "arango-memory-core",
+  "schemaVersion": 39,
+  "version": 1,
+  "tags": ["arango-memory"],
+  "time": { "from": "now-1h", "to": "now" },
+  "refresh": "30s",
+  "templating": { "list": [] },
+  "panels": [
+    {
+      "id": 1,
+      "title": "Retrieval latency p99 (ms) — §23 targets: core ≤200, lite ≤250",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "fieldConfig": { "defaults": { "unit": "ms" }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.99, sum by (le, mode) (rate(memory_retrieval_duration_milliseconds_bucket[5m])))",
+          "legendFormat": "p99 {{mode}}"
+        },
+        {
+          "refId": "B",
+          "expr": "histogram_quantile(0.50, sum by (le, mode) (rate(memory_retrieval_duration_milliseconds_bucket[5m])))",
+          "legendFormat": "p50 {{mode}}"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "title": "Write & retrieve throughput (ops/s)",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "fieldConfig": { "defaults": { "unit": "ops" }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "sum(rate(memory_retrievals_total[5m]))", "legendFormat": "retrievals" },
+        { "refId": "B", "expr": "sum(rate(memory_writes_total[5m])) by (outcome)", "legendFormat": "writes {{outcome}}" }
+      ]
+    },
+    {
+      "id": 3,
+      "title": "Degraded fallbacks (rate)",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+      "fieldConfig": { "defaults": { "unit": "ops" }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "sum(rate(memory_degraded_total[5m])) by (op, reason)", "legendFormat": "{{op}} / {{reason}}" }
+      ]
+    },
+    {
+      "id": 4,
+      "title": "Embedding-cache hit ratio",
+      "type": "stat",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+      "fieldConfig": { "defaults": { "unit": "percentunit", "min": 0, "max": 1 }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(rate(memory_embedding_cache_lookups_total{hit=\"true\"}[5m])) / clamp_min(sum(rate(memory_embedding_cache_lookups_total[5m])), 1)",
+          "legendFormat": "hit ratio"
+        }
+      ]
+    }
+  ]
+}

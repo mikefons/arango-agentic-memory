@@ -1,0 +1,8 @@
+# Prometheus scrape config — pulls the OTEL Collector's Prometheus exporter (§18).
+global:
+  scrape_interval: 15s
+
+scrape_configs:
+  - job_name: arango-memory-otel-collector
+    static_configs:
+      - targets: ["otel-collector:8889"]  # the collector's `prometheus` exporter

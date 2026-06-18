@@ -1,0 +1,45 @@
+# Sample OpenTelemetry Collector config for the arango-memory core (DESIGN.md §18).
+#
+# The core emits OTEL spans + `memory.*` meters via the OTEL *API*; they are no-ops
+# until a provider exports them. Run the core so it pushes OTLP to this collector —
+# the simplest zero-code path is the auto-instrumentation distro:
+#
+#   pip install opentelemetry-distro opentelemetry-exporter-otlp
+#   OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317 \
+#   OTEL_SERVICE_NAME=arango-memory \
+#   opentelemetry-instrument uvicorn arango_memory.api.app:app --port 8080
+#
+# This collector receives OTLP, exposes metrics for Prometheus to scrape, and logs
+# traces to stdout (swap the `debug` trace exporter for OTLP to Tempo/Jaeger in prod).
+
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+
+processors:
+  batch: {}
+
+exporters:
+  # Metrics → a /metrics endpoint Prometheus scrapes (see prometheus.yml).
+  prometheus:
+    endpoint: 0.0.0.0:8889
+    resource_to_telemetry_conversion:
+      enabled: true
+  # Traces → stdout for the demo. Point this at OTLP (Tempo/Jaeger) for real use.
+  debug:
+    verbosity: detailed
+
+service:
+  pipelines:
+    metrics:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [prometheus]
+    traces:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [debug]

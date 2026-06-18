@@ -1,7 +1,7 @@
 # ArangoDB Agentic Memory System — Design Specification
 
 > **Status:** ✅ **v1 build sequence complete (Steps 0–7).** v2: all §21 adapters shipped (MCP, LangChain/LangGraph, CrewAI) + full §19 entity API + **Step 3e heavy extraction tier done**. Authoritative reference.
-> **Last updated:** 2026-06-18 (rev 67 — Tier-4: OpenAPI /docs surfaced (tags + public) )
+> **Last updated:** 2026-06-18 (rev 68 — Tier-4: sample OTEL collector + Grafana dashboard)
 >
 > **Rev 2 decisions:** Python-first core with a thin TypeScript client · v1 scope is Vercel-only · build a walking skeleton first, then a test/eval harness, then thicken each layer.
 >
@@ -1334,8 +1334,9 @@ soft-deprecation.
     topic-shift threshold bands).
   - **Tier 4 — release & DX:** ✅ semver + CHANGELOG (rev 66); ✅ FastAPI `/docs` (OpenAPI)
     surfaced — tagged routes, public even under auth, linked from `api.md` (rev 67);
+    ✅ a sample OTEL collector + Grafana dashboard (rev 68, `deploy/observability/`);
     publish the Python core + `@arango-memory/vercel` + the container image (with SBOM/dep
-    scan); a sample OTEL collector + dashboard config.
+    scan).
 
 *Shipped in v2:* MCP server, LangChain/LangGraph, CrewAI (+ G-Memory tiers), the
 full §19 entity API, Step 3e extraction tier, the Memory Dungeon reference app.
