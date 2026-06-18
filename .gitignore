@@ -83,3 +83,9 @@ packages/*/dist/
 
 # Logs
 *.log
+
+# LoCoMo benchmark data — externally licensed + large, never commit (DESIGN §23).
+# The committed smoke slice (core/tests/data/locomo_smoke.json) is exempt.
+locomo10.json
+**/locomo_raw*.json
+**/locomo_converted*.json
