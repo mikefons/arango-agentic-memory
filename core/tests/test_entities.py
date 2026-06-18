@@ -2,29 +2,13 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
 from typing import Any
 
 from arango.database import StandardDatabase
 
 from arango_memory.ingest.store import store
 
-
-class StubEmbedder:
-    """Maps known strings to fixed vectors so cosine similarity is controllable."""
-
-    model = "stub"
-    version = "1"
-    dimensions = 3
-
-    def __init__(self, table: dict[str, list[float]]) -> None:
-        self._table = table
-
-    def embed(self, text: str) -> list[float]:
-        return self._table.get(text, [0.0, 0.0, 1.0])
-
-    def embed_batch(self, texts: Sequence[str]) -> list[list[float]]:
-        return [self.embed(t) for t in texts]
+from .conftest import StubEmbedder
 
 
 def _entities(db: StandardDatabase, tenant: str) -> list[dict[str, Any]]:

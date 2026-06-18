@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import time
 import uuid
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Sequence
 
 import pytest
 from arango import ArangoClient
@@ -28,6 +28,29 @@ from arango_memory.schema.collections import ensure_schema
 ARANGO_IMAGE = "arangodb/enterprise:3.12.9.1"
 ROOT_PASSWORD = "testpassword"  # noqa: S105 — throwaway container credential
 STARTUP_TIMEOUT = 180
+
+
+class StubEmbedder:
+    """Maps known strings to fixed vectors so cosine similarity is controllable.
+
+    Lets tests assert threshold-band behavior (entity merge/flag, topic shift) on
+    explicit geometry instead of FakeEmbedder's incidental token-hash cosine.
+    Unknown text → a fixed default vector.
+    """
+
+    model = "stub"
+    version = "1"
+    dimensions = 3
+
+    def __init__(self, table: dict[str, list[float]], default: list[float] | None = None) -> None:
+        self._table = table
+        self._default = default if default is not None else [0.0, 0.0, 1.0]
+
+    def embed(self, text: str) -> list[float]:
+        return self._table.get(text, self._default)
+
+    def embed_batch(self, texts: Sequence[str]) -> list[list[float]]:
+        return [self.embed(t) for t in texts]
 
 
 @pytest.fixture(scope="session")

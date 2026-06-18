@@ -1,7 +1,7 @@
 # ArangoDB Agentic Memory System — Design Specification
 
 > **Status:** ✅ **v1 build sequence complete (Steps 0–7).** v2: all §21 adapters shipped (MCP, LangChain/LangGraph, CrewAI) + full §19 entity API + **Step 3e heavy extraction tier done**. Authoritative reference.
-> **Last updated:** 2026-06-18 (rev 64 — Tier-3 testing: failure injection; embedder-outage → BM25-only made real)
+> **Last updated:** 2026-06-18 (rev 65 — Tier-3 complete: authz breadth, perf invariants, FakeEmbedder decoupling)
 >
 > **Rev 2 decisions:** Python-first core with a thin TypeScript client · v1 scope is Vercel-only · build a walking skeleton first, then a test/eval harness, then thicken each layer.
 >
@@ -1325,10 +1325,13 @@ soft-deprecation.
       one `embed_batch` provider call via `embed_batch_cached` (cache-aware: only
       misses are sent, per-name hit/miss metrics preserved), instead of one call per
       name. Collapses N provider round-trips per write to ≤1.
-  - **Tier 3 — testing depth:** ✅ concurrency / multi-tenant isolation under load (§22,
-    rev 63); ✅ failure injection (rev 64 — embedder outage → BM25-only, DB-unreachable
-    write → dead-letter + replay; `test_degradation.py`); authz tests (post-auth), a
-    perf regression gate; decouple a few assertions from FakeEmbedder quirks.
+  - ✅ **Tier 3 — testing depth** (rev 63–65): concurrency / multi-tenant isolation under
+    load (§22); failure injection (embedder outage → BM25-only, DB-unreachable write →
+    dead-letter + replay); authz breadth (cross-tenant `403` across every tenant-scoped
+    read, `test_auth.py`); a deterministic perf-regression gate (≤1 embed batch/write, AQL
+    arm count doesn't grow with the corpus, `test_perf_invariants.py`); FakeEmbedder
+    decoupling (shared `StubEmbedder` with explicit geometry for the entity-merge and
+    topic-shift threshold bands).
   - **Tier 4 — release & DX:** semver tags + CHANGELOG; publish the Python core +
     `@arango-memory/vercel` + the container image (with SBOM/dep scan); surface
     FastAPI `/docs` (OpenAPI) from `api.md`; a sample OTEL collector + dashboard config.
