@@ -14,6 +14,7 @@ from typing import Any, Literal
 from fastapi import Depends, FastAPI, HTTPException, Request
 from pydantic import BaseModel, Field
 
+from .. import __version__
 from ..client import ArangoMemoryClient
 from ..config import settings
 from ..embedding import Embedder, get_embedder
@@ -589,7 +590,7 @@ def create_app(client: ArangoMemoryClient | None = None) -> FastAPI:
     # Authn then rate limit (§17): require_api_key runs first so rate_limit can key
     # off the authenticated tenant. Both no-op unless configured; /health stays open.
     app = FastAPI(
-        title="arango-memory core", version="0.1.0", lifespan=lifespan,
+        title="arango-memory core", version=__version__, lifespan=lifespan,
         dependencies=[Depends(require_api_key), Depends(rate_limit)],
     )
     # Request-size cap (§17): reject oversized bodies before they're buffered.

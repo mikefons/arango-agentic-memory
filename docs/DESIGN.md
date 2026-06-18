@@ -1,7 +1,7 @@
 # ArangoDB Agentic Memory System — Design Specification
 
 > **Status:** ✅ **v1 build sequence complete (Steps 0–7).** v2: all §21 adapters shipped (MCP, LangChain/LangGraph, CrewAI) + full §19 entity API + **Step 3e heavy extraction tier done**. Authoritative reference.
-> **Last updated:** 2026-06-18 (rev 65 — Tier-3 complete: authz breadth, perf invariants, FakeEmbedder decoupling)
+> **Last updated:** 2026-06-18 (rev 66 — Tier-4: CHANGELOG + single version source of truth)
 >
 > **Rev 2 decisions:** Python-first core with a thin TypeScript client · v1 scope is Vercel-only · build a walking skeleton first, then a test/eval harness, then thicken each layer.
 >
@@ -1385,6 +1385,17 @@ Never commit `ARANGO_LICENSE_KEY`, `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, or `AR
   `arango-demo-creator` repo whose checkout it nests inside).
 - **Feature branch → PR → squash-merge**; never push directly to `main` (except the
   unavoidable initial bootstrap push). CI (gitleaks, later `make ci`) must be green before merge.
+
+### Versioning & releases (rev 65)
+- **SemVer.** During `0.x`, minor versions may carry breaking changes; from `1.0.0`
+  the usual major/minor/patch contract holds. The Python core (`arango-memory`) and
+  the Vercel adapter (`@arango-memory/vercel`) are **versioned and released together**.
+- **Single source of truth:** the version lives once in `core/pyproject.toml`.
+  `arango_memory.__version__` reads it at runtime via `importlib.metadata`, and the
+  FastAPI app (`/openapi.json`, `/docs`) reports that same value — no hardcoded
+  duplicates to drift.
+- **`CHANGELOG.md`** (Keep a Changelog) at the repo root is the human release log;
+  an `[Unreleased]` section accrues entries that become the next tagged release.
 
 ---
 
