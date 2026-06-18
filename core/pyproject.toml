@@ -4,6 +4,17 @@ version = "0.1.0"
 description = "Agentic memory core for ArangoDB — ingestion, retrieval, consolidation, decay"
 readme = "README.md"
 requires-python = ">=3.11"
+license = "MIT"
+authors = [{ name = "Michael Fonseca" }]
+keywords = ["arangodb", "agentic-memory", "llm", "rag", "retrieval", "knowledge-graph"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3.11",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Database",
+    "Typing :: Typed",
+]
 dependencies = [
     "python-arango>=8.1.0",
     "fastapi>=0.115.0",
@@ -17,6 +28,15 @@ dependencies = [
     "opentelemetry-api>=1.28.0",
     "opentelemetry-sdk>=1.28.0",
 ]
+
+[project.urls]
+Homepage = "https://github.com/mikefons/arango-agentic-memory"
+Repository = "https://github.com/mikefons/arango-agentic-memory"
+Changelog = "https://github.com/mikefons/arango-agentic-memory/blob/main/CHANGELOG.md"
+Issues = "https://github.com/mikefons/arango-agentic-memory/issues"
+
+[project.scripts]
+arango-memory-ops = "arango_memory.ops:main"
 
 [project.optional-dependencies]
 extraction = [

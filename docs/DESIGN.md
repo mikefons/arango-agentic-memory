@@ -1,7 +1,7 @@
 # ArangoDB Agentic Memory System — Design Specification
 
 > **Status:** ✅ **v1 build sequence complete (Steps 0–7).** v2: all §21 adapters shipped (MCP, LangChain/LangGraph, CrewAI) + full §19 entity API + **Step 3e heavy extraction tier done**. Authoritative reference.
-> **Last updated:** 2026-06-18 (rev 68 — Tier-4: sample OTEL collector + Grafana dashboard)
+> **Last updated:** 2026-06-18 (rev 69 — Tier-4 complete: gated release pipeline + SBOM + packaging)
 >
 > **Rev 2 decisions:** Python-first core with a thin TypeScript client · v1 scope is Vercel-only · build a walking skeleton first, then a test/eval harness, then thicken each layer.
 >
@@ -1332,11 +1332,12 @@ soft-deprecation.
     arm count doesn't grow with the corpus, `test_perf_invariants.py`); FakeEmbedder
     decoupling (shared `StubEmbedder` with explicit geometry for the entity-merge and
     topic-shift threshold bands).
-  - **Tier 4 — release & DX:** ✅ semver + CHANGELOG (rev 66); ✅ FastAPI `/docs` (OpenAPI)
-    surfaced — tagged routes, public even under auth, linked from `api.md` (rev 67);
-    ✅ a sample OTEL collector + Grafana dashboard (rev 68, `deploy/observability/`);
-    publish the Python core + `@arango-memory/vercel` + the container image (with SBOM/dep
-    scan).
+  - ✅ **Tier 4 — release & DX** (rev 66–69): semver + CHANGELOG; FastAPI `/docs` (OpenAPI)
+    surfaced (tagged routes, public even under auth); a sample OTEL collector + Grafana
+    dashboard (`deploy/observability/`); a **gated release pipeline** (`release.yml`) that
+    builds the core wheel + `@arango-memory/vercel` tarball + container image with a
+    CycloneDX SBOM + dep-scan each — publishing no-ops until registry credentials are
+    added (machinery in place, nothing pushed). Full package metadata + MIT `LICENSE`.
 
 *Shipped in v2:* MCP server, LangChain/LangGraph, CrewAI (+ G-Memory tiers), the
 full §19 entity API, Step 3e extraction tier, the Memory Dungeon reference app.
@@ -1398,6 +1399,13 @@ Never commit `ARANGO_LICENSE_KEY`, `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, or `AR
   duplicates to drift.
 - **`CHANGELOG.md`** (Keep a Changelog) at the repo root is the human release log;
   an `[Unreleased]` section accrues entries that become the next tagged release.
+- **Release pipeline** (rev 69, `.github/workflows/release.yml`): a `v*` tag builds the
+  core wheel/sdist, the adapter npm tarball, and the container image; emits a
+  **CycloneDX SBOM** + a dependency scan (pip-audit / npm audit) for each; and uploads
+  them as artifacts. **Publishing is gated** — PyPI/npm steps no-op until
+  `PYPI_API_TOKEN`/`NPM_TOKEN` secrets exist, and the image pushes to GHCR only when
+  the `PUBLISH_IMAGE` repo variable is `true`. Both packages carry full metadata
+  (license `MIT`, URLs, classifiers/keywords); the repo `LICENSE` is MIT.
 
 ---
 
