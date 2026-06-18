@@ -168,7 +168,9 @@ Run `embeddings-migrate` after switching `EMBEDDING_PROVIDER`/`EMBEDDING_MODEL`
   `memory.consolidations`, `memory.cache.lookups`, `memory.embedding_cache.lookups`).
   Recorded automatically from the
   emitter; export them by configuring a `MeterProvider` (e.g. the Prometheus or OTLP
-  exporter) in the host process — no-op otherwise.
+  exporter) in the host process — no-op otherwise. A runnable sample collector +
+  Prometheus + Grafana dashboard lives in
+  [`deploy/observability/`](../deploy/observability/README.md).
 - **`MemoryMetrics`** event emitter — `retrieval`/`write`/`degraded`/`decay`/
   `consolidation`/`conflict`/`cache`/`embedding_cache`/`topic_shift`/`graph` events;
   subscribe in-process.
