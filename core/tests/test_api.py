@@ -29,6 +29,19 @@ def test_openapi_version_tracks_package(api: TestClient) -> None:
     assert body["info"]["version"] == __version__
 
 
+def test_openapi_groups_routes_by_tag(api: TestClient) -> None:
+    spec = api.get("/openapi.json").json()
+    tags = {t["name"] for t in spec.get("tags", [])}
+    assert {"ingestion", "retrieval", "lifecycle"} <= tags  # grouped for /docs
+    # the store route is tagged so it lands under its group, not "default"
+    assert spec["paths"]["/v1/store"]["post"]["tags"] == ["ingestion"]
+
+
+def test_docs_are_reachable(api: TestClient) -> None:
+    assert api.get("/docs").status_code == 200       # Swagger UI
+    assert api.get("/redoc").status_code == 200       # ReDoc
+
+
 def test_store_response_shape(api: TestClient) -> None:
     resp = api.post(
         "/v1/store",

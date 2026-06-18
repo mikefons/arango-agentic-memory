@@ -1,7 +1,7 @@
 # ArangoDB Agentic Memory System — Design Specification
 
 > **Status:** ✅ **v1 build sequence complete (Steps 0–7).** v2: all §21 adapters shipped (MCP, LangChain/LangGraph, CrewAI) + full §19 entity API + **Step 3e heavy extraction tier done**. Authoritative reference.
-> **Last updated:** 2026-06-18 (rev 66 — Tier-4: CHANGELOG + single version source of truth)
+> **Last updated:** 2026-06-18 (rev 67 — Tier-4: OpenAPI /docs surfaced (tags + public) )
 >
 > **Rev 2 decisions:** Python-first core with a thin TypeScript client · v1 scope is Vercel-only · build a walking skeleton first, then a test/eval harness, then thicken each layer.
 >
@@ -1332,9 +1332,10 @@ soft-deprecation.
     arm count doesn't grow with the corpus, `test_perf_invariants.py`); FakeEmbedder
     decoupling (shared `StubEmbedder` with explicit geometry for the entity-merge and
     topic-shift threshold bands).
-  - **Tier 4 — release & DX:** semver tags + CHANGELOG; publish the Python core +
-    `@arango-memory/vercel` + the container image (with SBOM/dep scan); surface
-    FastAPI `/docs` (OpenAPI) from `api.md`; a sample OTEL collector + dashboard config.
+  - **Tier 4 — release & DX:** ✅ semver + CHANGELOG (rev 66); ✅ FastAPI `/docs` (OpenAPI)
+    surfaced — tagged routes, public even under auth, linked from `api.md` (rev 67);
+    publish the Python core + `@arango-memory/vercel` + the container image (with SBOM/dep
+    scan); a sample OTEL collector + dashboard config.
 
 *Shipped in v2:* MCP server, LangChain/LangGraph, CrewAI (+ G-Memory tiers), the
 full §19 entity API, Step 3e extraction tier, the Memory Dungeon reference app.
