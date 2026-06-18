@@ -1,0 +1,138 @@
+name: release
+
+# Builds release artifacts (wheel/sdist, npm tarball, container image), a CycloneDX
+# SBOM, and a dependency scan for each on a version tag. Publishing is GATED on
+# secrets/vars that don't exist yet — every publish step is a no-op until you add
+# the relevant credential, so tagging today produces artifacts without pushing
+# anything to a public registry (DESIGN.md §25).
+#
+# To actually publish later, add repo secrets: PYPI_API_TOKEN, NPM_TOKEN; and set
+# the repo variable PUBLISH_IMAGE=true (image pushes to GHCR via GITHUB_TOKEN).
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  core:
+    name: Python core — build, SBOM, scan, (gated) publish
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Build wheel + sdist
+        working-directory: core
+        run: uv build
+
+      - name: Dependency scan (pip-audit)
+        working-directory: core
+        continue-on-error: true # informational; a new advisory shouldn't block a tag
+        run: |
+          uv export --format requirements-txt --no-emit-project --no-dev > requirements.txt
+          uvx pip-audit -r requirements.txt
+
+      - name: SBOM (CycloneDX)
+        uses: anchore/sbom-action@v0
+        with:
+          path: core/dist
+          format: cyclonedx-json
+          output-file: sbom-core.cdx.json
+          artifact-name: sbom-core.cdx.json
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: core-dist
+          path: core/dist/*
+
+      - name: Publish to PyPI (gated on PYPI_API_TOKEN)
+        if: ${{ env.HAS_PYPI != '' }}
+        env:
+          HAS_PYPI: ${{ secrets.PYPI_API_TOKEN }}
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: core/dist
+          password: ${{ secrets.PYPI_API_TOKEN }}
+
+  adapter:
+    name: Vercel adapter — build, SBOM, scan, (gated) publish
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: packages/vercel
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          registry-url: "https://registry.npmjs.org"
+          cache: npm
+          cache-dependency-path: packages/vercel/package-lock.json
+
+      - name: Build
+        run: |
+          npm ci
+          npm run build
+
+      - name: Dependency scan (npm audit)
+        continue-on-error: true
+        run: npm audit --audit-level=high
+
+      - name: Pack tarball
+        run: npm pack
+
+      - name: SBOM (CycloneDX)
+        uses: anchore/sbom-action@v0
+        with:
+          path: packages/vercel
+          format: cyclonedx-json
+          output-file: sbom-adapter.cdx.json
+          artifact-name: sbom-adapter.cdx.json
+
+      - name: Upload tarball
+        uses: actions/upload-artifact@v4
+        with:
+          name: adapter-tarball
+          path: packages/vercel/*.tgz
+
+      - name: Publish to npm (gated on NPM_TOKEN)
+        if: ${{ env.NODE_AUTH_TOKEN != '' }}
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm publish --access public
+
+  image:
+    name: Container image — build, SBOM, (gated) push
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build image
+        run: docker build -t arango-memory-core:${{ github.ref_name }} -f core/Dockerfile core
+
+      - name: SBOM (CycloneDX)
+        uses: anchore/sbom-action@v0
+        with:
+          image: arango-memory-core:${{ github.ref_name }}
+          format: cyclonedx-json
+          output-file: sbom-image.cdx.json
+          artifact-name: sbom-image.cdx.json
+
+      - name: Push to GHCR (gated on PUBLISH_IMAGE=true)
+        if: ${{ vars.PUBLISH_IMAGE == 'true' }}
+        run: |
+          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+          IMAGE=ghcr.io/${{ github.repository }}/core:${{ github.ref_name }}
+          docker tag arango-memory-core:${{ github.ref_name }} "$IMAGE"
+          docker push "$IMAGE"
