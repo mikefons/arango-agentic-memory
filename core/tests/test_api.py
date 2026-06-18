@@ -21,6 +21,14 @@ def test_health(api: TestClient) -> None:
     assert isinstance(body["latency_ms"], dict)  # process-global p50/p95/p99 (§23)
 
 
+def test_openapi_version_tracks_package(api: TestClient) -> None:
+    from arango_memory import __version__
+
+    assert __version__ != "0.0.0+unknown"  # installed → metadata resolved (single source)
+    body = api.get("/openapi.json").json()
+    assert body["info"]["version"] == __version__
+
+
 def test_store_response_shape(api: TestClient) -> None:
     resp = api.post(
         "/v1/store",
