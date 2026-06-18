@@ -193,6 +193,21 @@ def _rrf_fuse(ranked_lists: list[list[dict[str, Any]]], names: list[str]) -> lis
     return sorted(by_key.values(), key=lambda c: c.fused_score, reverse=True)
 
 
+def _embed_query(emb: Embedder, query: str, *, tenant_id: str) -> list[float]:
+    """Embed the query; on embedder error degrade to BM25-only (§15).
+
+    Returns an empty vector instead of raising, so the BM25 arm still runs (the
+    vector arm is skipped and MMR becomes relevance-blind). Memory must never
+    break the turn — an embedder outage just costs the vector signal.
+    """
+    try:
+        return embed_cached(emb, query, tenant_id=tenant_id)
+    except Exception as exc:  # noqa: BLE001 — §15: embedder down → BM25-only
+        metrics.emit("degraded", op="retrieve", reason=type(exc).__name__)
+        logger.warning("retrieve degraded to bm25-only", extra={"reason": type(exc).__name__})
+        return []
+
+
 def _mmr(query_emb: list[float], candidates: list[_Candidate], k: int) -> list[_Candidate]:
     """Maximal-marginal-relevance re-rank for diversity (§9)."""
     selected: list[_Candidate] = []
@@ -327,9 +342,14 @@ def _retrieve_impl(
         gen = generator or get_generator()
         if should_skip_retrieval(query, generator=gen, cache=cache):
             return RetrieveResult()
-        query_vec = hyde(query, generator=gen, embedder=emb, cache=cache).embedding
+        try:
+            query_vec = hyde(query, generator=gen, embedder=emb, cache=cache).embedding
+        except Exception as exc:  # noqa: BLE001 — §15: skip HyDE, fall back to query text
+            metrics.emit("degraded", op="retrieve", reason=type(exc).__name__)
+            logger.warning("hyde failed; using query text", extra={"reason": type(exc).__name__})
+            query_vec = _embed_query(emb, query, tenant_id=tenant_id)
     else:
-        query_vec = embed_cached(emb, query, tenant_id=tenant_id)
+        query_vec = _embed_query(emb, query, tenant_id=tenant_id)
 
     # Reference instant + decay rate shared by the AQL arms and the post-fusion pass.
     now = utcnow_iso()
@@ -346,7 +366,7 @@ def _retrieve_impl(
     vector_ready = has_vector_index(db) or ensure_vector_index(
         db, dimensions=emb.dimensions, n_lists=n_lists or settings.vector_n_lists
     )
-    if vector_ready:
+    if vector_ready and query_vec:  # query_vec empty → embedder degraded, BM25-only (§15)
         vector_rows = _run(db, _VECTOR_QUERY, {"qvec": query_vec, **scope})
         ranked_lists.append(vector_rows)
         names.append("vector")
