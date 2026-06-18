@@ -10,6 +10,15 @@ The ArangoDB agentic-memory **core** exposes one stable contract over two surfac
 Keeping this contract neutral is what makes adapters additive rather than refactors
 (DESIGN.md §19). All requests/responses are JSON (`content-type: application/json`).
 
+**Interactive docs (OpenAPI).** The running service self-describes — the live, version-
+stamped spec is the source of truth this page mirrors:
+
+- **Swagger UI:** `GET /docs` · **ReDoc:** `GET /redoc` · **raw schema:** `GET /openapi.json`
+
+Routes are grouped by tag (ingestion, retrieval, entities & graph, lifecycle, memory
+ops, system). These three paths stay **public even when `API_KEYS` is enforced** (and
+are exempt from rate limiting), so the docs are always reachable.
+
 > See also: [DESIGN.md](DESIGN.md) for the architecture; section refs below (§N) point into it.
 
 ---

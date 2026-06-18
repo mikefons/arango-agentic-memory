@@ -47,6 +47,12 @@ def test_valid_key_passes(api: TestClient, with_keys: None) -> None:
     assert _store(api, {"authorization": "Bearer k_write"}) == 200
 
 
+def test_docs_are_exempt_in_enforced_mode(api: TestClient, with_keys: None) -> None:
+    # The OpenAPI docs stay public even when keys are enforced (no creds needed).
+    assert api.get("/openapi.json").status_code == 200
+    assert api.get("/docs").status_code == 200
+
+
 def test_health_is_exempt(api: TestClient, with_keys: None) -> None:
     assert api.get("/health").status_code == 200  # always public, no key needed
 

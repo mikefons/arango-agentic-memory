@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from enum import Enum
 from typing import Any, Literal
 
 from fastapi import Depends, FastAPI, HTTPException, Request
@@ -547,6 +548,24 @@ async def retrieve_endpoint(
     )
 
 
+# ── OpenAPI metadata (served at /docs, /redoc, /openapi.json) ──
+_API_DESCRIPTION = (
+    "Agentic memory core for ArangoDB — durable ingestion, hybrid retrieval, "
+    "lifecycle consolidation, and decay over the `/v1` boundary.\n\n"
+    "**Auth:** open by default; set `API_KEYS` to require `Authorization: Bearer "
+    "<key>` (tenant + scope derive from the key). `/health` and these docs are always "
+    "public. **Embeddings are never returned over the API** (inversion defense, §17)."
+)
+_OPENAPI_TAGS = [
+    {"name": "system", "description": "Liveness, readiness, and process-global latency."},
+    {"name": "ingestion", "description": "Write conversation turns and tool/action traces."},
+    {"name": "retrieval", "description": "Hybrid BM25 + vector + graph retrieval."},
+    {"name": "entities & graph", "description": "Read/seed entities and the memory graph."},
+    {"name": "lifecycle", "description": "Consolidation, salience, communities, ontology."},
+    {"name": "memory ops", "description": "Per-tenant stats and right-to-be-forgotten."},
+]
+
+
 # ── App factory ───────────────────────────────────────────
 def create_app(client: ArangoMemoryClient | None = None) -> FastAPI:
     """Build the FastAPI app around a (possibly injected) Arango client.
@@ -590,7 +609,11 @@ def create_app(client: ArangoMemoryClient | None = None) -> FastAPI:
     # Authn then rate limit (§17): require_api_key runs first so rate_limit can key
     # off the authenticated tenant. Both no-op unless configured; /health stays open.
     app = FastAPI(
-        title="arango-memory core", version=__version__, lifespan=lifespan,
+        title="arango-memory core",
+        version=__version__,
+        description=_API_DESCRIPTION,
+        openapi_tags=_OPENAPI_TAGS,
+        lifespan=lifespan,
         dependencies=[Depends(require_api_key), Depends(rate_limit)],
     )
     # Request-size cap (§17): reject oversized bodies before they're buffered.
@@ -604,40 +627,75 @@ def create_app(client: ArangoMemoryClient | None = None) -> FastAPI:
     app.state.cache = cache
     # app.state.queue is set in the lifespan (after the schema exists).
 
-    app.add_api_route("/health", health, methods=["GET"])
-    app.add_api_route("/v1/store", store_endpoint, methods=["POST"], response_model=StoreResponse)
+    # Typed as the route-decorator's `tags` param expects (list invariance).
+    sys_t: list[str | Enum] = ["system"]
+    ingest_t: list[str | Enum] = ["ingestion"]
+    retr_t: list[str | Enum] = ["retrieval"]
+    eg_t: list[str | Enum] = ["entities & graph"]
+    life_t: list[str | Enum] = ["lifecycle"]
+    ops_t: list[str | Enum] = ["memory ops"]
+
+    app.add_api_route("/health", health, methods=["GET"], tags=sys_t)
     app.add_api_route(
-        "/v1/retrieve", retrieve_endpoint, methods=["POST"], response_model=RetrieveResponse
-    )
-    app.add_api_route("/v1/step", step_endpoint, methods=["POST"], response_model=StepResponse)
-    app.add_api_route("/v1/steps", steps_endpoint, methods=["GET"], response_model=StepsResponse)
-    app.add_api_route(
-        "/v1/forget", forget_endpoint, methods=["POST"], response_model=ForgetResponse
-    )
-    app.add_api_route("/v1/stats", stats_endpoint, methods=["GET"], response_model=StatsResponse)
-    app.add_api_route("/v1/entity", entity_endpoint, methods=["GET"], response_model=EntityResponse)
-    app.add_api_route(
-        "/v1/entities", entities_endpoint, methods=["GET"], response_model=EntitiesResponse
-    )
-    app.add_api_route("/v1/seed", seed_endpoint, methods=["POST"], response_model=SeedResponse)
-    app.add_api_route(
-        "/v1/supersede", supersede_endpoint, methods=["POST"], response_model=SupersedeResponse
-    )
-    app.add_api_route("/v1/graph", graph_endpoint, methods=["GET"], response_model=GraphResponse)
-    app.add_api_route("/v1/dream", dream_endpoint, methods=["POST"], response_model=DreamResponse)
-    app.add_api_route(
-        "/v1/salience", salience_endpoint, methods=["POST"], response_model=SalienceResponse
+        "/v1/store", store_endpoint, methods=["POST"], response_model=StoreResponse, tags=ingest_t
     )
     app.add_api_route(
-        "/v1/community", community_endpoint, methods=["POST"], response_model=CommunityResponse
+        "/v1/retrieve", retrieve_endpoint, methods=["POST"], response_model=RetrieveResponse,
+        tags=retr_t,
+    )
+    app.add_api_route(
+        "/v1/step", step_endpoint, methods=["POST"], response_model=StepResponse, tags=ingest_t
+    )
+    app.add_api_route(
+        "/v1/steps", steps_endpoint, methods=["GET"], response_model=StepsResponse, tags=ingest_t
+    )
+    app.add_api_route(
+        "/v1/forget", forget_endpoint, methods=["POST"], response_model=ForgetResponse, tags=ops_t
+    )
+    app.add_api_route(
+        "/v1/stats", stats_endpoint, methods=["GET"], response_model=StatsResponse, tags=ops_t
+    )
+    app.add_api_route(
+        "/v1/entity", entity_endpoint, methods=["GET"], response_model=EntityResponse, tags=eg_t
+    )
+    app.add_api_route(
+        "/v1/entities", entities_endpoint, methods=["GET"], response_model=EntitiesResponse,
+        tags=eg_t,
+    )
+    app.add_api_route(
+        "/v1/seed", seed_endpoint, methods=["POST"], response_model=SeedResponse, tags=eg_t
+    )
+    app.add_api_route(
+        "/v1/supersede", supersede_endpoint, methods=["POST"], response_model=SupersedeResponse,
+        tags=eg_t,
+    )
+    app.add_api_route(
+        "/v1/graph", graph_endpoint, methods=["GET"], response_model=GraphResponse, tags=eg_t
+    )
+    app.add_api_route(
+        "/v1/dream", dream_endpoint, methods=["POST"], response_model=DreamResponse, tags=life_t
+    )
+    app.add_api_route(
+        "/v1/salience", salience_endpoint, methods=["POST"], response_model=SalienceResponse,
+        tags=life_t,
+    )
+    app.add_api_route(
+        "/v1/community", community_endpoint, methods=["POST"], response_model=CommunityResponse,
+        tags=life_t,
     )
     app.add_api_route(
         "/v1/ontology/scan", ontology_scan_endpoint, methods=["POST"],
-        response_model=OntologyScanResponse,
+        response_model=OntologyScanResponse, tags=life_t,
     )
-    app.add_api_route("/v1/ontology/proposals", ontology_proposals_endpoint, methods=["GET"])
-    app.add_api_route("/v1/ontology/approve", ontology_approve_endpoint, methods=["POST"])
-    app.add_api_route("/v1/ontology/reject", ontology_reject_endpoint, methods=["POST"])
+    app.add_api_route(
+        "/v1/ontology/proposals", ontology_proposals_endpoint, methods=["GET"], tags=life_t
+    )
+    app.add_api_route(
+        "/v1/ontology/approve", ontology_approve_endpoint, methods=["POST"], tags=life_t
+    )
+    app.add_api_route(
+        "/v1/ontology/reject", ontology_reject_endpoint, methods=["POST"], tags=life_t
+    )
     return app
 
 
