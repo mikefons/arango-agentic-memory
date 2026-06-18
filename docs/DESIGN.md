@@ -1,7 +1,7 @@
 # ArangoDB Agentic Memory System — Design Specification
 
 > **Status:** ✅ **v1 build sequence complete (Steps 0–7).** v2: all §21 adapters shipped (MCP, LangChain/LangGraph, CrewAI) + full §19 entity API + **Step 3e heavy extraction tier done**. Authoritative reference.
-> **Last updated:** 2026-06-18 (rev 69 — Tier-4 complete: gated release pipeline + SBOM + packaging)
+> **Last updated:** 2026-06-18 (rev 70 — real-data LoCoMo converter: official release → runner schema)
 >
 > **Rev 2 decisions:** Python-first core with a thin TypeScript client · v1 scope is Vercel-only · build a walking skeleton first, then a test/eval harness, then thicken each layer.
 >
@@ -906,6 +906,25 @@ Noise-Reduction Rate = answers that stayed focused on the relevant fact. Report-
 by default (§23 sets no numeric targets for these two); `--max-hallucination` /
 `--min-nrr` optionally gate. CLI: `python -m arango_memory.eval.halu <dataset>`.
 
+**Running the real LoCoMo benchmark (rev 70).** The public dataset is bring-your-own
+(externally licensed, large — never committed; CI stays on the smoke slice).
+`eval/locomo_convert.py` maps the official release into the runner schema, then the
+benchmark gate runs as usual:
+
+```bash
+# fetch locomo10.json from snap-research/locomo (per its license), then:
+python -m arango_memory.eval.locomo_convert locomo10.json converted.json
+python -m arango_memory.eval.benchmark converted.json --mode lite   # exits nonzero below §23
+```
+
+The converter orders `session_N` into the conversation, resolves each QA's first
+`evidence` dia-id to the supporting turn text (the `gold_fact` Recall@k checks), and
+maps the integer `category` to a name. **Adversarial (category 5) and evidence-less
+questions are excluded** from the scored set (no fact to retrieve) and counted in the
+conversion stats — so headline Recall@k/F1 stay comparable to the targets. This is a
+*retrieval-quality* run; answer-generation quality (Hallucination/NRR) is the separate
+`halu.py` harness.
+
 ### Latency targets (corrected Rev 2 — split by path)
 - **Core retrieval** (DB ops only: vector + BM25 + graph + fusion + assembly): **p99 ≤ 200ms**
 - **Augmented retrieval** (full mode, incl. adaptive gate + HyDE LLM calls, warm cache): **p99 ≤ 1.5s**
@@ -1258,11 +1277,13 @@ soft-deprecation.
 - **Real-data benchmark run (LoCoMo)** — the harnesses exist ([benchmark.py](../core/src/arango_memory/eval/benchmark.py),
   [halu.py](../core/src/arango_memory/eval/halu.py)); this is the BYO-dataset run + the
   glue around it (§23):
-  - **Dataset converter** `eval/datasets/locomo_convert.py` — map real LoCoMo
-    (`session_N` keys, `evidence`/category codes) → our `load_dataset` schema. Derive
+  - ✅ **Dataset converter** `eval/locomo_convert.py` (rev 70) — maps real LoCoMo
+    (`session_N` keys, `evidence`/category codes) → our `load_dataset` schema. Derives
     `gold_fact` from the **cited evidence turn** (not the synthesized answer, or Recall@k
-    is unfairly punished by paraphrase); map category codes → single/multi-hop/temporal/
-    adversarial. Hand-verify ~10 converted samples before trusting a run.
+    is unfairly punished by paraphrase); maps category codes → single/multi-hop/temporal;
+    **adversarial (cat 5) + evidence-less Qs excluded + counted**. Unit-tested on a
+    schema fixture; `locomo10.json`/converted output are gitignored. Still: hand-verify
+    ~10 converted samples before trusting a run.
   - **Real providers**: `EMBEDDING_PROVIDER=openai` (+ key); full mode + halu need
     `GENERATION_PROVIDER=anthropic` (+ key); a real ArangoDB with the vector index
     trained (LoCoMo crosses `VECTOR_N_LISTS`).
