@@ -1,7 +1,7 @@
 # ArangoDB Agentic Memory System — Design Specification
 
 > **Status:** ✅ **v1 build sequence complete (Steps 0–7).** v2: all §21 adapters shipped (MCP, LangChain/LangGraph, CrewAI) + full §19 entity API + **Step 3e heavy extraction tier done**. Authoritative reference.
-> **Last updated:** 2026-06-17 (rev 62 — batch embedding: one `embed_batch` call per write's entity names)
+> **Last updated:** 2026-06-18 (rev 63 — Tier-3 testing: concurrency + multi-tenant isolation under load)
 >
 > **Rev 2 decisions:** Python-first core with a thin TypeScript client · v1 scope is Vercel-only · build a walking skeleton first, then a test/eval harness, then thicken each layer.
 >
@@ -846,6 +846,7 @@ The schema and core API are designed to support these without refactor.
 ### Unit / integration
 - **ArangoDB via testcontainers** — spin a real `arangodb/enterprise:3.12.9.1` instance per test session (evaluation mode, no license needed); no mocking the database. Pass `--vector-index=true` for tests that exercise vectors.
 - Fixtures for tenants/agents/sessions; deterministic seed data.
+- **Concurrency / isolation** (`test_concurrency.py`, rev 63): multiple threads write/read at once (own connections) and tenant scoping is asserted to hold — no cross-tenant leakage through the shared search view; concurrent durable-queue workers process each intent exactly once (the exclusive `claim` lease, §15).
 - Contract tests for the core HTTP API (the TS↔Python seam) so the adapter and core can't drift.
 - Imports resolve via `pythonpath=["src"]` (pytest config), independent of the editable install (§25).
 
@@ -1324,8 +1325,8 @@ soft-deprecation.
       one `embed_batch` provider call via `embed_batch_cached` (cache-aware: only
       misses are sent, per-name hit/miss metrics preserved), instead of one call per
       name. Collapses N provider round-trips per write to ≤1.
-  - **Tier 3 — testing depth:** concurrency / multi-tenant isolation under load (§22),
-    failure injection (DB drop mid-write → dead-letter), authz tests (post-auth), a
+  - **Tier 3 — testing depth:** ✅ concurrency / multi-tenant isolation under load (§22,
+    rev 63); failure injection (DB drop mid-write → dead-letter), authz tests (post-auth), a
     perf regression gate; decouple a few assertions from FakeEmbedder quirks.
   - **Tier 4 — release & DX:** semver tags + CHANGELOG; publish the Python core +
     `@arango-memory/vercel` + the container image (with SBOM/dep scan); surface
