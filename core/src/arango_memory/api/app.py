@@ -39,7 +39,7 @@ from ..lifecycle.salience import compute_centrality
 from ..retrieve.enrich import QueryCache
 from ..retrieve.search import retrieve
 from ..schema.collections import ensure_schema
-from ..security.auth import require_api_key
+from ..security.auth import require_principal
 from ..security.forget import forget
 from ..stats import stats
 from ..telemetry import latency
@@ -606,7 +606,7 @@ def create_app(client: ArangoMemoryClient | None = None) -> FastAPI:
         finally:
             worker.stop()
 
-    # Authn then rate limit (§17): require_api_key runs first so rate_limit can key
+    # Authn then rate limit (§17): require_principal runs first so rate_limit can key
     # off the authenticated tenant. Both no-op unless configured; /health stays open.
     app = FastAPI(
         title="arango-memory core",
@@ -614,7 +614,7 @@ def create_app(client: ArangoMemoryClient | None = None) -> FastAPI:
         description=_API_DESCRIPTION,
         openapi_tags=_OPENAPI_TAGS,
         lifespan=lifespan,
-        dependencies=[Depends(require_api_key), Depends(rate_limit)],
+        dependencies=[Depends(require_principal), Depends(rate_limit)],
     )
     # Request-size cap (§17): reject oversized bodies before they're buffered.
     app.add_middleware(RequestSizeLimitMiddleware)

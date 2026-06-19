@@ -135,6 +135,21 @@ class Settings(BaseSettings):
     # `/v1` requires `Authorization: Bearer <key>`; tenant/scope come from the key.
     # Env (JSON): API_KEYS='{"k_abc":{"tenant_id":"acme","scope":"write"}}'.
     api_keys: dict[str, ApiKeyEntry] = Field(default_factory=dict)
+    # OIDC / JWT bearer auth (DESIGN.md §17), additive to api_keys and coexisting with
+    # it. Setting `oidc_issuer` enables JWT verification: `/v1` then also accepts an
+    # RS256 bearer JWT, verified against the issuer's JWKS (signature + alg allowlist +
+    # exp/nbf/iss/aud). Identity maps from claims: `oidc_tenant_claim` → tenant_id,
+    # `oidc_scope_claim` → scope ("write" if its value contains "write", else "read").
+    # Revocation is by expiry only — use short-lived tokens (no server-side denylist).
+    oidc_issuer: str | None = None
+    oidc_audience: str | None = None
+    # JWKS endpoint; defaults to `{issuer}/.well-known/jwks.json` when unset.
+    oidc_jwks_uri: str | None = None
+    oidc_algorithms: tuple[str, ...] = ("RS256",)
+    oidc_tenant_claim: str = "tenant_id"
+    oidc_scope_claim: str = "scope"
+    # Clock-skew tolerance (seconds) for exp/nbf validation.
+    oidc_leeway_seconds: int = Field(default=60, ge=0)
     # Durable write queue (DESIGN.md §15). "memory" = in-process (fast, zero-config —
     # the dev/CI default; loses unacked work on crash). "arango" = a durable
     # `write_intents` collection that survives restarts (set this in production).

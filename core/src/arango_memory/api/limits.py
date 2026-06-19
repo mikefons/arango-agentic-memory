@@ -87,7 +87,7 @@ _rate_limiter = RateLimiter()
 def rate_limit(request: Request) -> None:
     """Per-tenant (or per-IP, open mode) rate limit (§17). No-op when disabled.
 
-    Runs after `require_api_key`, so it keys off the authenticated tenant when
+    Runs after `require_principal`, so it keys off the authenticated tenant when
     present; otherwise the client IP (best-effort for the open/keyless posture).
     """
     if settings.rate_limit_per_minute <= 0 or request.url.path in _EXEMPT_PATHS:
