@@ -17,6 +17,7 @@ from starlette.responses import JSONResponse
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from ..config import settings
+from ..telemetry.logging import logger
 
 # Public paths exempt from rate limiting (liveness + API docs).
 _EXEMPT_PATHS = frozenset({"/health", "/docs", "/openapi.json", "/redoc"})
@@ -81,7 +82,41 @@ class RateLimiter:
             return window - (now - start) if count > limit else None
 
 
+class RedisRateLimiter:
+    """Cross-instance fixed-window limiter backed by Redis (DESIGN.md §17).
+
+    One global budget across all instances (vs the per-instance `RateLimiter`).
+    **Fail-open:** any Redis error allows the request — an abuse limiter must never
+    take the service down. `INCR` + `EXPIRE NX` keeps a single window TTL per key.
+    """
+
+    def check(self, key: str, *, limit: int, window: float = _WINDOW_SECONDS) -> float | None:
+        if limit <= 0:
+            return None
+        try:
+            from ..redis_client import get_redis
+
+            redis_key = f"ratelimit:{key}"
+            pipe = get_redis().pipeline()
+            pipe.incr(redis_key)
+            pipe.expire(redis_key, int(window), nx=True)  # set the window TTL once
+            pipe.ttl(redis_key)
+            count, _, ttl = pipe.execute()
+        except Exception:  # noqa: BLE001 — §15 fail-open: never break the turn on a Redis fault
+            logger.warning("rate limiter degraded (redis error); allowing", extra={"key": key})
+            return None
+        if int(count) <= limit:
+            return None
+        return float(ttl) if ttl and int(ttl) > 0 else window
+
+
 _rate_limiter = RateLimiter()
+_redis_rate_limiter = RedisRateLimiter()
+
+
+def _active_limiter() -> RateLimiter | RedisRateLimiter:
+    """Redis-backed limiter when `REDIS_URL` is set (shared budget), else in-process."""
+    return _redis_rate_limiter if settings.redis_url else _rate_limiter
 
 
 def rate_limit(request: Request) -> None:
@@ -98,7 +133,7 @@ def rate_limit(request: Request) -> None:
     else:
         client = request.client
         key = f"ip:{client.host if client else 'unknown'}"
-    retry_after = _rate_limiter.check(key, limit=settings.rate_limit_per_minute)
+    retry_after = _active_limiter().check(key, limit=settings.rate_limit_per_minute)
     if retry_after is not None:
         raise HTTPException(
             status_code=429,

@@ -164,6 +164,12 @@ class Settings(BaseSettings):
     # "json" = one JSON object per line for log pipelines (set in production).
     log_level: str = "INFO"
     log_format: Literal["text", "json"] = "text"
+    # Optional shared (cross-instance) layer (DESIGN.md §16/§17). Unset = per-instance
+    # (the default): the rate limiter + embedding cache live in-process. Set to a Redis
+    # URL (needs the `redis` extra) to share them across instances — the limiter then
+    # enforces one global budget and the embedding cache is shared. Fail-soft: a Redis
+    # outage degrades to allow (limiter) / direct compute (cache), never an error.
+    redis_url: str | None = None
 
 
 settings = Settings()
