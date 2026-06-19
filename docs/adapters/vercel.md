@@ -22,6 +22,7 @@ const model = wrapLanguageModel({
   model: gateway("anthropic/claude-sonnet-4.5"),
   middleware: arangoMemory({
     coreUrl: process.env.CORE_URL!,   // e.g. http://127.0.0.1:8080
+    apiKey: process.env.CORE_API_KEY, // optional — bearer key or JWT when the core is enforced
     tenantId: "acme",
     agentId: "assistant-1",
     sessionId: "run-42",              // optional

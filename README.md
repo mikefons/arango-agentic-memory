@@ -2,7 +2,14 @@
 
 Persistent, relational memory for AI agents — built on ArangoDB (graph + vector + full-text in one engine), with a Python core and a thin Vercel AI SDK adapter.
 
-> **Status:** Feature-complete against the spec — v1 core (Steps 0–7), all v2 adapters (MCP, LangChain/LangGraph, CrewAI), the full entity API, the GLiNER/Haiku extraction tier, and the **Memory Dungeon** reference app (`examples/dungeon/`). See [`docs/DESIGN.md`](docs/DESIGN.md) — the authoritative spec — and [`docs/api.md`](docs/api.md) — the core API reference.
+> **Status:** Feature-complete against the spec and hardened into a deployable
+> service — v1 core (Steps 0–7), all v2 adapters (MCP, LangChain/LangGraph, CrewAI),
+> the full entity API, the GLiNER/Haiku extraction tier, the **Memory Dungeon**
+> reference app (`examples/dungeon/`), plus the hardening tracks: bearer-key **+
+> JWT/OIDC auth**, durable write queue, rate limiting, structured logging,
+> OpenAPI `/docs`, a gated release pipeline, and an optional **Redis** shared layer
+> for horizontal scaling. See [`docs/DESIGN.md`](docs/DESIGN.md) — the authoritative
+> spec — and [`docs/api.md`](docs/api.md) — the core API reference.
 
 ## Architecture (v1)
 
@@ -26,10 +33,11 @@ v1 ships the core + Vercel adapter. v2 adds three in-process adapters (the core 
 - **Ingestion** — PII redaction (§17), pluggable entity + **typed-relation** extraction → entity/edge knowledge graph (spaCy / GLiNER+GLiREL / Haiku tiers, layered with escalation), explicit `valid_time` parsing, write-time conflict detection, prospective indexing (full mode), idempotency-keyed **durable async write path** (queue + worker + dead-letter).
 - **Retrieval** — BM25 + Faiss vector + graph expansion, fused via RRF → MMR → tiered token budget; HyDE + adaptive gate (full mode); recency/decay ranking. Degrades to a memory-less turn on any fault (never breaks the agent).
 - **Lifecycle** — Ebbinghaus decay + spaced repetition + soft-deprecation sweep; bi-temporal edges + `Supersedes`; Dream State consolidation (conflict confirmation + summary distillation + circuit breaker).
-- **Security** — PII redaction, WORM episodes, right-to-be-forgotten (soft-delete + purge), ABAC (read/write).
-- **Observability** — OpenTelemetry spans (no-op without a configured backend) + a `MemoryMetrics` event emitter; `GET /v1/stats`.
+- **Security** — PII redaction, WORM episodes, right-to-be-forgotten (soft-delete + purge), ABAC (read/write); **authentication** (open by default) via static bearer keys *or* OIDC/JWT (claims → tenant/scope), with per-tenant **rate limiting** + request-size caps.
+- **Observability** — OpenTelemetry spans **+ `memory.*` meters** (no-op without a configured backend) + a `MemoryMetrics` event emitter; **structured JSON/text logging** with `X-Request-ID` correlation; in-process p50/p95/p99 **latency percentiles on `/health`**; `GET /v1/stats`. Sample collector + Grafana dashboard in `deploy/observability/`.
+- **Operations** — idempotency-keyed durable write path with a pluggable queue (in-memory or **ArangoDB-backed**) + dead-letter/replay; an `ops` CLI (`vector-rebuild`, `embeddings-migrate`, `replay`, `explain`); stateless API → **multi-instance** scaling, with an optional **Redis** shared layer (`REDIS_URL`) for a cross-instance rate-limit budget + shared embedding cache.
 
-HTTP surface: `/health`, `/v1/store`, `/v1/retrieve`, `/v1/step`, `/v1/steps`, `/v1/forget`, `/v1/stats`.
+HTTP surface: `/health`, **`/docs`** (OpenAPI), `/v1/store`, `/v1/retrieve`, `/v1/step`, `/v1/steps`, `/v1/forget`, `/v1/stats`, `/v1/entity`, `/v1/entities`, `/v1/graph`, `/v1/seed`, `/v1/supersede`, `/v1/dream`, `/v1/salience`, `/v1/community`, `/v1/ontology/*`.
 
 Deferred: full Next.js chat UI (Step 3.5c).
 
@@ -107,4 +115,4 @@ docker-compose.yml     ArangoDB (Enterprise) + core for local dev
 
 ## License
 
-TBD
+[MIT](LICENSE).
