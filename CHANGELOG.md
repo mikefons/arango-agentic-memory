@@ -40,12 +40,16 @@ it has not yet been tagged or published to a registry.
 
 - Bearer API-key auth (`API_KEYS`), open-by-default; tenant/scope derived from the
   key. Per-tenant rate limiting + request-size caps.
+- **OIDC / JWT auth** (`OIDC_ISSUER`) — verify signed bearer tokens from an external
+  IdP against its JWKS (RS256 allowlist, `exp`/`nbf`/`iss`/`aud`, claims → tenant/scope);
+  coexists with static keys, fail-closed, short-TTL revocation.
 
 ### Added — observability
 
 - OpenTelemetry spans + meters (`memory.*`), an in-process metrics emitter,
   structured JSON/text logging with `X-Request-ID` correlation, and in-process
   p50/p95/p99 latency percentiles on `/health`.
+- Sample OTEL collector + Prometheus + Grafana dashboard (`deploy/observability/`).
 
 ### Added — adapters & apps
 
@@ -55,9 +59,26 @@ it has not yet been tagged or published to a registry.
 ### Added — quality
 
 - Embedding cache (per-tenant), batch entity embedding, hallucination / noise-
-  reduction eval, LoCoMo-style smoke benchmark.
+  reduction eval, LoCoMo-style smoke benchmark + a **real-data LoCoMo converter**
+  (`eval/locomo_convert.py`) for the BYO benchmark run.
 - Hardening: concurrency / multi-tenant isolation tests, failure-injection +
   graceful-degradation tests, authz-breadth tests, and a deterministic
   perf-regression gate.
+
+### Added — scaling (optional)
+
+- **Optional Redis shared layer** (`REDIS_URL`, the `redis` extra) — a cross-instance
+  rate-limit budget (vs per-instance N×) and a shared embedding cache; both fail-soft
+  (limiter fails open, cache falls through). The write queue stays ArangoDB-backed.
+
+### Added — packaging & release
+
+- Single version source of truth (`pyproject.toml` → `__version__` → OpenAPI).
+- FastAPI **OpenAPI docs** surfaced + grouped by tag (`/docs`, `/redoc`, `/openapi.json`),
+  public even under auth.
+- **Gated release pipeline** (`.github/workflows/release.yml`): a `v*` tag builds the
+  core wheel/sdist, the `@arango-memory/vercel` tarball, and the container image with a
+  CycloneDX SBOM + dependency scan each; publishing no-ops until registry credentials
+  are added. Full package metadata; **MIT** `LICENSE`.
 
 [Unreleased]: https://github.com/mikefons/arango-agentic-memory/commits/main

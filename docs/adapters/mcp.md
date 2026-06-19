@@ -12,6 +12,7 @@ python -m arango_memory.mcp           # stdio; talks to the core over HTTP
 | Env | Default | Notes |
 |---|---|---|
 | `ARANGO_MEMORY_CORE_URL` | `http://localhost:8080` | the running core's `/v1` base |
+| `ARANGO_MEMORY_API_KEY` | — | bearer credential (static key or JWT) when the core is enforced |
 
 The server is a **client of the core** — start the core first (see [ops.md](../ops.md)).
 
