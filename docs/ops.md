@@ -27,11 +27,12 @@ service + ArangoDB). See [`api.md`](api.md) for the request contract and
 **Multiple instances.** The API is stateless, so scale out by running N instances
 against the **same** ArangoDB — required: `WRITE_QUEUE_BACKEND=arango` (the in-memory
 queue is per-process), so every instance's worker shares one durable backlog and the
-exclusive-locked `claim` prevents double-processing. The in-process caches (query +
-embedding) and the rate limiter are **per-instance** (they run cold per process; the
-effective rate limit is N×) — a shared Redis layer for cross-instance caching + rate
-limiting is on the roadmap. Correlation ids (`X-Request-ID`) thread requests across
-instances in your log pipeline.
+exclusive-locked `claim` prevents double-processing. Set **`REDIS_URL`** (the optional
+shared layer, below) so the **rate limiter** enforces one global budget (not N×) and the
+**embedding cache** is shared across instances. Without it those two are per-instance
+(the limiter's effective cap is N×; caches run cold per process). The query (HyDE/gate)
+cache and the `/health` latency window remain per-instance either way. Correlation ids
+(`X-Request-ID`) thread requests across instances in your log pipeline.
 
 ---
 
@@ -71,7 +72,8 @@ need no API keys.
 `WRITE_BACKOFF_BASE` (0.5), `WRITE_QUEUE_BACKEND` (`memory`; set `arango` in prod),
 `WRITE_LEASE_SECONDS` (60); security: `REDACT_PII` (`true`), `API_KEYS` (unset = auth
 open), `OIDC_ISSUER` (unset = JWT off; see Authentication below), `MAX_REQUEST_BYTES`
-(1 MiB), `RATE_LIMIT_PER_MINUTE` (0 = off).
+(1 MiB), `RATE_LIMIT_PER_MINUTE` (0 = off); scaling: `REDIS_URL` (unset = per-instance
+limiter + cache; see Optional shared layer).
 
 **Authentication (§17)** — bearer API keys. Set `API_KEYS` to a JSON map to enforce:
 ```bash
@@ -136,7 +138,28 @@ same intent (the in-process caches just run cold per instance). The `memory` bac
 is single-process only.
 
 **Redis/SQS** slot in behind the same `WriteQueue` protocol (`enqueue`/`claim`/`ack`/
-`nack`) when queue throughput outgrows ArangoDB — roadmap, not built.
+`nack`) when queue throughput outgrows ArangoDB — roadmap, not built. (The write queue
+stays ArangoDB-backed; `REDIS_URL` below is for the rate limiter + embedding cache only.)
+
+---
+
+## Optional shared layer (Redis)
+
+By default the **rate limiter** and **embedding cache** are per-instance. Set
+**`REDIS_URL`** (and install the extra: `pip install 'arango-memory[redis]'`) to share
+them across instances — the only state that needs to be common when you scale out:
+
+- **Rate limiter** → one **global** budget (atomic `INCR`+`EXPIRE`), so `RATE_LIMIT_PER_MINUTE`
+  means what it says regardless of instance count (vs N× per-instance).
+- **Embedding cache** → shared vectors (JSON, 30-day TTL), so a name embedded on one
+  instance is reused by all (fewer paid embedding calls; new instances start warm).
+  Per-tenant key namespacing (§24) is preserved.
+
+**Fail-soft:** a Redis outage never breaks a request — the limiter **fails open**
+(allows) and the cache **falls through** to a direct embed. Set Redis
+`maxmemory-policy allkeys-lru` for a hard cache cap. Not shared: the query (HyDE/gate)
+cache and the `/health` latency window (both still per-instance). The durable write
+queue is unaffected (it's ArangoDB-backed).
 
 ---
 
@@ -218,9 +241,8 @@ Run `embeddings-migrate` after switching `EMBEDDING_PROVIDER`/`EMBEDDING_MODEL`
 - **Abuse limits** — `MAX_REQUEST_BYTES` (default 1 MiB, always on) rejects oversized
   bodies with **`413`** before they're buffered. `RATE_LIMIT_PER_MINUTE` (`0` = off)
   throttles per **tenant** (authenticated) or **client IP** (open mode) with **`429`**
-  + `Retry-After`; `/health` is exempt. The limiter is **per-instance** (in-process) —
-  with N instances the effective limit is N×; a shared (Redis) limiter for a true
-  cross-instance cap is on the roadmap.
+  + `Retry-After`; `/health` is exempt. Per-instance by default (N instances → N× the
+  cap); set **`REDIS_URL`** (below) for one shared cross-instance budget.
 
 ---
 
