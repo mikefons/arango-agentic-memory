@@ -1,7 +1,7 @@
 # ArangoDB Agentic Memory System — Design Specification
 
 > **Status:** ✅ **v1 build sequence complete (Steps 0–7).** v2: all §21 adapters shipped (MCP, LangChain/LangGraph, CrewAI) + full §19 entity API + **Step 3e heavy extraction tier done**. Authoritative reference.
-> **Last updated:** 2026-06-18 (rev 70 — real-data LoCoMo converter: official release → runner schema)
+> **Last updated:** 2026-06-19 (rev 71 — JWT/OIDC bearer auth: JWKS verifier + hardening tests)
 >
 > **Rev 2 decisions:** Python-first core with a thin TypeScript client · v1 scope is Vercel-only · build a walking skeleton first, then a test/eval harness, then thicken each layer.
 >
@@ -1310,9 +1310,13 @@ soft-deprecation.
       verified key**, not the body (`403` on tenant mismatch / read-key write), closing
       the self-assertion hole. Threaded through the Vercel / dungeon / MCP clients.
       *(JWT/OIDC is the follow-on below.)*
-    - **JWT / OIDC authentication** — validate signed tokens from an external IdP
-      (claims → tenant/scope) as an alternative to static keys, for federated/SSO
-      deployments. Slots in alongside the bearer-key path in `security/auth.py`.
+    - ✅ **JWT / OIDC authentication** (rev 71) — `jwt_auth.verify_jwt` validates a
+      signed token from an external IdP (JWKS, RS256 allowlist, `exp`/`nbf`/`iss`/`aud`,
+      claims → tenant/scope) and yields the same `Principal`; `require_principal`
+      dispatches JWT-or-static so it coexists with bearer keys. Fail-closed (a JWKS
+      error is `401`); revocation by expiry only (short-TTL — no denylist). Hardening
+      tests cover `alg:none`/non-allowlisted-alg rejection, JWKS-unreachable, clock-skew
+      leeway, and JWT-path multi-tenant isolation (crafted tenant claim → `403`).
     - ✅ **Rate limiting + request-size caps** (rev 58) — a `Content-Length` middleware
       rejects bodies over `MAX_REQUEST_BYTES` (1 MiB, on) with `413`; a `rate_limit`
       dependency (after auth) throttles per tenant / IP over `RATE_LIMIT_PER_MINUTE`

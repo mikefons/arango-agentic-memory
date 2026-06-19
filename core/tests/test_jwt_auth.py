@@ -16,6 +16,7 @@ import jwt
 import pytest
 from cryptography.hazmat.primitives.asymmetric import rsa
 from fastapi import HTTPException
+from fastapi.testclient import TestClient
 
 import arango_memory.security.jwt_auth as jwt_auth
 from arango_memory.config import ApiKeyEntry, settings
@@ -119,3 +120,62 @@ def test_dispatcher_static_key_still_works_with_oidc_on(monkeypatch: pytest.Monk
 
 def test_dispatcher_exempts_docs() -> None:
     assert require_principal(_request(path="/openapi.json")) is None
+
+
+# ── hardening: alg confusion, fail-closed, skew (JWT-2) ───
+def test_alg_none_is_rejected() -> None:
+    unsigned = jwt.encode(_claims(), key="", algorithm="none")
+    with pytest.raises(HTTPException) as exc:
+        jwt_auth.verify_jwt(unsigned)
+    assert exc.value.status_code == 401
+
+
+def test_non_allowlisted_alg_is_rejected() -> None:
+    # An HS256 token (the basis of the RS/HS confusion attack) must be rejected
+    # outright by the RS256-only allowlist, regardless of the signing secret.
+    forged = jwt.encode(_claims(), "attacker-secret", algorithm="HS256")
+    with pytest.raises(HTTPException) as exc:
+        jwt_auth.verify_jwt(forged)
+    assert exc.value.status_code == 401
+
+
+class _RaisingClient:
+    def get_signing_key_from_jwt(self, token: str) -> object:
+        raise jwt.PyJWKClientError("issuer unreachable")
+
+
+def test_jwks_unreachable_fails_closed(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(jwt_auth, "_jwks_client", lambda: _RaisingClient())
+    with pytest.raises(HTTPException) as exc:
+        jwt_auth.verify_jwt(_sign(_claims()))
+    assert exc.value.status_code == 401  # never an open pass
+
+
+def test_within_leeway_is_accepted() -> None:
+    # exp 30s in the past is tolerated by the 60s default leeway (clock skew).
+    p = jwt_auth.verify_jwt(_sign(_claims(exp=int(time.time()) - 30)))
+    assert p.tenant_id == "acme"
+
+
+# ── multi-tenant isolation on the JWT path (integration) ──
+def test_jwt_identity_governs_writes(api: TestClient) -> None:
+    token = _sign(_claims(tenant_id="acme", scope="read write"))
+    auth = {"authorization": f"Bearer {token}"}
+
+    # Body claims a different tenant than the token → 403 (key-derived identity wins).
+    cross = {"tenant_id": "intruder", "agent_id": "a", "access_level": "write"}
+    crossed = api.post("/v1/store", json={"content": "x", "ctx": cross}, headers=auth)
+    assert crossed.status_code == 403
+
+    # Matching tenant + write scope → accepted.
+    own = {"tenant_id": "acme", "agent_id": "a", "access_level": "write"}
+    ok = api.post("/v1/store", json={"content": "x", "ctx": own}, headers=auth)
+    assert ok.status_code == 200
+
+
+def test_jwt_read_scope_cannot_write(api: TestClient) -> None:
+    token = _sign(_claims(tenant_id="acme", scope="read"))
+    ctx = {"tenant_id": "acme", "agent_id": "a", "access_level": "write"}
+    res = api.post("/v1/store", json={"content": "x", "ctx": ctx},
+                   headers={"authorization": f"Bearer {token}"})
+    assert res.status_code == 403
