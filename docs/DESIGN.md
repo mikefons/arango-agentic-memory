@@ -1,7 +1,7 @@
 # ArangoDB Agentic Memory System — Design Specification
 
 > **Status:** ✅ **v1 build sequence complete (Steps 0–7).** v2: all §21 adapters shipped (MCP, LangChain/LangGraph, CrewAI) + full §19 entity API + **Step 3e heavy extraction tier done**. Authoritative reference.
-> **Last updated:** 2026-06-19 (rev 72 — JWT/OIDC auth docs: ops/api knobs + pass-through token flow)
+> **Last updated:** 2026-06-19 (rev 73 — optional Redis shared layer: cross-instance limiter + embedding cache)
 >
 > **Rev 2 decisions:** Python-first core with a thin TypeScript client · v1 scope is Vercel-only · build a walking skeleton first, then a test/eval harness, then thicken each layer.
 >
@@ -1320,8 +1320,8 @@ soft-deprecation.
     - ✅ **Rate limiting + request-size caps** (rev 58) — a `Content-Length` middleware
       rejects bodies over `MAX_REQUEST_BYTES` (1 MiB, on) with `413`; a `rate_limit`
       dependency (after auth) throttles per tenant / IP over `RATE_LIMIT_PER_MINUTE`
-      (`0`=off, opt-in) with `429`+`Retry-After`. In-process (per-instance) — a shared
-      Redis limiter for a cross-instance cap is the follow-on.
+      (`0`=off, opt-in) with `429`+`Retry-After`. In-process by default; **set `REDIS_URL`
+      for one shared cross-instance budget** (rev 73, `RedisRateLimiter`, fail-open).
     - ✅ **Durable queue** (rev 57) — `ArangoQueue` (a `write_intents` collection)
       behind the `WriteQueue` Protocol, selected by `WRITE_QUEUE_BACKEND=arango`:
       claim→ack leasing survives a crash between accept and commit (redelivers on
@@ -1329,8 +1329,10 @@ soft-deprecation.
       default. **Redis/SQS** remain drop-in adapters behind the same Protocol.
     - ✅ **Multi-instance** (rev 59) — the API is stateless; run N instances over a
       shared `arango` queue + DB (exclusive-locked `claim` prevents double-processing).
-      In-process caches + rate limiter are per-instance (cold per process / N× limit) —
-      a shared Redis layer is the follow-on. Documented in ops.md.
+      The rate limiter + embedding cache are per-instance by default; **`REDIS_URL`**
+      shares them across instances (rev 73 — global limiter budget + shared embedding
+      cache, both fail-soft). The query cache + `/health` latency window stay
+      per-instance. Documented in ops.md.
     - ✅ **Structured logging + correlation IDs** (rev 59) — stdlib JSON/text logs
       (`LOG_FORMAT`/`LOG_LEVEL`) on the `arango_memory` logger; a `RequestLogMiddleware`
       assigns/echoes `X-Request-ID` and access-logs each request; every line (incl.
