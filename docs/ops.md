@@ -70,7 +70,8 @@ need no API keys.
 `ENTITY_FLAG_THRESHOLD` (0.6); durable writes: `WRITE_MAX_RETRIES` (5),
 `WRITE_BACKOFF_BASE` (0.5), `WRITE_QUEUE_BACKEND` (`memory`; set `arango` in prod),
 `WRITE_LEASE_SECONDS` (60); security: `REDACT_PII` (`true`), `API_KEYS` (unset = auth
-open), `MAX_REQUEST_BYTES` (1 MiB), `RATE_LIMIT_PER_MINUTE` (0 = off).
+open), `OIDC_ISSUER` (unset = JWT off; see Authentication below), `MAX_REQUEST_BYTES`
+(1 MiB), `RATE_LIMIT_PER_MINUTE` (0 = off).
 
 **Authentication (§17)** — bearer API keys. Set `API_KEYS` to a JSON map to enforce:
 ```bash
@@ -83,6 +84,26 @@ taken from the key, not the request (`403` on tenant mismatch or read-key write)
 `/health` stays public. **Rotation:** add the new key alongside the old, roll
 clients over, then drop the old key (both are valid while both are listed). Keep
 keys in the host env / a gitignored `.env`, never in the image or VCS.
+
+**OIDC / JWT (§17)** — for federated/SSO deployments, set `OIDC_ISSUER` to also accept
+signed bearer **JWTs** from an external IdP (Auth0/Okta/Cognito/Keycloak/…). Coexists
+with `API_KEYS` (a JWT is verified when the bearer is a JWT; otherwise it's matched
+against the static keys), so you can migrate incrementally.
+
+| Var | Default | Notes |
+|---|---|---|
+| `OIDC_ISSUER` | — | Set = enable JWT auth (also flips enforced mode) |
+| `OIDC_AUDIENCE` | — | Expected `aud`; when set, `aud` is verified |
+| `OIDC_JWKS_URI` | `{issuer}/.well-known/jwks.json` | Signing-key endpoint (cached, `kid`-rotated) |
+| `OIDC_ALGORITHMS` | `["RS256"]` | Signature-alg allowlist (blocks `none`/HS confusion) |
+| `OIDC_TENANT_CLAIM` | `tenant_id` | Claim mapped to the tenant |
+| `OIDC_SCOPE_CLAIM` | `scope` | Claim mapped to read/write (`write` if it contains "write") |
+| `OIDC_LEEWAY_SECONDS` | `60` | Clock-skew tolerance for `exp`/`nbf` |
+
+Verification is **fail-closed** (a JWKS-fetch error is a `401`, never an open pass).
+**Revocation is by expiry only** — there's no server-side denylist, so configure the IdP
+for **short-lived tokens** (revocation latency = token TTL). **Rotation** is the IdP's
+job (signing-key rotation is picked up via JWKS `kid`); you don't edit anything here.
 
 > **Secrets:** never commit keys. Use the host's environment or a gitignored
 > `.env`. The repo's gitleaks hook + CI secret scan guard against leaks.

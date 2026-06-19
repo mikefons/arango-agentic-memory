@@ -56,7 +56,15 @@ Static **bearer API keys**, configured on the core via `API_KEYS` (a JSON map
   needs a `write`-scoped key — the body can no longer assert identity or escalate.
 - Clients pass it through: Vercel adapter `arangoMemory({ apiKey })`, the dungeon
   `CORE_API_KEY`, the MCP server `ARANGO_MEMORY_API_KEY`.
-- *(JWT/OIDC is a roadmap follow-on; bearer keys are the dependency-free default.)*
+
+**OIDC / JWT.** Setting `OIDC_ISSUER` on the core *also* accepts a signed bearer **JWT**
+from an external IdP (verified against its JWKS; `tenant_id`/scope come from configurable
+claims — same `403` rules as keys). It **coexists** with `API_KEYS`. Token acquisition is
+the **caller's** responsibility (pass-through): a service obtains a token via the IdP's
+**client-credentials** flow and sends it as `Authorization: Bearer <jwt>` — the adapters
+forward whatever bearer they're given, so no adapter change is needed. Use **short-lived**
+tokens (revocation is by expiry; the core keeps no denylist). See [ops.md](ops.md) for the
+`OIDC_*` knobs.
 
 **Abuse limits (§17).** Bodies over `MAX_REQUEST_BYTES` (default 1 MiB) → **`413`**.
 With `RATE_LIMIT_PER_MINUTE > 0`, requests over the per-tenant (or per-IP, open mode)
