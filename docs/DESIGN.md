@@ -1,7 +1,7 @@
 # ArangoDB Agentic Memory System — Design Specification
 
 > **Status:** ✅ **v1 build sequence complete (Steps 0–7).** v2: all §21 adapters shipped (MCP, LangChain/LangGraph, CrewAI) + full §19 entity API + **Step 3e heavy extraction tier done**. Authoritative reference.
-> **Last updated:** 2026-06-19 (rev 73 — optional Redis shared layer: cross-instance limiter + embedding cache)
+> **Last updated:** 2026-06-19 (rev 74 — production-readiness punch list from full assessment)
 >
 > **Rev 2 decisions:** Python-first core with a thin TypeScript client · v1 scope is Vercel-only · build a walking skeleton first, then a test/eval harness, then thicken each layer.
 >
@@ -1365,6 +1365,40 @@ soft-deprecation.
     builds the core wheel + `@arango-memory/vercel` tarball + container image with a
     CycloneDX SBOM + dep-scan each — publishing no-ops until registry credentials are
     added (machinery in place, nothing pushed). Full package metadata + MIT `LICENSE`.
+
+### Production-readiness punch list (rev 74)
+
+A full assessment (2026-06-19) found the project **production-*grade* but not yet
+production-*proven***: the engineering (durability, multi-tenant isolation, auth,
+observability, graceful degradation) is complete and verified green (306 tests, mypy
+`--strict`, ruff, secret scan), but two things stand between it and a confident
+"production ready" sign-off — **empirical validation** and a **deploy-hardening pass**.
+Open items, prioritized:
+
+- **P1 — material for sign-off:**
+  - **Prove the §23 targets on real data.** F1 ≥ 0.65 / Recall@k / tokens ≤ 1500 and the
+    latency p99s (core ≤ 200ms, lite ≤ 250ms) have only run on the smoke slice; the perf
+    gate is *structural* (call-count invariants), not wall-clock. Do the BYO LoCoMo run
+    (`eval/locomo_convert` → `eval/benchmark`, §23) + a real latency measurement on a warm
+    vector index. Memory *quality* is currently unproven.
+  - **Container hardening** (`core/Dockerfile`): run as a **non-root `USER`**, add a
+    **`HEALTHCHECK`**, pin the base image by digest.
+  - **Split liveness vs readiness.** `/health` does a DB ping; as a k8s *liveness* probe
+    that risks restart loops on a DB blip. Add a process-only liveness vs DB-reachable
+    readiness distinction.
+- **P2 — accuracy / robustness:**
+  - **§17 "embeddings encrypted at rest" is not implemented** in code (storage-layer
+    concern). Reword to rely on ArangoDB/disk encryption-at-rest **and** document enabling
+    it, or implement app-level encryption (embedding-inversion risk for sensitive data).
+  - **Reconcile §18 meter names** with the actual instruments (`memory.retrieval.llm_calls`,
+    `memory.embedding.cache_hit_rate` gauge spec'd but not emitted as named).
+  - **Cross-field config validation** — e.g. warn/fail when `OIDC_ISSUER` is set without
+    `OIDC_AUDIENCE` (today `aud` is silently unverified).
+- **P3 — nice to have:** a load/soak test (sustained-load latency, not just concurrency
+  correctness); a drilled backup/restore (DR) path beyond the documented `arangodump`.
+
+*Deferred by design (not defects):* full Next.js chat UI (Step 3.5c), Redis-backed write
+queue, JWT denylist (short-TTL chosen), adapter token-acquisition helper (pass-through chosen).
 
 *Shipped in v2:* MCP server, LangChain/LangGraph, CrewAI (+ G-Memory tiers), the
 full §19 entity API, Step 3e extraction tier, the Memory Dungeon reference app.
