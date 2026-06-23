@@ -40,6 +40,8 @@ cd core && make ci        # ruff (lint) + mypy --strict (types) + pytest (testco
   (deterministic fake embedder/generator/extractor) and isolated (a fresh DB per test).
 - **Adapter:** `cd packages/vercel && npm run typecheck && npm run build && npm test`.
 - New behavior needs tests; new config needs a doc line (ops.md/api.md as relevant).
+- **Docs:** CI link-checks markdown (relative links, offline) — don't point a link at a
+  file that doesn't exist.
 
 ## PR workflow
 

@@ -82,3 +82,19 @@ jobs:
           npm run build
           npm run typecheck
           npm test
+
+  docs:
+    name: Docs (link check)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Offline link check: verifies relative/local markdown links resolve (catches
+      # cross-doc rot when files move). External URLs + #anchors are not checked —
+      # keeps it fast and deterministic, no network flakiness. Honors .gitignore so
+      # vendored node_modules/.venv markdown is skipped.
+      - name: Check markdown links
+        uses: lycheeverse/lychee-action@v2
+        with:
+          args: "--offline --no-progress '**/*.md'"
+          fail: true
