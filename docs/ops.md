@@ -246,6 +246,27 @@ Run `embeddings-migrate` after switching `EMBEDDING_PROVIDER`/`EMBEDDING_MODEL`
 
 ---
 
+## Troubleshooting
+
+| Symptom | Cause / fix |
+|---|---|
+| Retrieval returns hits but **no vector results** | The Faiss IVF index trains only once the corpus reaches `VECTOR_N_LISTS` docs (default 256); below that the read path is **BM25-only** by design and self-heals. Confirm with `python -m arango_memory.ops explain` / check `has_vector_index`. |
+| `ERR 1554/1555 vector index not ready` on rebuild | Same threshold — the corpus is below `VECTOR_N_LISTS`. Wait for more data or lower `VECTOR_N_LISTS` for small deployments. |
+| Connection refused / IPv6 weirdness on localhost | Use `ARANGO_URL=http://127.0.0.1:8529` (not `localhost`) to avoid IPv6 resolution issues. |
+| `failed_writes` is growing | Writes are exhausting retries (bad data or a downstream outage). Inspect the collection, fix the cause, then `python -m arango_memory.ops replay`. |
+| Writes accepted (`status:queued`) but never appear | With `WRITE_QUEUE_BACKEND=memory`, unacked work is **lost on crash** — set `WRITE_QUEUE_BACKEND=arango` in production. Also confirm the write worker thread is running (single process / not blocked). |
+| Rate limit feels **N× too high** across instances | The in-process limiter is per-instance. Set `REDIS_URL` for one shared budget (see *Optional shared layer*). |
+| `429`s with Redis down, or cache misses spike | Redis is fail-soft: the limiter **fails open** and the cache **falls through** to direct compute — check Redis reachability; behavior is by design, not an error. |
+| Real embeddings/generation aren't happening | Defaults are **keyless fakes**. Set `EMBEDDING_PROVIDER=openai` (+ `OPENAI_API_KEY`) and/or `GENERATION_PROVIDER=anthropic` (+ `ANTHROPIC_API_KEY`); full-mode + Dream State distillation need a real generator. |
+| `401` after enabling `API_KEYS`/`OIDC_ISSUER` | Enforced mode now requires `Authorization: Bearer <key|jwt>`; `/health` + `/docs` stay public. For JWT, verify `OIDC_AUDIENCE`/issuer match the token. |
+| ArangoDB won't start / license prompt | The Enterprise image runs in **evaluation mode** without a license; set `ARANGO_LICENSE_KEY` for unrestricted use. |
+| `/docs` or `/openapi.json` returns `401` | They shouldn't — they're auth-exempt. If you see this, a reverse proxy is likely enforcing auth ahead of the core. |
+
+For anything write-durability or degradation related, see [§15](DESIGN.md) and the
+**Durable write path** section above.
+
+---
+
 ## Schema & upgrades
 
 `ensure_schema(db)` runs at startup: it creates the baseline collections/indexes
