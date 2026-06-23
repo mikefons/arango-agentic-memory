@@ -10,7 +10,7 @@ Start here. Pick the doc for what you're doing — they link rather than duplica
 | Troubleshoot a problem | [ops.md → Troubleshooting](ops.md#troubleshooting) |
 | Wire an adapter (Vercel · LangChain · CrewAI · MCP) | [adapters/](adapters/README.md) |
 | Understand the architecture + design decisions | [DESIGN.md](DESIGN.md) |
-| See what changed | [CHANGELOG.md](../CHANGELOG.md) |
+| See what changed | [CHANGELOG.md](../CHANGELOG.md) · build history: [HISTORY.md](HISTORY.md) |
 | Contribute (setup, `make ci`, PR flow) | [CONTRIBUTING.md](../CONTRIBUTING.md) |
 | Export metrics/traces | [deploy/observability/](../deploy/observability/README.md) |
 
