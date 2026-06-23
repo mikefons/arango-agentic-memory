@@ -83,8 +83,45 @@ budget → **`429`** with a `Retry-After` header. `/health` is exempt from both.
   vector embeddings — an inversion-attack defense.
 - **Memory never breaks the caller (§15).** `/v1/retrieve` degrades to empty
   context on any fault rather than erroring.
-- **Errors.** `403` write-access required · `404` entity not found · `422`
-  validation (malformed body) · `503` core/DB unavailable (health).
+
+---
+
+## Errors
+
+Errors are JSON: `{"detail": "<message>"}` (FastAPI's default shape), with the status
+codes below. The interactive `/docs` (OpenAPI) also lists per-endpoint responses.
+
+| Status | Meaning | When |
+|---|---|---|
+| `401` | Unauthorized | Enforced mode (`API_KEYS`/`OIDC_ISSUER` set) and the bearer credential is missing or invalid. Response carries `WWW-Authenticate: Bearer`. |
+| `403` | Forbidden | Authenticated but not allowed — body `tenant_id` ≠ the key/token's tenant, or a write with a `read`-scoped credential. |
+| `404` | Not Found | Entity doesn't exist, or an ontology endpoint was called with `ONTOLOGY_EVOLUTION` disabled. |
+| `413` | Payload Too Large | Body exceeds `MAX_REQUEST_BYTES` (default 1 MiB) — rejected before buffering. |
+| `422` | Unprocessable Entity | Request body fails schema validation (FastAPI/pydantic). |
+| `429` | Too Many Requests | Over the rate-limit budget (`RATE_LIMIT_PER_MINUTE > 0`). Response carries `Retry-After` (seconds). |
+
+> **`/health` never errors on a DB outage** — it returns `200` with `{"arango": false}`
+> so you can distinguish "process up" from "DB reachable" (see liveness/readiness in
+> [ops.md](ops.md)).
+
+### Examples (curl)
+
+```bash
+# Open mode (no auth): store a turn
+curl -sX POST http://localhost:8080/v1/store \
+  -H 'content-type: application/json' \
+  -d '{"content":"Ada uses Postgres at Acme","ctx":{"tenant_id":"acme","agent_id":"a1","access_level":"write"}}'
+# → {"status":"queued","episode_id":"…","memory_ids":["…-mem"]}
+
+# Enforced mode: pass a bearer key (or a JWT — same header). $CORE_API_KEY holds the credential.
+curl -sX POST http://localhost:8080/v1/retrieve \
+  -H "authorization: Bearer $CORE_API_KEY" \
+  -H 'content-type: application/json' \
+  -d '{"query":"what database does Ada use?","ctx":{"tenant_id":"acme","agent_id":"a1","access_level":"read"}}'
+
+# Health (always 200; check the body)
+curl -s http://localhost:8080/health   # → {"status":"ok","arango":true,"mode":"lite","latency_ms":{…}}
+```
 
 ---
 
