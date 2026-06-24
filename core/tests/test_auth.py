@@ -53,8 +53,10 @@ def test_docs_are_exempt_in_enforced_mode(api: TestClient, with_keys: None) -> N
     assert api.get("/docs").status_code == 200
 
 
-def test_health_is_exempt(api: TestClient, with_keys: None) -> None:
-    assert api.get("/health").status_code == 200  # always public, no key needed
+def test_health_and_ready_are_exempt(api: TestClient, with_keys: None) -> None:
+    # Probes stay public even when keys are enforced (no creds needed).
+    assert api.get("/health").status_code == 200
+    assert api.get("/ready").status_code == 200
 
 
 def test_get_endpoint_also_enforced(api: TestClient, with_keys: None) -> None:

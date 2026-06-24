@@ -1,7 +1,7 @@
 # ArangoDB Agentic Memory System — Design Specification
 
 > **Status:** ✅ **v1 build sequence complete (Steps 0–7).** v2: all §21 adapters shipped (MCP, LangChain/LangGraph, CrewAI) + full §19 entity API + **Step 3e heavy extraction tier done**, hardened into a deployable service. Authoritative reference.
-> **Last updated:** 2026-06-19 (rev 75 — relocated the rev-by-rev build log to `HISTORY.md`)
+> **Last updated:** 2026-06-19 (rev 76 — P1 deploy hardening: non-root/healthcheck/digest image + liveness/readiness split)
 >
 > The **rev-by-rev build log** lives in [`HISTORY.md`](HISTORY.md); user-visible changes are in
 > [`CHANGELOG.md`](../CHANGELOG.md); the doc map is [`docs/README.md`](README.md). This file is
@@ -1329,11 +1329,11 @@ Open items, prioritized:
     gate is *structural* (call-count invariants), not wall-clock. Do the BYO LoCoMo run
     (`eval/locomo_convert` → `eval/benchmark`, §23) + a real latency measurement on a warm
     vector index. Memory *quality* is currently unproven.
-  - **Container hardening** (`core/Dockerfile`): run as a **non-root `USER`**, add a
-    **`HEALTHCHECK`**, pin the base image by digest.
-  - **Split liveness vs readiness.** `/health` does a DB ping; as a k8s *liveness* probe
-    that risks restart loops on a DB blip. Add a process-only liveness vs DB-reachable
-    readiness distinction.
+  - ✅ **Container hardening** (rev 76, `core/Dockerfile`): non-root `USER` (uid 10001),
+    `HEALTHCHECK` on `/health`, base pinned by digest; a CI image build-smoke catches
+    Dockerfile regressions on every PR.
+  - ✅ **Liveness vs readiness split** (rev 76): `/health` is liveness (always `200`, not
+    DB-gated); new `/ready` is readiness (`200`/`503` on DB reachability). Both public.
 - **P2 — accuracy / robustness:**
   - **§17 "embeddings encrypted at rest" is not implemented** in code (storage-layer
     concern). Reword to rely on ArangoDB/disk encryption-at-rest **and** document enabling

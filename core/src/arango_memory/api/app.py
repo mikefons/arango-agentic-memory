@@ -13,6 +13,7 @@ from enum import Enum
 from typing import Any, Literal
 
 from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from .. import __version__
@@ -271,15 +272,27 @@ def _require_ontology() -> None:
 
 # ── Route handlers ────────────────────────────────────────
 async def health(client: ArangoMemoryClient = Depends(get_client)) -> dict[str, object]:
-    # `latency` is process-global p50/p95/p99 over recent ops (§18/§23), surfaced
-    # here (not /v1/stats, which is per-tenant) so operators can read tail latency
-    # against the §23 targets without an OTEL exporter. Empty until traffic flows.
+    # **Liveness** — is the process up? Always 200 when serving; *not* gated on the DB
+    # (so a DB blip can't trigger a liveness-probe restart loop — that's /ready's job).
+    # `arango` is informational; `latency` is process-global p50/p95/p99 (§18/§23),
+    # surfaced here (not /v1/stats, which is per-tenant). Wire k8s livenessProbe here.
     return {
         "status": "ok",
         "arango": client.ping(),
         "mode": settings.memory_mode,
         "latency_ms": latency.snapshot(),
     }
+
+
+async def ready(client: ArangoMemoryClient = Depends(get_client)) -> JSONResponse:
+    # **Readiness** — can the service actually serve (DB reachable)? `503` when not,
+    # so an orchestrator stops routing traffic without restarting the pod. Wire k8s
+    # readinessProbe here.
+    ok = client.ping()
+    return JSONResponse(
+        {"status": "ready" if ok else "unavailable", "arango": ok},
+        status_code=200 if ok else 503,
+    )
 
 
 async def store_endpoint(
@@ -636,6 +649,7 @@ def create_app(client: ArangoMemoryClient | None = None) -> FastAPI:
     ops_t: list[str | Enum] = ["memory ops"]
 
     app.add_api_route("/health", health, methods=["GET"], tags=sys_t)
+    app.add_api_route("/ready", ready, methods=["GET"], tags=sys_t)
     app.add_api_route(
         "/v1/store", store_endpoint, methods=["POST"], response_model=StoreResponse, tags=ingest_t
     )

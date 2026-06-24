@@ -127,12 +127,23 @@ curl -s http://localhost:8080/health   # → {"status":"ok","arango":true,"mode"
 
 ## HTTP endpoints
 
-### `GET /health`
-Liveness + DB reachability + process-global latency (p50/p95/p99 ms per op over a
-rolling in-process window; empty until traffic flows). See §23 targets.
+### `GET /health` · *liveness*
+Is the process up? **Always `200`** when serving — *not* gated on the DB, so a DB blip
+can't trigger a liveness-probe restart loop. `arango` is informational; `latency_ms` is
+process-global p50/p95/p99 per op over a rolling in-process window (empty until traffic
+flows; see §23 targets). Wire a k8s **livenessProbe** here.
 ```json
 { "status": "ok", "arango": true, "mode": "lite",
   "latency_ms": { "retrieval.lite": { "count": 128, "p50": 41.0, "p95": 88.0, "p99": 120.0 } } }
+```
+
+### `GET /ready` · *readiness*
+Can the service actually serve (DB reachable)? **`200`** when ready, **`503`** when not —
+so an orchestrator stops routing without restarting the pod. Wire a k8s **readinessProbe**
+here. Public (no auth), like `/health`.
+```json
+{ "status": "ready", "arango": true }          // 200
+{ "status": "unavailable", "arango": false }   // 503
 ```
 
 ### Ingestion

@@ -8,7 +8,10 @@ from __future__ import annotations
 
 import time
 
+import pytest
 from fastapi.testclient import TestClient
+
+from arango_memory.client import ArangoMemoryClient
 
 
 def test_health(api: TestClient) -> None:
@@ -19,6 +22,24 @@ def test_health(api: TestClient) -> None:
     assert body["arango"] is True
     assert body["mode"] == "lite"
     assert isinstance(body["latency_ms"], dict)  # process-global p50/p95/p99 (§23)
+
+
+def test_ready_200_when_db_reachable(api: TestClient) -> None:
+    resp = api.get("/ready")
+    assert resp.status_code == 200
+    assert resp.json() == {"status": "ready", "arango": True}
+
+
+def test_ready_503_when_db_unreachable(
+    api: TestClient, client: ArangoMemoryClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Readiness must fail (503) when the DB is unreachable, so orchestrators stop
+    # routing — without restarting the pod (that's /health's job, which stays 200).
+    monkeypatch.setattr(client, "ping", lambda: False)
+    resp = api.get("/ready")
+    assert resp.status_code == 503
+    assert resp.json()["status"] == "unavailable"
+    assert api.get("/health").status_code == 200  # liveness unaffected by the DB
 
 
 def test_openapi_version_tracks_package(api: TestClient) -> None:

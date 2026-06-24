@@ -50,6 +50,8 @@ it has not yet been tagged or published to a registry.
   structured JSON/text logging with `X-Request-ID` correlation, and in-process
   p50/p95/p99 latency percentiles on `/health`.
 - Sample OTEL collector + Prometheus + Grafana dashboard (`deploy/observability/`).
+- **Liveness/readiness split** — `/health` (always `200`, process liveness) + `/ready`
+  (`200`/`503` on DB reachability) for orchestrator probes.
 
 ### Added — adapters & apps
 
@@ -80,5 +82,7 @@ it has not yet been tagged or published to a registry.
   core wheel/sdist, the `@arango-memory/vercel` tarball, and the container image with a
   CycloneDX SBOM + dependency scan each; publishing no-ops until registry credentials
   are added. Full package metadata; **MIT** `LICENSE`.
+- **Hardened container** — digest-pinned base, non-root user, `HEALTHCHECK`; a CI image
+  build-smoke runs on every PR.
 
 [Unreleased]: https://github.com/mikefons/arango-agentic-memory/commits/main
