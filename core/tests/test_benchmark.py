@@ -35,6 +35,9 @@ def test_run_benchmark_on_smoke_slice(db: StandardDatabase) -> None:
     # Real-data targets (F1 ≥ 0.65) aren't expected on a BM25/fake-embedder slice;
     # we only assert the gate ran and produced a verdict.
     assert isinstance(report.passed, bool)
+    # Latency is captured from the run (lite mode → retrieval.lite key) for §23.
+    assert "retrieval.lite" in report.latency_ms
+    assert report.latency_ms["retrieval.lite"]["p99"] >= 0
 
 
 def test_run_benchmark_breaks_down_by_category(db: StandardDatabase) -> None:
