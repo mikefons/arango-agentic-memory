@@ -246,7 +246,12 @@ Run `embeddings-migrate` after switching `EMBEDDING_PROVIDER`/`EMBEDDING_MODEL`
   (removes vertices + touching edges, episodes via the sanctioned WORM bypass,
   drops the vector index to self-heal).
 - **ABAC** — mutating endpoints require `access_level: "write"` (see `api.md`).
-- **Embeddings** are never returned over the API (inversion defense).
+- **Embeddings** are never returned over the API (inversion defense). They are stored as
+  plain vectors — **encryption at rest is a storage-layer responsibility** (the app can't
+  encrypt the field without breaking vector search). For sensitive corpora, enable
+  **ArangoDB Enterprise encryption-at-rest** (`--rocksdb.encryption-keyfile`) or run on an
+  encrypted disk/volume; the per-tenant cache namespacing + never-returned guarantees are
+  the app-level defenses (§17).
 - **Abuse limits** — `MAX_REQUEST_BYTES` (default 1 MiB, always on) rejects oversized
   bodies with **`413`** before they're buffered. `RATE_LIMIT_PER_MINUTE` (`0` = off)
   throttles per **tenant** (authenticated) or **client IP** (open mode) with **`429`**

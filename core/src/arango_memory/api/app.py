@@ -44,7 +44,7 @@ from ..security.auth import require_principal
 from ..security.forget import forget
 from ..stats import stats
 from ..telemetry import latency
-from ..telemetry.logging import RequestLogMiddleware, configure_logging, tenant_var
+from ..telemetry.logging import RequestLogMiddleware, configure_logging, logger, tenant_var
 from .limits import RequestSizeLimitMiddleware, rate_limit
 
 
@@ -580,6 +580,15 @@ _OPENAPI_TAGS = [
 
 
 # ── App factory ───────────────────────────────────────────
+def _warn_on_risky_config() -> None:
+    """Log warnings for config that's valid but risky (caught at startup, §17)."""
+    if settings.oidc_issuer and not settings.oidc_audience:
+        logger.warning(
+            "OIDC enabled without OIDC_AUDIENCE: the 'aud' claim is not verified, so any "
+            "valid token from this issuer is accepted. Set OIDC_AUDIENCE to restrict."
+        )
+
+
 def create_app(client: ArangoMemoryClient | None = None) -> FastAPI:
     """Build the FastAPI app around a (possibly injected) Arango client.
 
@@ -587,6 +596,7 @@ def create_app(client: ArangoMemoryClient | None = None) -> FastAPI:
     `make dev` call with no argument and get the env-driven default.
     """
     configure_logging()  # structured logs + correlation ids (§18)
+    _warn_on_risky_config()
     mem_client = client or ArangoMemoryClient()
     worker_client = ArangoMemoryClient(mem_client.config)  # own connection for the worker thread
     embedder = get_embedder()
