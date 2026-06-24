@@ -16,6 +16,7 @@ CLI: `python -m arango_memory.eval.benchmark <dataset.json> [--mode] [--k]`
 from __future__ import annotations
 
 import argparse
+import sys
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 
@@ -73,12 +74,32 @@ def run_benchmark(
     *,
     mode: str = "lite",
     k: int = 10,
+    progress: bool = False,
 ) -> BenchmarkReport:
-    """Run every sample, aggregate to overall + per-category metrics vs §23 targets."""
+    """Run every sample, aggregate to overall + per-category metrics vs §23 targets.
+
+    `progress=True` prints a per-sample line to stderr (the run is otherwise silent
+    for minutes on real data) — stdout stays clean for the final report.
+    """
     latency.clear()  # capture only this run's retrieval latency (§23)
     scores: list[QuestionScore] = []
-    for sample in samples:
-        scores.extend(run_eval(db, sample, mode=mode, k=k).questions)
+    total = len(samples)
+    for i, sample in enumerate(samples, 1):
+        turns = sum(len(session) for session in sample.sessions)
+        if progress:
+            print(
+                f"[{i}/{total}] {sample.sample_id}: ingesting {turns} turns, "
+                f"scoring {len(sample.qa)} questions…",
+                file=sys.stderr, flush=True,
+            )
+        result = run_eval(db, sample, mode=mode, k=k)
+        scores.extend(result.questions)
+        if progress:
+            print(
+                f"[{i}/{total}] {sample.sample_id}: done — "
+                f"recall@k={result.recall_at_k:.2f} ({len(scores)} questions scored so far)",
+                file=sys.stderr, flush=True,
+            )
 
     recall = _aggregate(scores, "recall_hit")
     mean_f1 = _aggregate(scores, "f1")
@@ -144,7 +165,7 @@ def main(argv: list[str] | None = None) -> int:
     args = _build_parser().parse_args(argv)
     db = ArangoMemoryClient().connect()
     ensure_schema(db)
-    report = run_benchmark(db, load_dataset(args.dataset), mode=args.mode, k=args.k)
+    report = run_benchmark(db, load_dataset(args.dataset), mode=args.mode, k=args.k, progress=True)
     print(_format(report))
     return 0 if report.passed else 1
 
