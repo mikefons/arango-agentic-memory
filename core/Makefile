@@ -10,7 +10,13 @@ export PYTHONPATH := src
 
 UVRUN := uv run --no-sync
 
-.PHONY: sync dev check test lint type ci clean-venv
+.PHONY: sync dev check test lint type ci clean-venv benchmark
+
+# LoCoMo benchmark (§23). Override DATASET/MODE/K; needs a running ArangoDB and, for a
+# real run, real providers (EMBEDDING_PROVIDER=openai GENERATION_PROVIDER=anthropic + keys).
+DATASET ?= tests/data/locomo_smoke.json
+MODE    ?= lite
+K       ?= 10
 
 sync:            ## Install/update deps into the relocated venv
 	uv sync --extra dev
@@ -31,6 +37,9 @@ type:            ## Mypy type-check
 	$(UVRUN) mypy src
 
 ci: lint type test  ## Everything CI runs
+
+benchmark:       ## LoCoMo benchmark vs §23 (DATASET=… MODE=lite|full K=…)
+	$(UVRUN) python -m arango_memory.eval.benchmark $(DATASET) --mode $(MODE) --k $(K)
 
 clean-venv:      ## Rebuild the relocated venv from scratch
 	rm -rf "$(UV_PROJECT_ENVIRONMENT)" && uv sync --extra dev

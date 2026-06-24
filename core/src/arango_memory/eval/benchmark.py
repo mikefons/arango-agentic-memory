@@ -23,12 +23,16 @@ from arango.database import StandardDatabase
 
 from ..client import ArangoMemoryClient
 from ..schema.collections import ensure_schema
+from ..telemetry import latency
 from .locomo import QuestionScore, Sample, load_dataset, run_eval
 
 # §23 targets.
 F1_MIN = 0.65
 TOKENS_MAX = 1500
 RECALL_MIN = 0.6
+# §23 retrieval p99 latency targets (ms), by recorder key. Informational on a manual
+# run (wall-clock is environment-dependent) — quality metrics remain the pass/fail gate.
+LATENCY_P99_TARGETS_MS = {"retrieval.lite": 250.0, "retrieval.full": 1500.0}
 
 
 @dataclass
@@ -38,6 +42,7 @@ class BenchmarkReport:
     mean_f1: float
     mean_tokens: float
     per_category: dict[str, dict[str, float]] = field(default_factory=dict)
+    latency_ms: dict[str, dict[str, float]] = field(default_factory=dict)
     passed: bool = False
     failures: list[str] = field(default_factory=list)
 
@@ -70,6 +75,7 @@ def run_benchmark(
     k: int = 10,
 ) -> BenchmarkReport:
     """Run every sample, aggregate to overall + per-category metrics vs §23 targets."""
+    latency.clear()  # capture only this run's retrieval latency (§23)
     scores: list[QuestionScore] = []
     for sample in samples:
         scores.extend(run_eval(db, sample, mode=mode, k=k).questions)
@@ -94,6 +100,7 @@ def run_benchmark(
         mean_f1=mean_f1,
         mean_tokens=mean_tokens,
         per_category=per_category,
+        latency_ms=latency.snapshot(),
         passed=passed,
         failures=failures,
     )
@@ -110,6 +117,17 @@ def _format(report: BenchmarkReport) -> str:
         lines.append(
             f"  [{category}] recall={m['recall_at_k']:.3f} f1={m['mean_f1']:.3f} n={m['n']:.0f}"
         )
+    if report.latency_ms:
+        lines.append("latency (ms, informational):")
+        for op, pcts in sorted(report.latency_ms.items()):
+            target = LATENCY_P99_TARGETS_MS.get(op)
+            note = (
+                f"  (target p99 ≤ {target:.0f})" if target else ""
+            )
+            lines.append(
+                f"  {op}: p50={pcts['p50']:.0f} p95={pcts['p95']:.0f} "
+                f"p99={pcts['p99']:.0f} n={pcts['count']:.0f}{note}"
+            )
     lines.append("PASS" if report.passed else "FAIL: " + "; ".join(report.failures))
     return "\n".join(lines)
 

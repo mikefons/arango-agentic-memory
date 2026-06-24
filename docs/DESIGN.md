@@ -1,7 +1,7 @@
 # ArangoDB Agentic Memory System — Design Specification
 
 > **Status:** ✅ **v1 build sequence complete (Steps 0–7).** v2: all §21 adapters shipped (MCP, LangChain/LangGraph, CrewAI) + full §19 entity API + **Step 3e heavy extraction tier done**, hardened into a deployable service. Authoritative reference.
-> **Last updated:** 2026-06-19 (rev 77 — P2 fixes: §17/§18 doc accuracy + OIDC-audience config warning)
+> **Last updated:** 2026-06-19 (rev 78 — benchmark prep: latency in the report + `make benchmark`)
 >
 > The **rev-by-rev build log** lives in [`HISTORY.md`](HISTORY.md); user-visible changes are in
 > [`CHANGELOG.md`](../CHANGELOG.md); the doc map is [`docs/README.md`](README.md). This file is
@@ -868,16 +868,22 @@ by default (§23 sets no numeric targets for these two); `--max-hallucination` /
 benchmark gate runs as usual:
 
 ```bash
-# fetch locomo10.json from snap-research/locomo (per its license), then:
+# 0. a running ArangoDB (docker compose up) + real providers for a real run:
+#    EMBEDDING_PROVIDER=openai GENERATION_PROVIDER=anthropic + OPENAI/ANTHROPIC keys.
+# 1. fetch locomo10.json from snap-research/locomo (per its license), then:
 python -m arango_memory.eval.locomo_convert locomo10.json converted.json
-python -m arango_memory.eval.benchmark converted.json --mode lite   # exits nonzero below §23
+make benchmark DATASET=converted.json MODE=lite      # then MODE=full; exits nonzero below §23
 ```
 
 The converter orders `session_N` into the conversation, resolves each QA's first
 `evidence` dia-id to the supporting turn text (the `gold_fact` Recall@k checks), and
 maps the integer `category` to a name. **Adversarial (category 5) and evidence-less
 questions are excluded** from the scored set (no fact to retrieve) and counted in the
-conversion stats — so headline Recall@k/F1 stay comparable to the targets. This is a
+conversion stats — so headline Recall@k/F1 stay comparable to the targets. The report
+also prints **retrieval p50/p95/p99 latency** (rev 78, from the in-run recorder) against
+the §23 targets — informational, since wall-clock is environment-dependent; the quality
+metrics remain the pass/fail gate. **Run the full set** (not one sample) so the shared
+vector index trains (≥ `VECTOR_N_LISTS` docs) and the vector arm engages. This is a
 *retrieval-quality* run; answer-generation quality (Hallucination/NRR) is the separate
 `halu.py` harness.
 
