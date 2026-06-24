@@ -1,7 +1,7 @@
 # ArangoDB Agentic Memory System — Design Specification
 
 > **Status:** ✅ **v1 build sequence complete (Steps 0–7).** v2: all §21 adapters shipped (MCP, LangChain/LangGraph, CrewAI) + full §19 entity API + **Step 3e heavy extraction tier done**, hardened into a deployable service. Authoritative reference.
-> **Last updated:** 2026-06-19 (rev 76 — P1 deploy hardening: non-root/healthcheck/digest image + liveness/readiness split)
+> **Last updated:** 2026-06-19 (rev 77 — P2 fixes: §17/§18 doc accuracy + OIDC-audience config warning)
 >
 > The **rev-by-rev build log** lives in [`HISTORY.md`](HISTORY.md); user-visible changes are in
 > [`CHANGELOG.md`](../CHANGELOG.md); the doc map is [`docs/README.md`](README.md). This file is
@@ -658,7 +658,11 @@ an `embedding_cache` metric (+ OTEL meter). Knobs: `embedding_cache` (on),
 Regex (keys/tokens/SSN/PAN) + Haiku pass for complex PII (full mode). Episodes store redacted content only.
 
 ### Embedding Security
-Encrypted at rest; per-tenant cache namespacing; embeddings never returned in API responses (inversion defense).
+Defenses against embedding-inversion: **per-tenant cache namespacing** and **embeddings
+are never returned in API responses** (both enforced in code). **Encryption at rest is a
+storage-layer concern, not application code** — field-level encryption would break vector
+search, so rely on ArangoDB Enterprise storage encryption (or disk/volume encryption) at
+deploy time; see [ops.md](ops.md). The application layer does not encrypt embedding fields.
 
 ### ABAC at Query Time
 ```python
@@ -688,24 +692,28 @@ one and echoing it) and emits one access line per request; every record — incl
 the worker's dead-letter and a degraded retrieve — carries `request_id` + `tenant`
 via contextvars. No built-in dashboard — users plug into their backend.
 
-**Spans:** `memory.retrieve`, `memory.write`, `memory.consolidate`, `memory.decay`, `memory.embed`
+**Spans:** `memory.retrieve`, `memory.write` (no-op without a configured OTEL provider).
 
-**Metrics:**
+**Metrics (OTEL instruments actually emitted** — recorded centrally from `MemoryMetrics.emit`):
 ```
-memory.retrieval.duration_ms          histogram  (core vs augmented tagged)
-memory.retrieval.tokens_injected      histogram  (key cost metric)
-memory.retrieval.results_k            histogram
-memory.retrieval.llm_calls            counter     (full mode cost)
-memory.write.duration_ms              histogram
-memory.write.dead_lettered            counter     (durability health)
-memory.conflict.detected_count        counter
-memory.consolidation.promoted_count   counter
-memory.decay.pruned_count             counter
-memory.graph.entity_count             gauge (per tenant)
-memory.graph.episode_count            gauge (per tenant)
-memory.embedding.cache_hit_rate       gauge
-memory.degraded_turn                  counter     (memory-less fallbacks)
+memory.writes                  counter    (outcome=ok|dead_lettered)
+memory.write.duration          histogram  (ms)
+memory.retrievals              counter    (mode tag)
+memory.retrieval.duration      histogram  (ms; mode tag — the latency target metric)
+memory.retrieval.results       histogram  (hits/turn)
+memory.retrieval.tokens        histogram  (context tokens injected — key cost metric)
+memory.degraded                counter    (op, reason — memory-less fallbacks)
+memory.conflicts               counter    (entity conflicts detected)
+memory.decay.pruned            counter
+memory.consolidations          counter    (breaker_tripped tag) + memory.consolidation.changes
+memory.cache.lookups           counter    (hit tag — HyDE/gate query cache)
+memory.embedding_cache.lookups counter    (hit tag — derive hit-rate as a ratio)
 ```
+Names normalize under the OTEL→Prometheus exporter (dots→`_`, `_total` for counters, units
+appended) — see `deploy/observability/`. Dead-letter health = `memory.writes{outcome="dead_lettered"}`;
+cache hit-rate is `rate(...lookups{hit="true"}) / rate(...lookups)` (no separate gauge).
+Per-tenant graph counts are surfaced via `GET /v1/stats` + a `graph` emitter event rather
+than as an OTEL gauge.
 
 Programmatic: `MemoryMetrics.on("retrieval", handler)` event emitter.
 
@@ -1334,14 +1342,15 @@ Open items, prioritized:
     Dockerfile regressions on every PR.
   - ✅ **Liveness vs readiness split** (rev 76): `/health` is liveness (always `200`, not
     DB-gated); new `/ready` is readiness (`200`/`503` on DB reachability). Both public.
-- **P2 — accuracy / robustness:**
-  - **§17 "embeddings encrypted at rest" is not implemented** in code (storage-layer
-    concern). Reword to rely on ArangoDB/disk encryption-at-rest **and** document enabling
-    it, or implement app-level encryption (embedding-inversion risk for sensitive data).
-  - **Reconcile §18 meter names** with the actual instruments (`memory.retrieval.llm_calls`,
-    `memory.embedding.cache_hit_rate` gauge spec'd but not emitted as named).
-  - **Cross-field config validation** — e.g. warn/fail when `OIDC_ISSUER` is set without
-    `OIDC_AUDIENCE` (today `aud` is silently unverified).
+- ✅ **P2 — accuracy / robustness** (rev 77):
+  - §17 reworded: embedding **encryption-at-rest is a storage-layer concern** (ArangoDB
+    Enterprise / disk encryption), documented in ops.md; the app-level defenses are
+    per-tenant cache namespacing + never-returning embeddings.
+  - §18 metrics block reconciled to the **actually-emitted** OTEL instruments (the spec's
+    `memory.retrieval.llm_calls` / `memory.embedding.cache_hit_rate` gauge were never
+    emitted; hit-rate is a counter ratio).
+  - Cross-field config validation: `create_app` logs a startup **warning** when
+    `OIDC_ISSUER` is set without `OIDC_AUDIENCE` (the `aud` claim would be unverified).
 - **P3 — nice to have:** a load/soak test (sustained-load latency, not just concurrency
   correctness); a drilled backup/restore (DR) path beyond the documented `arangodump`.
 
