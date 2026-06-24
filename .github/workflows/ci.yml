@@ -83,6 +83,17 @@ jobs:
           npm run typecheck
           npm test
 
+  image:
+    name: Core image (build smoke)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Build the container on every PR so Dockerfile regressions (base, non-root,
+      # healthcheck, deps) surface here, not only on a release tag. No push.
+      - name: Build core image
+        run: docker build -t arango-memory-core:ci -f core/Dockerfile core
+
   docs:
     name: Docs (link check)
     runs-on: ubuntu-latest

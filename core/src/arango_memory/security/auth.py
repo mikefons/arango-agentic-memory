@@ -20,7 +20,7 @@ from fastapi import HTTPException, Request
 
 from ..config import settings
 
-_OPEN_PATHS = frozenset({"/health", "/docs", "/openapi.json", "/redoc"})
+_OPEN_PATHS = frozenset({"/health", "/ready", "/docs", "/openapi.json", "/redoc"})
 
 
 @dataclass(frozen=True)

@@ -24,6 +24,13 @@ service + ArangoDB). See [`api.md`](api.md) for the request contract and
 `uvicorn arango_memory.api.app:app --host 0.0.0.0 --port 8080` is the entrypoint
 (the module-level `app = create_app()` boots the schema + write worker on startup).
 
+**Container & probes.** The image (`core/Dockerfile`) is digest-pinned, runs as a
+**non-root** user (uid 10001), and has a Docker `HEALTHCHECK` on `/health`. Two probes:
+- **liveness → `GET /health`** — always `200` when the process is up (never gated on the
+  DB), so a DB blip can't restart the pod.
+- **readiness → `GET /ready`** — `200` when the DB is reachable, **`503`** when not, so
+  the orchestrator stops routing traffic without restarting. Both are public (no auth).
+
 **Multiple instances.** The API is stateless, so scale out by running N instances
 against the **same** ArangoDB — required: `WRITE_QUEUE_BACKEND=arango` (the in-memory
 queue is per-process), so every instance's worker shares one durable backlog and the
@@ -197,6 +204,8 @@ Run `embeddings-migrate` after switching `EMBEDDING_PROVIDER`/`EMBEDDING_MODEL`
 
 ## Observability (§18)
 
+- **`GET /ready`** — readiness: `200` when the DB is reachable, `503` when not (wire the
+  orchestrator's readiness probe here; `/health` stays liveness-only). Public.
 - **`GET /health`** — liveness + DB reachability + process-global latency
   (`{status, arango, mode, latency_ms}`). `latency_ms` holds p50/p95/p99 (ms) over
   a rolling window per operation (`retrieval.lite`, `retrieval.full`, `write`),

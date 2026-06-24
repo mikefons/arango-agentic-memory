@@ -20,7 +20,7 @@ from ..config import settings
 from ..telemetry.logging import logger
 
 # Public paths exempt from rate limiting (liveness + API docs).
-_EXEMPT_PATHS = frozenset({"/health", "/docs", "/openapi.json", "/redoc"})
+_EXEMPT_PATHS = frozenset({"/health", "/ready", "/docs", "/openapi.json", "/redoc"})
 _WINDOW_SECONDS = 60.0
 
 
