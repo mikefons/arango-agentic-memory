@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
 from arango.database import StandardDatabase
 
 from arango_memory.eval.benchmark import (
@@ -54,6 +55,14 @@ def test_run_benchmark_breaks_down_by_category(db: StandardDatabase) -> None:
     report = run_benchmark(db, [sample], k=10)
     assert set(report.per_category) == {"single-hop", "temporal"}
     assert report.per_category["single-hop"]["n"] == 1.0
+
+
+def test_progress_prints_per_sample_to_stderr(
+    db: StandardDatabase, capsys: pytest.CaptureFixture[str]
+) -> None:
+    run_benchmark(db, load_dataset(SMOKE), k=10, progress=True)
+    err = capsys.readouterr().err
+    assert "[1/1]" in err and "ingesting" in err and "done" in err
 
 
 def test_cli_parser() -> None:

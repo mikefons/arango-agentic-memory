@@ -89,3 +89,5 @@ packages/*/dist/
 locomo10.json
 **/locomo_raw*.json
 **/locomo_converted*.json
+converted.json
+core/converted.json
