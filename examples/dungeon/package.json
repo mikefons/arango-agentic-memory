@@ -6,7 +6,7 @@
   "description": "Memory Dungeon — a reference agent + Next.js UI for the ArangoDB agentic memory core (DESIGN.md §3.5c)",
   "scripts": {
     "dev": "next dev",
-    "prebuild": "tsc -p ../../packages/vercel",
+    "prebuild": "npm --prefix ../../packages/vercel ci && npm --prefix ../../packages/vercel run build",
     "build": "next build",
     "start": "next start",
     "typecheck": "tsc --noEmit",
