@@ -9,7 +9,7 @@ Persistent, relational memory for AI agents — built on ArangoDB (graph + vecto
 > JWT/OIDC auth**, durable write queue, rate limiting, structured logging,
 > OpenAPI `/docs`, a gated release pipeline, and an optional **Redis** shared layer
 > for horizontal scaling. See [`docs/DESIGN.md`](docs/DESIGN.md) — the authoritative
-> spec — and [`docs/api.md`](docs/api.md) — the core API reference.
+> spec — and [`docs/api.md`](docs/api.md) — the core API reference..
 
 ## Architecture (v1)
 
