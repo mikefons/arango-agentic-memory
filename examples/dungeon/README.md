@@ -54,8 +54,18 @@ The footer shows **core online** once the stack is up.
 
 The Showcase polish is complete — all items are config-gated toggles, off by default.
 
-## Deploy (later)
+## Deploy
 
 Host the core + ArangoDB on a long-running platform (Fly.io / Railway / Render +
-ArangoGraph), set `CORE_URL` + `AI_GATEWAY_API_KEY` in the Vercel project, and
-deploy this directory. Concrete config lands when we pick a host.
+ArangoGraph), then set these in the Vercel project and deploy this directory:
+
+- `CORE_URL` — the core's public URL (no trailing slash).
+- `AI_GATEWAY_API_KEY` — from https://vercel.com/ai-gateway.
+- `CORE_API_KEY` — **lock down the public core.** Left keyless, anyone who finds
+  `CORE_URL` can read/write your memory. Set the core's `API_KEYS` to map a key to
+  this app's tenant + write scope, and put the same key here:
+  - on the core: `API_KEYS={"<key>":{"tenant_id":"dungeon-player","scope":"write"}}`
+  - in Vercel: `CORE_API_KEY=<key>`
+
+  The tenant **must** be `dungeon-player` (the tenant this app uses); `/health` and
+  `/ready` stay open so the status banner works without the key.
