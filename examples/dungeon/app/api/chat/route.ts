@@ -18,7 +18,9 @@ const HINT_INSTRUCTION =
 
 export const maxDuration = 30;
 
-const CORE_URL = process.env.CORE_URL ?? "http://127.0.0.1:8080";
+// Strip any trailing slash so `${coreUrl}/v1/...` never becomes `//v1/...` (→ 404).
+const CORE_URL = (process.env.CORE_URL ?? "http://127.0.0.1:8080").replace(/\/+$/, "");
+const CORE_API_KEY = process.env.CORE_API_KEY;  // bearer key when the core enforces auth (§17)
 
 // One demo player for now; multi-tenant/session wiring is a later concern.
 const TENANT = "dungeon-player";
@@ -45,6 +47,7 @@ export async function POST(req: Request) {
       agentId: AGENT,
       sessionId: SESSION,
       mode: "full",
+      apiKey: CORE_API_KEY,
     }),
   });
 

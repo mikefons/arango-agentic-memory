@@ -23,7 +23,9 @@ import type {
 // Default to 127.0.0.1 (not "localhost"): server-side fetch can resolve
 // "localhost" to IPv6 ::1, which a Docker-published (IPv4) core won't answer —
 // the request then hangs. Forcing IPv4 avoids that.
-const CORE_URL = process.env.CORE_URL ?? "http://127.0.0.1:8080";
+// Strip any trailing slash: requests are built as `${CORE_URL}/path`, so a
+// trailing slash would yield `//path` → 404 (a common env-var foot-gun).
+const CORE_URL = (process.env.CORE_URL ?? "http://127.0.0.1:8080").replace(/\/+$/, "");
 const CORE_API_KEY = process.env.CORE_API_KEY;  // bearer key when the core enforces auth (§17)
 const DEFAULT_TIMEOUT_MS = 8000;
 
