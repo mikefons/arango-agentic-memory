@@ -900,6 +900,11 @@ The rev 1 single 200ms target was unachievable with LLM calls in the path; split
 
 Walking skeleton first, then harness, then thicken. Each step is independently runnable.
 
+> **Next phase:** the multi-agent handoff work packages (read-your-writes, cross-agent
+> retrieval, `/v1/prime`, output capture, handoff eval, per-agent authz) are scoped in
+> [ROADMAP.md](ROADMAP.md) — the coordination layer that turns the single-agent memory
+> into the shared "agent brain" (§14) for orchestration pipelines.
+
 ### Step 0 — Walking skeleton (lite mode, vertical slice) ✅ DONE
 Thinnest end-to-end loop, no breadth. Delivered:
 - `docker-compose`: ArangoDB Enterprise 3.12.9.1 + Python core sidecar
