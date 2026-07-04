@@ -11,6 +11,7 @@ Start here. Pick the doc for what you're doing — they link rather than duplica
 | Wire an adapter (Vercel · LangChain · CrewAI · MCP) | [adapters/](adapters/README.md) |
 | Understand the architecture + design decisions | [DESIGN.md](DESIGN.md) |
 | See what's planned (multi-agent handoff work packages) | [ROADMAP.md](ROADMAP.md) |
+| The Guild — the game demo's multi-agent redesign | [GUILD.md](GUILD.md) |
 | See what changed | [CHANGELOG.md](../CHANGELOG.md) · build history: [HISTORY.md](HISTORY.md) |
 | Contribute (setup, `make ci`, PR flow) | [CONTRIBUTING.md](../CONTRIBUTING.md) |
 | Export metrics/traces | [deploy/observability/](../deploy/observability/README.md) |

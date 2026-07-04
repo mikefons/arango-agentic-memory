@@ -10,6 +10,10 @@ tool calls become **procedural memory**; and catching a lying NPC is the backend
 
 > Design of record: [`docs/mockups/dungeon-ui.html`](../../docs/mockups/dungeon-ui.html) — open it in a browser (has a light/dark toggle).
 
+> **Next: The Guild.** This game is being redesigned around multi-agent handoff —
+> expendable heroes, a torch-as-context-window, and a live Handoff Briefing screen.
+> Design + work packages: [`docs/GUILD.md`](../../docs/GUILD.md).
+
 ## Architecture
 
 ```

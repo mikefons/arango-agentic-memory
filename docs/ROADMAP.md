@@ -42,6 +42,11 @@ Sizes: S ≈ ≤1 day, M ≈ 2–3 days.
 Recommended sequence: **MA-1 → MA-2 → MA-3 → MA-4 → MA-5 → MA-6**, with MA-7/MA-8
 schedulable any time (no dependencies on the others).
 
+**Companion:** [GUILD.md](GUILD.md) redesigns the `examples/dungeon` demo around this
+work — expendable heroes, a torch-as-context-window budget, and a Handoff Briefing
+screen that renders `/v1/prime` live. Its E-1/E-3/E-4 packages run on today's core;
+E-2 is the visible payoff of MA-1 + MA-2 + MA-3.
+
 ---
 
 ## MA-1 — Read-your-writes: `sync` store + `/v1/flush` barrier
