@@ -7,6 +7,8 @@ client lifecycle. Enrichment, lifecycle, and security land in later steps.
 
 from __future__ import annotations
 
+import asyncio
+import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from enum import Enum
@@ -23,10 +25,10 @@ from ..embedding import Embedder, get_embedder
 from ..entity_api import get_entity, list_entities, seed
 from ..generation import Generator, get_generator
 from ..graph_api import tenant_graph
-from ..ingest.extract import get_extractor
+from ..ingest.extract import Extractor, get_extractor
 from ..ingest.procedural import get_steps
 from ..ingest.queue import ArangoQueue, InProcessQueue, StepIntent, WriteIntent, WriteQueue
-from ..ingest.worker import WriteWorker
+from ..ingest.worker import WriteWorker, commit_intent
 from ..lifecycle.community import compute_communities
 from ..lifecycle.conflict import supersede
 from ..lifecycle.dream import run_dream_state
@@ -38,7 +40,7 @@ from ..lifecycle.ontology import (
 )
 from ..lifecycle.salience import compute_centrality
 from ..retrieve.enrich import QueryCache
-from ..retrieve.search import retrieve
+from ..retrieve.search import force_view_sync, retrieve
 from ..schema.collections import ensure_schema
 from ..security.auth import require_principal
 from ..security.forget import forget
@@ -61,6 +63,11 @@ def get_embedder_dep(request: Request) -> Embedder:
 def get_generator_dep(request: Request) -> Generator:
     """Resolve the shared generator (full-mode enrichment) from app state."""
     return request.app.state.generator  # type: ignore[no-any-return]
+
+
+def get_extractor_dep(request: Request) -> Extractor:
+    """Resolve the shared extractor from app state (sync store commit path, MA-1)."""
+    return request.app.state.extractor  # type: ignore[no-any-return]
 
 
 def get_cache_dep(request: Request) -> QueryCache:
@@ -117,12 +124,31 @@ class StoreRequest(BaseModel):
     turn_index: int = 0
     source_reliability: float = 1.0
     memory_type: Literal["episodic", "working"] = "episodic"
+    # Read-your-writes (MA-1): commit inline + force search-view visibility before
+    # responding (status "committed"), instead of the default async queue ("queued").
+    # For handoff boundaries — it forces a view commit, so don't set it every turn.
+    sync: bool = False
 
 
 class StoreResponse(BaseModel):
-    status: Literal["queued"] = "queued"
+    status: Literal["queued", "committed"] = "queued"
     episode_id: str | None = None
     memory_ids: list[str] = Field(default_factory=list)
+
+
+# ── /v1/flush (read-your-writes barrier, MA-1) ────────────
+class FlushRequest(BaseModel):
+    ctx: AccessContext
+    timeout_ms: int = 5000
+
+
+class FlushResponse(BaseModel):
+    # "flushed": the queue drained for this tenant and the view is synced. "timeout":
+    # `pending` intents remained at the deadline. Both are HTTP 200 — a timeout is a
+    # caller-branchable state, not a server error. ("Drained" counts a dead-lettered
+    # write as done; flush means the queue emptied, not that every write succeeded.)
+    status: Literal["flushed", "timeout"]
+    pending: int = 0
 
 
 # ── /v1/retrieve ──────────────────────────────────────────
@@ -153,10 +179,11 @@ class StepRequest(BaseModel):
     pattern_summary: str = ""
     source_memory_key: str | None = None
     prev_step_key: str | None = None
+    sync: bool = False  # commit inline before responding (MA-1); see StoreRequest.sync
 
 
 class StepResponse(BaseModel):
-    status: Literal["queued"] = "queued"
+    status: Literal["queued", "committed"] = "queued"
     step_id: str
 
 
@@ -295,6 +322,46 @@ async def ready(client: ArangoMemoryClient = Depends(get_client)) -> JSONRespons
     )
 
 
+def _sync_commit(request: Request, intent: Any, *, tenant_id: str, sync_view: bool) -> None:
+    """Commit an intent inline on the request thread (MA-1 sync path), then force the
+    search view to reflect it. Bypasses the queue — so no dead-letter; a commit failure
+    surfaces to the caller as 503 (they asked to block on the result). Idempotency-keyed,
+    so it can't duplicate a concurrent async commit of the same intent.
+    """
+    state = request.app.state
+    db = state.client.db
+    try:
+        commit_intent(
+            db, intent,
+            embedder=state.embedder, extractor=state.extractor, generator=state.generator,
+        )
+    except Exception as exc:  # noqa: BLE001 — surface a blocked-write failure to the caller
+        logger.error("sync commit failed", extra={"key": intent.key, "error": str(exc)})
+        raise HTTPException(status_code=503, detail="sync write failed") from exc
+    if sync_view:
+        force_view_sync(db, tenant_id)
+
+
+async def flush_endpoint(
+    request: Request,
+    req: FlushRequest,
+    queue: WriteQueue = Depends(get_queue_dep),
+) -> FlushResponse:
+    """Block until this tenant's queued writes have committed and the search view
+    reflects them (MA-1 handoff barrier). Returns "timeout" (still HTTP 200) if the
+    queue hasn't drained by `timeout_ms`."""
+    _authorize(request, tenant_id=req.ctx.tenant_id, access_level=req.ctx.access_level)
+    deadline = time.monotonic() + req.timeout_ms / 1000.0
+    pending = queue.pending_count(req.ctx.tenant_id)
+    while pending > 0 and time.monotonic() < deadline:
+        await asyncio.sleep(0.05)
+        pending = queue.pending_count(req.ctx.tenant_id)
+    if pending > 0:
+        return FlushResponse(status="timeout", pending=pending)
+    force_view_sync(request.app.state.client.db, req.ctx.tenant_id)
+    return FlushResponse(status="flushed")
+
+
 async def store_endpoint(
     request: Request,
     req: StoreRequest,
@@ -313,6 +380,10 @@ async def store_endpoint(
         source_reliability=req.source_reliability,
         memory_type=req.memory_type,
     )
+    if req.sync:
+        _sync_commit(request, intent, tenant_id=req.ctx.tenant_id, sync_view=True)
+        return StoreResponse(status="committed", episode_id=intent.key,
+                             memory_ids=[f"{intent.key}-mem"])
     queue.enqueue(intent)
     return StoreResponse(episode_id=intent.key, memory_ids=[f"{intent.key}-mem"])
 
@@ -333,6 +404,10 @@ async def step_endpoint(
         source_memory_key=req.source_memory_key,
         prev_step_key=req.prev_step_key,
     )
+    if req.sync:
+        # Steps land in the `steps` collection (immediately consistent), so no view sync.
+        _sync_commit(request, intent, tenant_id=req.ctx.tenant_id, sync_view=False)
+        return StepResponse(status="committed", step_id=intent.key)
     queue.enqueue(intent)
     return StepResponse(step_id=intent.key)
 
@@ -647,6 +722,7 @@ def create_app(client: ArangoMemoryClient | None = None) -> FastAPI:
     app.state.client = mem_client
     app.state.embedder = embedder
     app.state.generator = generator
+    app.state.extractor = extractor
     app.state.cache = cache
     # app.state.queue is set in the lifespan (after the schema exists).
 
@@ -662,6 +738,9 @@ def create_app(client: ArangoMemoryClient | None = None) -> FastAPI:
     app.add_api_route("/ready", ready, methods=["GET"], tags=sys_t)
     app.add_api_route(
         "/v1/store", store_endpoint, methods=["POST"], response_model=StoreResponse, tags=ingest_t
+    )
+    app.add_api_route(
+        "/v1/flush", flush_endpoint, methods=["POST"], response_model=FlushResponse, tags=ingest_t
     )
     app.add_api_route(
         "/v1/retrieve", retrieve_endpoint, methods=["POST"], response_model=RetrieveResponse,

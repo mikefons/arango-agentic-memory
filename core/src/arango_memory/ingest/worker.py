@@ -36,6 +36,50 @@ from .store import store
 _POLL_INTERVAL = 0.05
 
 
+def commit_intent(
+    db: StandardDatabase,
+    intent: Intent,
+    *,
+    embedder: Embedder,
+    extractor: Extractor,
+    generator: Generator,
+) -> None:
+    """Commit one write/step intent to ArangoDB.
+
+    The single commit path shared by the async worker (which wraps it in
+    retry/dead-letter) and the synchronous store path (MA-1, inline on the request
+    thread). Commits are idempotency-keyed, so a sync commit and a duplicate async
+    commit converge on the same records safely.
+    """
+    if isinstance(intent, StepIntent):
+        record_step(
+            db,
+            tool_name=intent.tool_name,
+            arguments=intent.arguments,
+            outcome=intent.outcome,
+            tenant_id=intent.tenant_id,
+            agent_id=intent.agent_id,
+            pattern_summary=intent.pattern_summary,
+            source_memory_key=intent.source_memory_key,
+            prev_step_key=intent.prev_step_key,
+        )
+    else:
+        store(
+            db,
+            content=intent.content,
+            tenant_id=intent.tenant_id,
+            agent_id=intent.agent_id,
+            session_id=intent.session_id,
+            turn_index=intent.turn_index,
+            embedder=embedder,
+            extractor=extractor,
+            generator=generator,
+            mode=settings.memory_mode,
+            source_reliability=intent.source_reliability,
+            memory_type=intent.memory_type,
+        )
+
+
 class WriteWorker:
     def __init__(
         self,
@@ -82,33 +126,13 @@ class WriteWorker:
             tenant_var.reset(tenant_token)
 
     def _commit(self, intent: Intent) -> None:
-        if isinstance(intent, StepIntent):
-            record_step(
-                self._db,
-                tool_name=intent.tool_name,
-                arguments=intent.arguments,
-                outcome=intent.outcome,
-                tenant_id=intent.tenant_id,
-                agent_id=intent.agent_id,
-                pattern_summary=intent.pattern_summary,
-                source_memory_key=intent.source_memory_key,
-                prev_step_key=intent.prev_step_key,
-            )
-        else:
-            store(
-                self._db,
-                content=intent.content,
-                tenant_id=intent.tenant_id,
-                agent_id=intent.agent_id,
-                session_id=intent.session_id,
-                turn_index=intent.turn_index,
-                embedder=self._embedder,
-                extractor=self._extractor,
-                generator=self._generator,
-                mode=settings.memory_mode,
-                source_reliability=intent.source_reliability,
-                memory_type=intent.memory_type,
-            )
+        commit_intent(
+            self._db,
+            intent,
+            embedder=self._embedder,
+            extractor=self._extractor,
+            generator=self._generator,
+        )
 
     def drain(self) -> int:
         """Process all currently queued intents synchronously. Returns count handled."""

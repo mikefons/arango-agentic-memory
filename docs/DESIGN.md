@@ -605,6 +605,29 @@ Memory writes from the adapter are **asynchronous but durable**, not fire-and-fo
 
 For the walking skeleton, the "queue" may be in-process; production uses a durable queue (e.g., Redis/SQS) — the interface is identical.
 
+### Consistency model (read-your-writes) — MA-1
+Writes are **asynchronous by default**: `store` returns `"queued"` and a memory becomes
+retrievable once the worker commits **and** the ArangoSearch view indexes it (a further
+≤`commitIntervalMsec`, default 1 s). This is fine within one agent's turn, but at a
+**multi-agent handoff** — agent A writes, agent B immediately reads — B can miss A's
+final writes. Two opt-in barriers close that gap:
+
+- **`store(..., sync=true)`** (and `step`): commit **inline** on the request thread
+  (bypassing the queue) and force the search view to reflect it before responding
+  (`status: "committed"`). Bypassing means a sync commit **does not dead-letter** — a
+  failure returns `503` to the caller, who asked to block on the result. Idempotency
+  keys make a sync commit and any concurrent async commit converge safely.
+- **`POST /v1/flush {ctx, timeout_ms}`**: block until the tenant's queue has drained
+  (no unacked intents) and the view is synced → `{"status":"flushed"}`, or
+  `{"status":"timeout","pending":n}` (both HTTP 200 — a timeout is caller-branchable).
+  "Drained" counts a dead-lettered write as done: flush means the queue emptied, not
+  that every write succeeded.
+
+Both force a view commit via arangosearch's `waitForSync` query option, so they cover
+**BM25 + graph** (graph reads hit collections, already immediately consistent). The
+**vector arm is not covered** — the Faiss index updates on its own cadence — so use
+`sync`/`flush` at **stage boundaries, not every turn** (a forced view commit isn't free).
+
 ### Graceful degradation (memory must never break the agent)
 | Failure | Behavior |
 |---|---|

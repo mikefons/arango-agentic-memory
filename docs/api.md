@@ -79,6 +79,8 @@ budget → **`429`** with a `Retry-After` header. `/health` is exempt from both.
   background worker commits to ArangoDB with retry + dead-letter. Re-sending an
   identical turn cannot create duplicates. Returned ids are deterministic from the
   key, so they're known before the commit lands (entities resolve asynchronously).
+  For a **handoff** where the next reader must see the write, pass `"sync": true`
+  (commit before responding) or call `POST /v1/flush` as a barrier (MA-1, §15).
 - **Embeddings are never returned (§17).** No entity/memory projection includes
   vector embeddings — an inversion-attack defense.
 - **Memory never breaks the caller (§15).** `/v1/retrieve` degrades to empty
@@ -157,11 +159,28 @@ Persist one turn (episode + episodic memory + extracted entities/relations).
   "ctx": { "tenant_id": "acme", "agent_id": "a", "access_level": "write" },
   "turn_index": 0,                // optional, default 0 (part of the idempotency key)
   "source_reliability": 1.0,      // optional 0..1 (§8/§12) — weights corroboration → belief
-  "memory_type": "episodic"       // optional: "episodic" | "working" (§5/§14) — working
+  "memory_type": "episodic",      // optional: "episodic" | "working" (§5/§14) — working
                                   //   memory is session-scoped (TTL) + SCM-capped, mints no entities
+  "sync": false                   // optional (MA-1): true → commit inline + make the write
+                                  //   retrievable before responding (status "committed"). For
+                                  //   handoff boundaries; forces a view commit, so not every turn.
 }
 // response
 { "status": "queued", "episode_id": "<key>", "memory_ids": ["<key>-mem"] }
+// with "sync": true → { "status": "committed", ... }  (a commit failure returns 503)
+```
+
+#### `POST /v1/flush` · *barrier* (read-your-writes, MA-1)
+Block until this tenant's queued writes have committed and the search view reflects
+them — the barrier an orchestrator calls between agent stages so the next agent reads
+the previous one's writes. Covers BM25 + graph; the vector arm updates on its own cadence.
+Requires only a matching tenant (read-level auth) — it mutates nothing.
+```jsonc
+// request
+{ "ctx": { "tenant_id": "acme", "agent_id": "a" }, "timeout_ms": 5000 }  // timeout optional, default 5000
+// response — both HTTP 200 (a timeout is caller-branchable, not an error)
+{ "status": "flushed" }
+{ "status": "timeout", "pending": 2 }   // 2 intents still unacked at the deadline
 ```
 
 #### `POST /v1/step` · *write*

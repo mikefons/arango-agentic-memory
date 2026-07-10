@@ -52,6 +52,22 @@ FOR doc IN {SEARCH_VIEW}
             strength: doc.strength, accessed_at: doc.accessed_at }}
 """
 
+# Force the ArangoSearch view to index pending commits before returning, so a write
+# is immediately visible to BM25 retrieval (MA-1 read-your-writes). arangosearch's
+# `waitForSync` query option triggers the view commit; scoped to the tenant to keep
+# it cheap. (Graph reads hit collections and are already immediately consistent; the
+# vector arm updates on the Faiss index's own cadence and is not covered here.)
+_VIEW_SYNC = f"""
+FOR doc IN {SEARCH_VIEW}
+  SEARCH doc.tenant_id == @tenant_id OPTIONS {{ waitForSync: true }}
+  LIMIT 1 RETURN 1
+"""
+
+
+def force_view_sync(db: StandardDatabase, tenant_id: str) -> None:
+    """Block until the BM25 search view reflects committed writes for this tenant."""
+    db.aql.execute(_VIEW_SYNC, bind_vars={"tenant_id": tenant_id})
+
 # APPROX_NEAR_COSINE requires the vector index; tenant/agent scoping is applied
 # in the same loop so the shared index stays logically isolated (§7).
 _VECTOR_QUERY = """
