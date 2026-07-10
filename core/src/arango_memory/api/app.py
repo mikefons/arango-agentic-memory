@@ -86,6 +86,10 @@ class AccessContext(BaseModel):
     agent_id: str
     session_id: str | None = None
     access_level: Literal["read", "write"] = "read"
+    # Read across multiple agents in one fused pass (MA-2) — e.g. own + shared crew
+    # tiers. None → just agent_id. Reads only; writes always use agent_id. Every id is
+    # still tenant-scoped by the AQL (a cross-tenant id simply returns nothing).
+    read_agent_ids: list[str] | None = None
 
 
 def _authorize(
@@ -162,6 +166,7 @@ class MemoryHit(BaseModel):
     text: str
     score: float
     source: str
+    agent_id: str = ""  # provenance: which agent wrote it (MA-2)
 
 
 class RetrieveResponse(BaseModel):
@@ -622,6 +627,7 @@ async def retrieve_endpoint(
         query=req.query,
         tenant_id=req.ctx.tenant_id,
         agent_id=req.ctx.agent_id,
+        read_agent_ids=req.ctx.read_agent_ids,
         k=req.opts.k,
         max_memory_tokens=req.opts.max_memory_tokens,
         embedder=embedder,
@@ -631,7 +637,10 @@ async def retrieve_endpoint(
     )
     return RetrieveResponse(
         context=result.context,
-        hits=[MemoryHit(text=h.text, score=h.score, source=h.source) for h in result.hits],
+        hits=[
+            MemoryHit(text=h.text, score=h.score, source=h.source, agent_id=h.agent_id)
+            for h in result.hits
+        ],
         tokens_injected=result.tokens_injected,
     )
 

@@ -140,6 +140,13 @@ existing single-agent tests unmodified and green.
 namespacing convention + explicit id lists cover current consumers; revisit if a real
 consumer needs doc-level ACLs.
 
+**Future enhancement — cross-agent corroboration display.** When several agents wrote
+the *same* fact, MMR de-dupes them by embedding similarity and the survivor carries only
+one agent's provenance — so a briefing can't show "both A and B knew this." Correct for
+ranking, but a future pass could surface corroborating authors (a `also_known_by: [...]`
+on a hit) when multiple agents independently recorded a fact. Deferred (agreed): not
+needed for the handoff use case; MMR collapsing duplicates is the right default for now.
+
 ---
 
 ## MA-3 — `POST /v1/prime`: task briefing endpoint

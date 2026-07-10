@@ -74,7 +74,7 @@ def test_decay_reorders_the_bm25_arm(
         db,
         _BM25_QUERY,
         {
-            "query": "delta signal", "tenant_id": "t_decay_arm", "agent_id": "a",
+            "query": "delta signal", "tenant_id": "t_decay_arm", "agent_ids": ["a"],
             "pool": 10, "now": now, "neg_lam": -settings.decay_lambda,
         },
     )

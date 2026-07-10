@@ -588,6 +588,15 @@ insight_graph      distilled strategies (shared, written only by Dream State)
 ```
 The schema supports this in v1; the CrewAI adapter that exercises it shipped in v2 (§21) — the three tiers are realised via `agent_id` namespacing within a tenant (`interaction` = the agent's own id; `query` = `<crew_id>::query`; `insight` = `<crew_id>::insight`), with no schema change.
 
+**Cross-agent reads are first-class (MA-2).** `retrieve` accepts
+`read_agent_ids: [...]` (on `AccessContext`) and filters every arm (BM25, vector,
+graph) with `agent_id IN @agent_ids`, so one **fused** pass (RRF/MMR/decay/belief all
+apply) spans an agent's private memory + shared crew tiers — no N-call stitching. Each
+`MemoryHit` carries its writer's `agent_id` as **provenance**. Writes are unchanged:
+`agent_id` stays the sole write identity, and every id is tenant-scoped by the AQL
+(a cross-tenant id simply returns nothing). Per-agent read *restrictions* on a key are
+a separate concern (MA-7).
+
 ---
 
 ## 15. Write Durability and Graceful Degradation

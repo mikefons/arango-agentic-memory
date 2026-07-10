@@ -30,6 +30,10 @@ it has not yet been tagged or published to a registry.
 - Read-your-writes for handoffs (MA-1): `store`/`step` accept `sync: true` (commit
   inline + force search-view visibility before responding), and `POST /v1/flush`
   is a per-tenant barrier that blocks until the queue drains and the view is synced.
+- Multi-agent reads (MA-2): `retrieve` accepts `ctx.read_agent_ids` to fuse across
+  several agents in one pass (all three arms filter `agent_id IN`); each hit carries
+  its writer's `agent_id` as provenance. CrewAI tiers read across all three namespaces
+  in one call. Writes and tenant isolation are unchanged.
 
 ### Added — durability & operations
 
