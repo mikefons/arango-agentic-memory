@@ -597,6 +597,11 @@ apply) spans an agent's private memory + shared crew tiers — no N-call stitchi
 (a cross-tenant id simply returns nothing). Per-agent read *restrictions* on a key are
 a separate concern (MA-7).
 
+`POST /v1/prime` (MA-3) is the handoff verb over this: given a task it composes one
+budgeted briefing — retrieved history + the entities those memories mention + the read
+agents' most-reused tool runs — so the next agent starts warm instead of hand-crafting
+a query.
+
 ---
 
 ## 15. Write Durability and Graceful Degradation
@@ -758,6 +763,7 @@ The Python core exposes a stable API consumed locally (in-process Python) and ov
 ```
 store(content, ctx)                  → ingestion pipeline, returns ids
 retrieve(query, ctx, opts)           → retrieval pipeline, returns assembled context
+prime(task, ctx, opts)               → task briefing: history + entities + tool runs (MA-3)
 get_entity(entity_id, ctx)           → entity + edges
 list_entities(ctx, label?)           → filtered semantic entities
 forget(target_id, ctx)               → soft-deprecate

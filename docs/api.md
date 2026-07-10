@@ -239,6 +239,34 @@ Hybrid retrieval (BM25 + vector + graph → RRF → MMR → tiered token budget,
 use `agent_id`) and stays tenant-scoped — a cross-tenant id returns nothing. On any
 fault the response is empty (`context: ""`, `hits: []`) — never an error.
 
+#### `POST /v1/prime` · *read* · task briefing (MA-3)
+The **handoff** verb: given a task, return one budgeted briefing — retrieved history +
+key entities + prior tool runs — so the next agent starts warm. Composition of existing
+reads; spans `ctx.read_agent_ids` (MA-2); mutates nothing.
+```jsonc
+// request
+{
+  "task": "investigate whether the cook is the traitor",
+  "ctx": { "tenant_id": "acme", "agent_id": "b", "read_agent_ids": ["b", "guild::query"] },
+  "opts": {                          // all optional
+    "mode": "lite", "k": 10, "max_memory_tokens": 1500,
+    "include": { "episodic": true, "semantic": true, "procedural": true }
+  }
+}
+// response — sections packed under max_memory_tokens (≈50/25/25 history/entities/tools)
+{
+  "context": "## Relevant history\n- …\n\n## Key entities\n- Cook (person) — …\n\n## Prior tool runs\n- confront → success (used 3x)",
+  "hits":     [ { "text": "…", "score": 0.03, "source": "graph", "agent_id": "guild::query" } ],
+  "entities": [ { "name": "Cook", "belief": 0.7, "centrality": 0.4, "summary": "…" } ],
+  "steps":    [ { "tool_name": "confront", "outcome": "success", "use_count": 3 } ],
+  "tokens_injected": 512
+}
+```
+`include` toggles sections (episodic=history, semantic=entities, procedural=tool runs).
+Entities are drawn from the retrieved memories' mentions (task-relevant + read-scoped);
+tool runs are the crew's most-reused steps. Empty task/no data → an empty-but-valid
+briefing, never an error.
+
 ### Semantic memory (entities & relations)
 
 #### `GET /v1/entity` · *read*

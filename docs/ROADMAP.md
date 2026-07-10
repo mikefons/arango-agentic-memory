@@ -199,6 +199,14 @@ Job/queue semantics — claiming, status, scheduling stay in the orchestrator
 "atomic entity claim" idea from `future-investigations` only if a real consumer needs
 work-item locking inside the memory layer.
 
+**Shipped as MA-3a** (core: `retrieve/prime.py` + `POST /v1/prime` + tests + docs). Two
+scope adjustments made against what's actually built, both agreed: (1) **entities** are
+derived from the retrieved memories' `mentions` (task-relevant + read-scoped) rather than
+a tenant-wide `list_entities`; (2) **prior tool runs** rank by `use_count` across the read
+agents — *task-semantic step matching* (BM25 over tool args) is a **future enhancement**,
+since `steps` aren't in a search view. Adapters (MCP `prime` tool, TS `prime()`, LangGraph
+prime node) are **MA-3b**, folded into the adapter PR.
+
 ---
 
 ## MA-4 — Capture assistant outputs in the Vercel middleware
