@@ -27,6 +27,9 @@ it has not yet been tagged or published to a registry.
   decay, ontology-evolution proposals.
 - Working-memory tier (TTL + capacity cap) and GAM session topic-shift trigger.
 - HTTP API over `/v1`; entity + graph read APIs; `stats`/`health`.
+- Read-your-writes for handoffs (MA-1): `store`/`step` accept `sync: true` (commit
+  inline + force search-view visibility before responding), and `POST /v1/flush`
+  is a per-tenant barrier that blocks until the queue drains and the view is synced.
 
 ### Added — durability & operations
 

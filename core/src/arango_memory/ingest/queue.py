@@ -102,6 +102,7 @@ class WriteQueue(Protocol):
     def ack(self, claim: Claim) -> None: ...
     def nack(self, claim: Claim) -> None: ...
     def __len__(self) -> int: ...  # pending (unclaimed) intents
+    def pending_count(self, tenant_id: str) -> int: ...  # not-yet-acked for a tenant
 
 
 class InProcessQueue:
@@ -140,6 +141,14 @@ class InProcessQueue:
         with self._lock:
             return len(self._pending)
 
+    def pending_count(self, tenant_id: str) -> int:
+        """Not-yet-acked intents for a tenant: unclaimed + in-flight (the flush barrier
+        must not return while an intent is still mid-commit)."""
+        with self._lock:
+            pending = sum(1 for i in self._pending if i.tenant_id == tenant_id)
+            inflight = sum(1 for i in self._inflight.values() if i.tenant_id == tenant_id)
+            return pending + inflight
+
 
 def _to_intent(kind: str, data: dict[str, Any]) -> Intent:
     return StepIntent(**data) if kind == "step" else WriteIntent(**data)
@@ -159,6 +168,14 @@ FOR d IN @@coll
 _PENDING = """
 RETURN LENGTH(
   FOR d IN @@coll FILTER d.leased_until == null OR d.leased_until < @now RETURN 1
+)
+"""
+
+# Not-yet-acked intents for one tenant. A doc existing at all means unacked (ack
+# deletes it), regardless of lease state — so pending + in-flight both count.
+_PENDING_TENANT = """
+RETURN LENGTH(
+  FOR d IN @@coll FILTER d.intent.tenant_id == @tenant RETURN 1
 )
 """
 
@@ -217,4 +234,10 @@ class ArangoQueue:
         bind: dict[str, Any] = {"@coll": WRITE_QUEUE_COLLECTION, "now": utcnow_iso()}
         with self._lock:
             rows = cast(Cursor, self._db.aql.execute(_PENDING, bind_vars=bind))
+            return int(next(iter(rows)))
+
+    def pending_count(self, tenant_id: str) -> int:
+        bind: dict[str, Any] = {"@coll": WRITE_QUEUE_COLLECTION, "tenant": tenant_id}
+        with self._lock:
+            rows = cast(Cursor, self._db.aql.execute(_PENDING_TENANT, bind_vars=bind))
             return int(next(iter(rows)))
