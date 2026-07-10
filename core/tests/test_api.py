@@ -94,7 +94,7 @@ def test_store_then_retrieve_over_http(api: TestClient) -> None:
 
     assert body["hits"], "stored memory not retrievable over HTTP"
     hit = body["hits"][0]  # type: ignore[index]
-    assert set(hit.keys()) == {"text", "score", "source"}
+    assert set(hit.keys()) == {"text", "score", "source", "agent_id"}  # +agent_id (MA-2)
     assert body["tokens_injected"] > 0
     assert isinstance(body["context"], str)
 

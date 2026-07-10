@@ -215,7 +215,11 @@ Hybrid retrieval (BM25 + vector + graph → RRF → MMR → tiered token budget,
 // request
 {
   "query": "where does Alice live?",
-  "ctx": { "tenant_id": "acme", "agent_id": "a" },
+  "ctx": {
+    "tenant_id": "acme", "agent_id": "a",
+    "read_agent_ids": ["a", "crew::query"]   // optional (MA-2): read across these agents in
+                                             //   one fused pass; omit → just agent_id
+  },
   "opts": {                         // all optional
     "mode": "lite",                 // "lite" | "full" (full adds HyDE + adaptive gate)
     "max_memory_tokens": 1500,
@@ -226,12 +230,14 @@ Hybrid retrieval (BM25 + vector + graph → RRF → MMR → tiered token budget,
 // response
 {
   "context": "…assembled, token-budgeted context block…",
-  "hits": [ { "text": "Alice moved to Berlin in 2019", "score": 0.031, "source": "graph" } ],
+  "hits": [ { "text": "Alice moved to Berlin in 2019", "score": 0.031, "source": "graph",
+              "agent_id": "a" } ],   // agent_id = provenance (who wrote it, MA-2)
   "tokens_injected": 64
 }
 ```
-`source` ∈ `bm25 | vector | graph`. On any fault the response is empty
-(`context: ""`, `hits: []`) — never an error.
+`source` ∈ `bm25 | vector | graph`. `read_agent_ids` widens reads only (writes always
+use `agent_id`) and stays tenant-scoped — a cross-tenant id returns nothing. On any
+fault the response is empty (`context: ""`, `hits: []`) — never an error.
 
 ### Semantic memory (entities & relations)
 

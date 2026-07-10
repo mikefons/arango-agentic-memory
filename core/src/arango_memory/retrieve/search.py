@@ -43,11 +43,11 @@ FOR doc IN {SEARCH_VIEW}
   SEARCH ANALYZER(doc.text IN TOKENS(@query, "text_en")
                   OR doc.prospective_queries IN TOKENS(@query, "text_en"), "text_en")
      AND doc.tenant_id == @tenant_id
-     AND doc.agent_id == @agent_id
+     AND doc.agent_id IN @agent_ids
   FILTER doc.invalid_at == null
   SORT BM25(doc) * ({_DECAY}) DESC
   LIMIT @pool
-  RETURN {{ key: doc._key, text: doc.text, score: BM25(doc),
+  RETURN {{ key: doc._key, text: doc.text, score: BM25(doc), agent_id: doc.agent_id,
             embedding: doc.embedding, type: doc.type,
             strength: doc.strength, accessed_at: doc.accessed_at }}
 """
@@ -73,12 +73,12 @@ def force_view_sync(db: StandardDatabase, tenant_id: str) -> None:
 _VECTOR_QUERY = """
 FOR doc IN memories
   FILTER doc.tenant_id == @tenant_id
-     AND doc.agent_id == @agent_id
+     AND doc.agent_id IN @agent_ids
      AND doc.invalid_at == null
   LET score = APPROX_NEAR_COSINE(doc.embedding, @qvec)
   SORT score DESC
   LIMIT @pool
-  RETURN { key: doc._key, text: doc.text, score: score,
+  RETURN { key: doc._key, text: doc.text, score: score, agent_id: doc.agent_id,
            embedding: doc.embedding, type: doc.type,
            strength: doc.strength, accessed_at: doc.accessed_at }
 """
@@ -94,7 +94,7 @@ FOR start IN @seed_ids
       FILTER related.invalid_at == null
       FOR mem IN 1..1 INBOUND related mentions
         FILTER mem.tenant_id == @tenant_id
-           AND mem.agent_id == @agent_id
+           AND mem.agent_id IN @agent_ids
            AND mem.invalid_at == null
            AND mem._key NOT IN @seed_keys
         // mean EWA weight of the bridging relates_to edges (§12); 0 for the 0-hop self.
@@ -113,7 +113,7 @@ FOR start IN @seed_ids
         LET score = (1.0 / (1.0 + hops)) * (0.5 + 0.5 * salience) * decay
         SORT score DESC
         LIMIT @pool
-        RETURN { key: key, score: score,
+        RETURN { key: key, score: score, agent_id: rows[0].agent_id,
                  text: rows[0].text, embedding: rows[0].embedding, type: rows[0].type,
                  strength: rows[0].strength, accessed_at: rows[0].accessed_at }
 """
@@ -136,6 +136,7 @@ class MemoryHit:
     text: str
     score: float
     source: str = "bm25"
+    agent_id: str = ""  # provenance: which agent wrote it (MA-2 multi-agent reads)
 
 
 @dataclass
@@ -155,6 +156,7 @@ class _Candidate:
     fused_score: float = 0.0
     strength: float = 1.0
     accessed_at: str = ""
+    agent_id: str = ""
 
 
 def _count_tokens(text: str) -> int:
@@ -202,6 +204,7 @@ def _rrf_fuse(ranked_lists: list[list[dict[str, Any]]], names: list[str]) -> lis
                     type=row.get("type") or "episodic",
                     strength=row.get("strength", 1.0) or 1.0,
                     accessed_at=row.get("accessed_at") or "",
+                    agent_id=row.get("agent_id") or "",
                 )
                 by_key[key] = cand
             cand.signals.add(name)
@@ -282,6 +285,7 @@ def retrieve(
     query: str,
     tenant_id: str,
     agent_id: str,
+    read_agent_ids: list[str] | None = None,
     k: int = 10,
     max_memory_tokens: int = 1500,
     embedder: Embedder | None = None,
@@ -294,6 +298,8 @@ def retrieve(
 ) -> RetrieveResult:
     """Instrumented retrieval (DESIGN.md §18): span + metrics + §15 degradation.
 
+    `read_agent_ids` (MA-2) widens the read across multiple agents in one fused pass
+    (e.g. own + shared crew tiers); `None` reads just `agent_id`. Writes are unaffected.
     Any failure degrades to an empty (memory-less) result and a `degraded` event,
     so a memory fault never breaks the agent turn.
     """
@@ -305,6 +311,7 @@ def retrieve(
                 query=query,
                 tenant_id=tenant_id,
                 agent_id=agent_id,
+                read_agent_ids=read_agent_ids,
                 k=k,
                 max_memory_tokens=max_memory_tokens,
                 embedder=embedder,
@@ -335,6 +342,7 @@ def _retrieve_impl(
     query: str,
     tenant_id: str,
     agent_id: str,
+    read_agent_ids: list[str] | None = None,
     k: int = 10,
     max_memory_tokens: int = 1500,
     embedder: Embedder | None = None,
@@ -371,7 +379,9 @@ def _retrieve_impl(
     now = utcnow_iso()
     decay_binds = {"now": now, "neg_lam": -settings.decay_lambda}
 
-    scope = {"tenant_id": tenant_id, "agent_id": agent_id, "pool": candidate_pool}
+    # Multi-agent read (MA-2): a 1-element list on the default path keeps the same plan.
+    agent_ids = read_agent_ids or [agent_id]
+    scope = {"tenant_id": tenant_id, "agent_ids": agent_ids, "pool": candidate_pool}
     bm25_rows = _run(db, _BM25_QUERY, {"query": query, **scope, **decay_binds})
 
     ranked_lists = [bm25_rows]
@@ -398,7 +408,7 @@ def _retrieve_impl(
                 "seed_ids": [f"memories/{k}" for k in seed_keys],
                 "seed_keys": seed_keys,
                 "tenant_id": tenant_id,
-                "agent_id": agent_id,
+                "agent_ids": agent_ids,
                 "hops": graph_hops if graph_hops is not None else settings.graph_hops,
                 "pool": candidate_pool,
                 **decay_binds,
@@ -429,7 +439,8 @@ def _retrieve_impl(
     reset_access(db, [c.key for c in selected])
 
     hits = [
-        MemoryHit(text=c.text, score=round(c.fused_score, 6), source="+".join(sorted(c.signals)))
+        MemoryHit(text=c.text, score=round(c.fused_score, 6),
+                  source="+".join(sorted(c.signals)), agent_id=c.agent_id)
         for c in selected
     ]
     return RetrieveResult(context=context, hits=hits, tokens_injected=tokens)

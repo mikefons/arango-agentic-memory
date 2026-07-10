@@ -45,6 +45,7 @@ class ArangoCrewStorage:
         max_memory_tokens: int = 1500,
         score_threshold: float = 0.0,
         read_only: bool = False,
+        read_agent_ids: list[str] | None = None,
         embedder: Embedder | None = None,
         generator: Generator | None = None,
     ) -> None:
@@ -56,6 +57,9 @@ class ArangoCrewStorage:
         self.max_memory_tokens = max_memory_tokens
         self.score_threshold = score_threshold
         self.read_only = read_only
+        # Agents this tier reads across in one fused pass (MA-2): own + shared crew
+        # tiers. None → just this tier's agent_id. Writes always use agent_id.
+        self.read_agent_ids = read_agent_ids
         self.embedder = embedder
         self.generator = generator
 
@@ -90,6 +94,7 @@ class ArangoCrewStorage:
             query=query,
             tenant_id=self.tenant_id,
             agent_id=self.agent_id,
+            read_agent_ids=self.read_agent_ids,
             k=k,
             max_memory_tokens=self.max_memory_tokens,
             mode=self.mode,
@@ -99,8 +104,9 @@ class ArangoCrewStorage:
         return [
             {
                 "context": hit.text,
+                # Real per-hit provenance (MA-2): who wrote it, not this tier's id.
+                "metadata": {"source": hit.source, "agent_id": hit.agent_id or self.agent_id},
                 "score": hit.score,
-                "metadata": {"source": hit.source, "agent_id": self.agent_id},
             }
             for hit in result.hits
             if hit.score >= threshold
@@ -133,11 +139,18 @@ def crew_memory(
     embedder: Embedder | None = None,
     generator: Generator | None = None,
 ) -> CrewMemory:
-    """Build the 3-tier crew memory for one agent (private + shared + insight)."""
+    """Build the 3-tier crew memory for one agent (private + shared + insight).
+
+    Every tier reads across all three namespaces in one fused pass (MA-2), so a search
+    on any tier surfaces the agent's private memory plus the shared crew + insight
+    tiers — while writes still land in each tier's own `agent_id`.
+    """
+    read_across = [agent_id, f"{crew_id}::query", f"{crew_id}::insight"]
     common: dict[str, Any] = {
         "tenant_id": tenant_id,
         "mode": mode,
         "k": k,
+        "read_agent_ids": read_across,
         "embedder": embedder,
         "generator": generator,
     }
