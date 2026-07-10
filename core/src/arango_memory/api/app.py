@@ -40,6 +40,7 @@ from ..lifecycle.ontology import (
 )
 from ..lifecycle.salience import compute_centrality
 from ..retrieve.enrich import QueryCache
+from ..retrieve.prime import Include, prime
 from ..retrieve.search import force_view_sync, retrieve
 from ..schema.collections import ensure_schema
 from ..security.auth import require_principal
@@ -172,6 +173,34 @@ class MemoryHit(BaseModel):
 class RetrieveResponse(BaseModel):
     context: str = ""
     hits: list[MemoryHit] = Field(default_factory=list)
+    tokens_injected: int = 0
+
+
+# ── /v1/prime (task briefing, MA-3) ───────────────────────
+class PrimeInclude(BaseModel):
+    episodic: bool = True    # retrieved history section
+    semantic: bool = True    # key-entities section
+    procedural: bool = True  # prior-tool-runs section
+
+
+class PrimeOptions(BaseModel):
+    mode: Literal["lite", "full"] = "lite"
+    k: int = settings.k
+    max_memory_tokens: int = 1500
+    include: PrimeInclude = Field(default_factory=PrimeInclude)
+
+
+class PrimeRequest(BaseModel):
+    task: str
+    ctx: AccessContext
+    opts: PrimeOptions = Field(default_factory=PrimeOptions)
+
+
+class PrimeResponse(BaseModel):
+    context: str = ""
+    hits: list[MemoryHit] = Field(default_factory=list)
+    entities: list[dict[str, Any]] = Field(default_factory=list)
+    steps: list[dict[str, Any]] = Field(default_factory=list)
     tokens_injected: int = 0
 
 
@@ -645,6 +674,47 @@ async def retrieve_endpoint(
     )
 
 
+async def prime_endpoint(
+    request: Request,
+    req: PrimeRequest,
+    client: ArangoMemoryClient = Depends(get_client),
+    embedder: Embedder = Depends(get_embedder_dep),
+    generator: Generator = Depends(get_generator_dep),
+    cache: QueryCache = Depends(get_cache_dep),
+) -> PrimeResponse:
+    """Task briefing for a handoff (MA-3): history + key entities + prior tool runs,
+    assembled under one token budget, spanning ctx.read_agent_ids."""
+    _authorize(request, tenant_id=req.ctx.tenant_id, access_level=req.ctx.access_level)
+    result = prime(
+        client.db,
+        task=req.task,
+        tenant_id=req.ctx.tenant_id,
+        agent_id=req.ctx.agent_id,
+        read_agent_ids=req.ctx.read_agent_ids,
+        mode=req.opts.mode,
+        k=req.opts.k,
+        max_memory_tokens=req.opts.max_memory_tokens,
+        include=Include(
+            episodic=req.opts.include.episodic,
+            semantic=req.opts.include.semantic,
+            procedural=req.opts.include.procedural,
+        ),
+        embedder=embedder,
+        generator=generator,
+        cache=cache,
+    )
+    return PrimeResponse(
+        context=result.context,
+        hits=[
+            MemoryHit(text=h.text, score=h.score, source=h.source, agent_id=h.agent_id)
+            for h in result.hits
+        ],
+        entities=result.entities,
+        steps=result.steps,
+        tokens_injected=result.tokens_injected,
+    )
+
+
 # ── OpenAPI metadata (served at /docs, /redoc, /openapi.json) ──
 _API_DESCRIPTION = (
     "Agentic memory core for ArangoDB — durable ingestion, hybrid retrieval, "
@@ -754,6 +824,9 @@ def create_app(client: ArangoMemoryClient | None = None) -> FastAPI:
     app.add_api_route(
         "/v1/retrieve", retrieve_endpoint, methods=["POST"], response_model=RetrieveResponse,
         tags=retr_t,
+    )
+    app.add_api_route(
+        "/v1/prime", prime_endpoint, methods=["POST"], response_model=PrimeResponse, tags=retr_t,
     )
     app.add_api_route(
         "/v1/step", step_endpoint, methods=["POST"], response_model=StepResponse, tags=ingest_t

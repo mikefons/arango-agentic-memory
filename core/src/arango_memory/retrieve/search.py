@@ -137,6 +137,7 @@ class MemoryHit:
     score: float
     source: str = "bm25"
     agent_id: str = ""  # provenance: which agent wrote it (MA-2 multi-agent reads)
+    key: str = ""  # memory _key — internal (not exposed over the API); used by prime (MA-3)
 
 
 @dataclass
@@ -440,7 +441,7 @@ def _retrieve_impl(
 
     hits = [
         MemoryHit(text=c.text, score=round(c.fused_score, 6),
-                  source="+".join(sorted(c.signals)), agent_id=c.agent_id)
+                  source="+".join(sorted(c.signals)), agent_id=c.agent_id, key=c.key)
         for c in selected
     ]
     return RetrieveResult(context=context, hits=hits, tokens_injected=tokens)

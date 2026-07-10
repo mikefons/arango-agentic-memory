@@ -34,6 +34,9 @@ it has not yet been tagged or published to a registry.
   several agents in one pass (all three arms filter `agent_id IN`); each hit carries
   its writer's `agent_id` as provenance. CrewAI tiers read across all three namespaces
   in one call. Writes and tenant isolation are unchanged.
+- Task briefing (MA-3): `POST /v1/prime` composes one budgeted handoff briefing —
+  retrieved history + key entities (from the hits' mentions) + prior tool runs across
+  `read_agent_ids` — so the next agent starts warm. Read-only; spans MA-2 agents.
 
 ### Added — durability & operations
 
