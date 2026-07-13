@@ -284,6 +284,15 @@ critical-path claim count > torch budget; perish ends expedition without chronic
 **Acceptance.** The game is winnable in ~3–5 expeditions by a player who uses the
 dossier, and unwinnable in one — verified by the content test, not vibes.
 
+**Shipped** (`lib/accuse.ts` + test, traitor **Saro** + Counting House in `lib/world.ts`,
+`accuse` tool, win/perish overlays + evidence chain, `wary` flag + prompt line).
+**The load-bearing decision:** the accusation counts caught lies from the **persistent
+`/v1/graph`** (superseded lie-subjects), *not* per-hero `caughtClaims` — so catches
+accumulate across expeditions (hero-1 catches two, hero-3 catches the last, accuses →
+win). **Threshold refined to 4** (GUILD said "e.g. 3, tunable") so the structural
+critical-path lower bound is 14 > the 12-turn torch — unwinnable in one, proven by the
+test. A wrong/unproven accusation is fatal (perish, un-chronicled) and leaves NPCs warier.
+
 ---
 
 ### E-5 — Meta-progression + onboarding + polish

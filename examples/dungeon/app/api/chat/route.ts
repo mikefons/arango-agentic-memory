@@ -56,10 +56,17 @@ export async function POST(req: Request) {
     }),
   });
 
+  const WARY =
+    "\n\nA guild hero recently perished to a false accusation. The keep's people are on edge: " +
+    "NPCs are terser, warier, slower to trust — reflect this in their manner.";
+
   const flags = await getFlags();
   // This expedition's hero has a persona (E-3) — its voice colors the narration.
   const system =
-    DM_SYSTEM + persona(state.expedition).voice + (flags.hint ? HINT_INSTRUCTION : "");
+    DM_SYSTEM +
+    persona(state.expedition).voice +
+    (state.wary ? WARY : "") +
+    (flags.hint ? HINT_INSTRUCTION : "");
   const result = streamText({
     model,
     system,

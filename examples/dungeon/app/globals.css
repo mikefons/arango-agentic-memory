@@ -989,3 +989,25 @@ footer .live .dot { width: 5px; height: 5px; border-radius: 50%; background: cur
 }
 .send-hero:hover { opacity: 0.9; }
 .send-hero:disabled { opacity: 0.5; cursor: default; }
+
+/* Accusation endgame (E-4) — victory / evidence chain. */
+.eo-card.victory h2 { color: var(--truth); }
+.eo-card .chain { margin: 0.5rem 0 1rem; text-align: left; }
+.eo-card .chain h3 {
+  font-family: var(--font-mono); font-size: 0.7rem; text-transform: uppercase;
+  letter-spacing: 0.08em; color: var(--muted); margin: 0 0 0.5rem;
+}
+.eo-card .chain-row {
+  display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap;
+  padding: 0.4rem 0.5rem; margin-bottom: 0.3rem;
+  border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--bg);
+  font-size: 0.85rem;
+}
+.eo-card .chain-row .truth { color: var(--truth); font-weight: 600; }
+.eo-card .chain-row .lie { color: var(--lie); text-decoration: line-through; }
+.eo-card .chain-row .arrow {
+  font-family: var(--font-mono); font-size: 0.62rem; text-transform: uppercase;
+  color: var(--muted);
+}
+.eo-actions { display: flex; gap: 0.6rem; justify-content: center; }
+.eo-card .send.ghost { background: transparent; color: var(--fg-soft); border: 1px solid var(--border-strong); }

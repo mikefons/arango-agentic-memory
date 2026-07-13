@@ -55,13 +55,12 @@ describe("trustOf", () => {
 
 describe("ledger", () => {
   it("lists an exposable lie as pending, then caught once confronted", () => {
-    const ev = { inventory: ["brass key"], heardClaims: ["veld-key"] };
-    const pending = ledger(ev, []);
-    expect(pending).toHaveLength(1);
-    expect(pending[0].status).toBe("pending");
+    const ev = { inventory: ["brass key"], heardClaims: [] };
+    const veldPending = ledger(ev, []).find((e) => e.claim.id === "veld-key");
+    expect(veldPending?.status).toBe("pending");
 
-    const caught = ledger(ev, ["veld-key"]);
-    expect(caught[0].status).toBe("caught");
+    const veldCaught = ledger(ev, ["veld-key"]).find((e) => e.claim.id === "veld-key");
+    expect(veldCaught?.status).toBe("caught");
   });
   it("hides lies with no gathered evidence", () => {
     expect(ledger({ inventory: [], heardClaims: [] }, [])).toEqual([]);

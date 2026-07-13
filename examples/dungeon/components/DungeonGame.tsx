@@ -40,9 +40,10 @@ const EMPTY_GAME: GameState = {
   roomId: START_ROOM, inventory: [], heardClaims: [], caughtClaims: [], ...firstExpedition(),
 };
 
-/** A fresh hero keeps the expedition/torch counters but starts the world anew. */
-function freshHero(current: number): GameState {
-  return { roomId: START_ROOM, inventory: [], heardClaims: [], caughtClaims: [],
+/** A fresh hero keeps the expedition/torch counters but starts the world anew.
+ * `wary` persists — once the keep is spooked by a false accusation, it stays spooked. */
+function freshHero(current: number, wary?: boolean): GameState {
+  return { roomId: START_ROOM, inventory: [], heardClaims: [], caughtClaims: [], wary,
            ...nextExpedition(current) };
 }
 
@@ -239,11 +240,19 @@ export function DungeonGame() {
   // Chronicle → briefing → send (E-2). Phase gates the modal vs. the briefing screen.
   const [phase, setPhase] = useState<"playing" | "chronicling" | "briefing">("playing");
   const [briefing, setBriefing] = useState<PrimeResult | null>(null);
+  // Endgame (E-4): a won case, or a hero perished to a false accusation.
+  const [victory, setVictory] = useState<{
+    npc: string;
+    chain: { lie: string; truth: string }[];
+    confession: string;
+  } | null>(null);
+  const [perished, setPerished] = useState(false);
 
   // Retire the current hero (fresh hero, empty transcript). The guild ledger persists.
   const descendNextHero = useCallback(() => {
-    const next = freshHero(gameRef.current.expedition);
+    const next = freshHero(gameRef.current.expedition, gameRef.current.wary);
     persistGame(next);
+    setPerished(false);
     try {
       localStorage.removeItem(MSG_KEY); // the new hero's context window is empty
     } catch {
@@ -295,6 +304,32 @@ export function DungeonGame() {
     setBriefing(brief ?? { context: "", hits: [], entities: [], steps: [], tokens_injected: 0 });
     setPhase("briefing");
   }, [runDream]);
+
+  // Resolve the accusation endgame (E-4) from a tool-accuse output.
+  useEffect(() => {
+    const last = messages[messages.length - 1];
+    if (!last || last.role !== "assistant") return;
+    for (const part of last.parts) {
+      if (part.type !== "tool-accuse" || !("state" in part) || part.state !== "output-available") {
+        continue;
+      }
+      const out = part.output as {
+        accuse?: boolean;
+        win?: boolean;
+        npc?: string;
+        chain?: { lie: string; truth: string }[];
+        confession?: string;
+      };
+      if (!out.accuse) continue;
+      if (out.win) {
+        setVictory({ npc: out.npc ?? "the traitor", chain: out.chain ?? [], confession: out.confession ?? "" });
+      } else {
+        persistGame({ ...gameRef.current, wary: true }); // the keep grows warier (E-4)
+        setPerished(true);
+      }
+      break;
+    }
+  }, [messages, persistGame]);
 
   function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -483,6 +518,62 @@ export function DungeonGame() {
           heroLabel={`${persona(game.expedition + 1).glyph} ${persona(game.expedition + 1).name}`}
           onSend={descendNextHero}
         />
+      )}
+
+      {victory && (
+        <div className="expedition-over" role="dialog" aria-modal="true">
+          <div className="eo-card victory">
+            <h2>Case closed — {victory.npc} is the traitor.</h2>
+            <p>{victory.confession}</p>
+            {victory.chain.length > 0 && (
+              <div className="chain">
+                <h3>The guild&rsquo;s evidence</h3>
+                {victory.chain.map((c, i) => (
+                  <div className="chain-row" key={i}>
+                    <span className="truth">{c.truth}</span>
+                    <span className="arrow">supersedes</span>
+                    <span className="lie">{c.lie}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+            <div className="eo-actions">
+              <button
+                className="send"
+                onClick={() =>
+                  window.open(
+                    buildShareUrl({
+                      room: room.name,
+                      items: game.inventory.length,
+                      lies: game.caughtClaims.length,
+                    }),
+                    "_blank",
+                  )
+                }
+              >
+                ⧉ share the verdict
+              </button>
+              <button className="send ghost" onClick={() => setVictory(null)}>
+                close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {perished && (
+        <div className="expedition-over" role="dialog" aria-modal="true">
+          <div className="eo-card">
+            <h2>{persona(game.expedition).name} falls.</h2>
+            <p>
+              The false accusation undoes them, and the dark takes another hero. But the
+              guild&rsquo;s ledger endures — and recruits another.
+            </p>
+            <button className="send" onClick={descendNextHero}>
+              The guild recruits another &rarr;
+            </button>
+          </div>
+        </div>
       )}
     </div>
   );
