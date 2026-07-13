@@ -22,8 +22,17 @@ import { DungeonMap } from "./DungeonMap";
 import { Dossier } from "./Dossier";
 import { TabNav } from "./TabNav";
 import { buildShareUrl } from "@/lib/share";
+import { firstExpedition, nextExpedition, spendTorch, TORCH_BUDGET } from "@/lib/expedition";
 
-const EMPTY_GAME: GameState = { roomId: START_ROOM, inventory: [], heardClaims: [], caughtClaims: [] };
+const EMPTY_GAME: GameState = {
+  roomId: START_ROOM, inventory: [], heardClaims: [], caughtClaims: [], ...firstExpedition(),
+};
+
+/** A fresh hero keeps the expedition/torch counters but starts the world anew. */
+function freshHero(current: number): GameState {
+  return { roomId: START_ROOM, inventory: [], heardClaims: [], caughtClaims: [],
+           ...nextExpedition(current) };
+}
 
 const LS_KEY = "md-gamestate";
 const MSG_KEY = "md-messages";
@@ -205,12 +214,66 @@ export function DungeonGame() {
     }
   }, [refreshGraph, narrate]);
 
+  // ── Expedition lifecycle (E-1): torch → chronicle → next hero ──
+  const persistGame = useCallback((g: GameState) => {
+    setGame(g);
+    try {
+      localStorage.setItem(LS_KEY, JSON.stringify(g));
+    } catch {
+      /* ignore */
+    }
+  }, []);
+
+  const startNextExpedition = useCallback(
+    async (chronicle: boolean) => {
+      const g = gameRef.current;
+      if (chronicle) {
+        narrate("The Chronicler writes the expedition into the Great Ledger…");
+        const room = getRoom(g.roomId);
+        const summary =
+          `Expedition ${g.expedition} (${g.heroId}): reached the ${room.name}, ` +
+          `carried ${g.inventory.length} item(s), heard ${g.heardClaims.length} claim(s), ` +
+          `caught ${g.caughtClaims.length} lie(s).`;
+        await fetch("/api/chronicle", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ summary }),
+        }).catch(() => undefined);
+        await runDream(); // the keep settles what the hero learned
+      }
+      const next = freshHero(g.expedition);
+      persistGame(next);
+      try {
+        localStorage.removeItem(MSG_KEY); // the new hero's context window is empty
+      } catch {
+        /* ignore */
+      }
+      setMessages([
+        {
+          id: `hero-${next.expedition}`,
+          role: "assistant",
+          parts: [
+            {
+              type: "text",
+              text:
+                `${next.heroId} descends into Ashfall Keep, torch freshly lit. ` +
+                `The guild's ledger remembers what the last hero did not.`,
+            },
+          ],
+        },
+      ]);
+    },
+    [narrate, runDream, persistGame, setMessages],
+  );
+
   function submit(e: React.FormEvent) {
     e.preventDefault();
     const text = input.trim();
     if (!text || status === "streaming" || status === "submitted") return;
+    if (game.torch <= 0) return; // torch spent — chronicle before the next hero descends
     sendMessage({ text }, { body: { gameState: gameRef.current } });
     setInput("");
+    persistGame({ ...game, torch: spendTorch(game.torch) });
   }
 
   const room = getRoom(game.roomId);
@@ -263,9 +326,17 @@ export function DungeonGame() {
           >
             ⧉ share
           </button>
-          <span className="pill save">
+          <button
+            className="dream-btn"
+            onClick={() => startNextExpedition(false)}
+            disabled={dreaming}
+            title="Flee — retire this hero without chronicling (its findings are lost)"
+          >
+            ⚑ flee
+          </button>
+          <span className="pill save" title={`Hero ${game.heroId} · torch ${game.torch}/${TORCH_BUDGET}`}>
             <span className="dot" />
-            run #1
+            {game.heroId} · 🔥 {game.torch}
           </span>
           <ThemeToggle />
         </div>
@@ -347,6 +418,21 @@ export function DungeonGame() {
           <span className="stat">memory <b>full mode</b></span>
         </div>
       </footer>
+
+      {game.torch <= 0 && (
+        <div className="expedition-over" role="dialog" aria-modal="true">
+          <div className="eo-card">
+            <h2>{game.heroId}&rsquo;s torch gutters out.</h2>
+            <p>
+              The dark closes in. What this hero learned dies with them &mdash; unless the
+              Chronicler writes it into the guild&rsquo;s ledger for the next to inherit.
+            </p>
+            <button className="send" onClick={() => startNextExpedition(true)} disabled={dreaming}>
+              {dreaming ? "chronicling…" : "The Chronicler writes → send the next hero"}
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

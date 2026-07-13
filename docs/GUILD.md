@@ -145,6 +145,14 @@ that claim on turn 1 (shared-tier read). The DM's narration acknowledges the new
 **Out of scope.** The briefing screen (E-2), personas (E-3) — expedition 2's hero can
 be "hero-2" with the same voice for now.
 
+**Shipped** (`lib/expedition.ts`, `app/api/chronicle/route.ts`, chat-route rewiring,
+`DungeonGame` torch UI + end-of-expedition modal + flee, `test/expedition.test.ts`).
+**Refinement vs. the original plan:** MA-2 is now shipped, so E-1 uses the *real*
+`readAgentIds: [heroId, guild::query]` (the hero reads its own memory + the guild ledger
+in one fused pass) instead of the interim "retrieve as guild::query" hack — the demo now
+exercises MA-2 directly. World-fact tools write to `guild::query`; the chronicle summary
+is a `sync` write (MA-1) so the next hero sees it on turn 1.
+
 ---
 
 ### E-2 — Handoff Briefing screen *(gated on MA-1 + MA-2 + MA-3)*

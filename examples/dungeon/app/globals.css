@@ -893,3 +893,37 @@ footer .live .dot { width: 5px; height: 5px; border-radius: 50%; background: cur
 .gx-fields dd.bad { color: var(--lie); }
 .gx-fields dd.warn { color: var(--ember); }
 .gx-fields dd.ok { color: var(--truth); }
+
+/* Expedition-over modal (E-1) — the torch has died; chronicle before the next hero. */
+.expedition-over {
+  position: fixed;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  background: color-mix(in srgb, var(--black) 72%, transparent);
+  backdrop-filter: blur(2px);
+  z-index: 50;
+}
+.eo-card {
+  max-width: 30rem;
+  margin: 1.5rem;
+  padding: 1.75rem;
+  background: var(--shell);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  box-shadow: 0 20px 60px color-mix(in srgb, var(--black) 55%, transparent);
+  text-align: center;
+}
+.eo-card h2 { font-family: var(--font-serif); color: var(--ember); margin: 0 0 0.6rem; }
+.eo-card p { color: var(--fg-soft); line-height: 1.5; margin: 0 0 1.25rem; }
+.eo-card button {
+  padding: 0.6rem 1.1rem;
+  font-family: var(--font-mono);
+  color: var(--bg);
+  background: var(--ember);
+  border: none;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+.eo-card button:hover { opacity: 0.9; }
+.eo-card button:disabled { opacity: 0.5; cursor: default; }

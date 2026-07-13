@@ -29,6 +29,10 @@ export interface GameState {
   inventory: string[];
   heardClaims: string[];
   caughtClaims: string[];
+  // Expedition lifecycle (E-1): the current hero (its own agent_id) + torch budget.
+  expedition: number;
+  heroId: string;
+  torch: number;
 }
 
 const remember = (content: string, ctx: Ctx) =>
