@@ -4,8 +4,8 @@ A thin wrapper over the core's /v1 HTTP API for Claude Desktop / Cursor /
 Windsurf. Run with `python -m arango_memory.mcp` (stdio). The core URL comes
 from `ARANGO_MEMORY_CORE_URL` (default http://localhost:8080).
 
-Exposes the full §19 surface as 9 tools (store/search/record_step/list_steps/
-forget/stats/get_entity/list_entities/seed).
+Exposes the full §19 surface as 11 tools (store/search/prime/flush/record_step/
+list_steps/forget/stats/get_entity/list_entities/seed).
 """
 
 from __future__ import annotations
@@ -37,10 +37,36 @@ def build_server(client: CoreClient | None = None) -> FastMCP:
         return tools.store_memory(http, content=content, tenant_id=tenant_id, agent_id=agent_id)
 
     @server.tool()
-    def search(query: str, tenant_id: str, agent_id: str, mode: str = "lite") -> Any:
-        """Retrieve relevant memories for a query (assembled context + hits)."""
+    def search(
+        query: str, tenant_id: str, agent_id: str, mode: str = "lite",
+        read_agent_ids: list[str] | None = None,
+    ) -> Any:
+        """Retrieve relevant memories for a query (assembled context + hits).
+
+        read_agent_ids reads across several agents in one fused pass (MA-2)."""
         return tools.search_memory(
-            http, query=query, tenant_id=tenant_id, agent_id=agent_id, mode=mode
+            http, query=query, tenant_id=tenant_id, agent_id=agent_id, mode=mode,
+            read_agent_ids=read_agent_ids,
+        )
+
+    @server.tool()
+    def prime(
+        task: str, tenant_id: str, agent_id: str, mode: str = "lite",
+        read_agent_ids: list[str] | None = None,
+    ) -> Any:
+        """Brief for a task before picking up a job (MA-3): retrieved history + key
+        entities + prior tool runs, spanning read_agent_ids. The handoff entry point."""
+        return tools.prime_memory(
+            http, task=task, tenant_id=tenant_id, agent_id=agent_id, mode=mode,
+            read_agent_ids=read_agent_ids,
+        )
+
+    @server.tool()
+    def flush(tenant_id: str, agent_id: str, timeout_ms: int = 5000) -> Any:
+        """Block until this tenant's queued writes are committed + retrievable (MA-1) —
+        call between agent stages so the next agent reads the previous one's writes."""
+        return tools.flush_memory(
+            http, tenant_id=tenant_id, agent_id=agent_id, timeout_ms=timeout_ms
         )
 
     @server.tool()

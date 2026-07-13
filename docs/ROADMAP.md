@@ -243,6 +243,12 @@ the model's answer* returns a hit.
 **Out of scope.** Storing full multi-step reasoning traces (tool traces already cover
 the act/observe loop); summarizing responses before store.
 
+**Shipped in the adapter surface PR** together with the client halves of MA-1/2/3:
+Vercel middleware `captureResponses` (MA-4, default on), `syncWrites` (MA-1b),
+`readAgentIds` (MA-2b), and standalone `prime()`/`flush()` helpers (MA-3b/MA-1b); MCP
+`prime` + `flush` tools and `read_agent_ids` on `search`. The dungeon app adopts these
+in E-1/E-2, not here.
+
 ---
 
 ## MA-5 — Handoff eval: A writes → B retrieves, scored

@@ -37,6 +37,10 @@ it has not yet been tagged or published to a registry.
 - Task briefing (MA-3): `POST /v1/prime` composes one budgeted handoff briefing —
   retrieved history + key entities (from the hits' mentions) + prior tool runs across
   `read_agent_ids` — so the next agent starts warm. Read-only; spans MA-2 agents.
+- Adapter surface for handoff: the Vercel middleware gains `captureResponses` (stores the
+  model's reply, MA-4), `readAgentIds` (MA-2), and `syncWrites` (MA-1), plus standalone
+  `prime()`/`flush()` helpers; the MCP server gains `prime` + `flush` tools and
+  `read_agent_ids` on `search`.
 
 ### Added — durability & operations
 
