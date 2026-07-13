@@ -41,6 +41,9 @@ it has not yet been tagged or published to a registry.
   model's reply, MA-4), `readAgentIds` (MA-2), and `syncWrites` (MA-1), plus standalone
   `prime()`/`flush()` helpers; the MCP server gains `prime` + `flush` tools and
   `read_agent_ids` on `search`.
+- Handoff eval (MA-5, `eval/handoff.py` + `make handoff-eval`): scores the multi-agent
+  path — a writer ingests facts + tool runs, a reader `prime`s across `read_agent_ids`
+  after a barrier — on context + procedural recall. Keyless smoke slice gates CI.
 
 ### Added — durability & operations
 

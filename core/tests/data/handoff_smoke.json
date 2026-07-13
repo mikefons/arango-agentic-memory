@@ -1,0 +1,75 @@
+{
+  "scenarios": [
+    {
+      "id": "clean-handoff",
+      "tenant_id": "h1",
+      "writers": [
+        {
+          "agent_id": "guild::query",
+          "facts": [
+            "the cook was seen near the vault at midnight",
+            "the guard alibi contradicts the cook account"
+          ],
+          "steps": [{ "tool_name": "confront", "outcome": "success" }]
+        }
+      ],
+      "reader": {
+        "agent_id": "brann",
+        "read_agent_ids": ["brann", "guild::query"],
+        "task": "who was seen near the vault at midnight",
+        "via": "prime"
+      },
+      "gold_facts": ["cook", "vault"],
+      "gold_tools": ["confront"]
+    },
+    {
+      "id": "three-stage",
+      "tenant_id": "h2",
+      "writers": [
+        { "agent_id": "scout", "facts": ["the north tower door is rusted shut"] },
+        { "agent_id": "mason", "facts": ["the cellar hides a passage behind the wine racks"] }
+      ],
+      "reader": {
+        "agent_id": "planner",
+        "read_agent_ids": ["planner", "scout", "mason"],
+        "task": "the rusted tower door and the cellar passage behind the racks",
+        "via": "prime"
+      },
+      "gold_facts": ["rusted", "passage"],
+      "gold_tools": []
+    },
+    {
+      "id": "distractors",
+      "tenant_id": "h3",
+      "writers": [
+        { "agent_id": "spy", "facts": ["the traitor is the quartermaster who forged the ledgers"] },
+        { "agent_id": "gossip1", "facts": ["the weather has been rainy all week long"] },
+        { "agent_id": "gossip2", "facts": ["the tavern down the road serves very good ale"] }
+      ],
+      "reader": {
+        "agent_id": "seeker",
+        "read_agent_ids": ["seeker", "spy", "gossip1", "gossip2"],
+        "task": "who is the traitor that forged the ledgers",
+        "via": "prime",
+        "max_memory_tokens": 120
+      },
+      "gold_facts": ["quartermaster", "forged"],
+      "gold_tools": []
+    },
+    {
+      "id": "sync-boundary-retrieve",
+      "tenant_id": "h4",
+      "writers": [
+        { "agent_id": "worker", "facts": ["the final combination to the strongbox is seven four two"] }
+      ],
+      "reader": {
+        "agent_id": "reader",
+        "read_agent_ids": ["reader", "worker"],
+        "task": "what is the final combination to the strongbox",
+        "via": "retrieve"
+      },
+      "gold_facts": ["seven", "combination"],
+      "gold_tools": []
+    }
+  ]
+}
