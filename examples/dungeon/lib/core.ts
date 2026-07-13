@@ -61,10 +61,15 @@ export async function health(): Promise<boolean> {
   }
 }
 
-export function store(content: string, ctx: Ctx, opts?: { mode?: "lite" | "full" }): Promise<StoreResult> {
+export function store(
+  content: string,
+  ctx: Ctx,
+  opts?: { mode?: "lite" | "full"; sync?: boolean },
+): Promise<StoreResult> {
+  const { sync, ...rest } = opts ?? {};
   return coreFetch<StoreResult>("/v1/store", {
     method: "POST",
-    body: JSON.stringify({ content, ctx: { access_level: "write", ...ctx }, opts }),
+    body: JSON.stringify({ content, ctx: { access_level: "write", ...ctx }, opts: rest, sync }),
   });
 }
 

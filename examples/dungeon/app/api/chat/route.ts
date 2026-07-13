@@ -10,6 +10,7 @@ import { DM_SYSTEM } from "@/lib/prompt";
 import { getFlags } from "@/lib/flags";
 import { resolveModel } from "@/lib/model";
 import { makeTools, type GameState } from "@/lib/tools";
+import { firstExpedition, GUILD_TIER } from "@/lib/expedition";
 import { START_ROOM } from "@/lib/world";
 
 const HINT_INSTRUCTION =
@@ -22,10 +23,9 @@ export const maxDuration = 30;
 const CORE_URL = (process.env.CORE_URL ?? "http://127.0.0.1:8080").replace(/\/+$/, "");
 const CORE_API_KEY = process.env.CORE_API_KEY;  // bearer key when the core enforces auth (§17)
 
-// One demo player for now; multi-tenant/session wiring is a later concern.
+// One playthrough = one tenant. Within it, each expedition is an ephemeral hero
+// (its own agent_id); the shared guild ledger (GUILD_TIER) outlives them (E-1).
 const TENANT = "dungeon-player";
-const AGENT = "dm";
-const SESSION = "run-1";
 
 export async function POST(req: Request) {
   const { messages, gameState }: { messages: UIMessage[]; gameState?: GameState } = await req.json();
@@ -34,18 +34,22 @@ export async function POST(req: Request) {
     inventory: [],
     heardClaims: [],
     caughtClaims: [],
+    ...firstExpedition(),
   };
-  const ctx = { tenant_id: TENANT, agent_id: AGENT, session_id: SESSION };
+  const session = `expedition-${state.expedition}`;
+  // World-fact tools write to the shared guild ledger so their findings outlive the hero.
+  const ctx = { tenant_id: TENANT, agent_id: GUILD_TIER, session_id: session };
 
-  // The DM model, wrapped so every turn retrieves+injects memory, durably stores
-  // the turn, and captures tool calls as procedural memory (the shipped adapter).
+  // The hero's DM: its own private conversational memory (agent_id = heroId), reading
+  // across itself + the guild ledger in one fused pass (MA-2 read_agent_ids).
   const model = wrapLanguageModel({
     model: resolveModel(),
     middleware: arangoMemory({
       coreUrl: CORE_URL,
       tenantId: TENANT,
-      agentId: AGENT,
-      sessionId: SESSION,
+      agentId: state.heroId,
+      sessionId: session,
+      readAgentIds: [state.heroId, GUILD_TIER],
       mode: "full",
       apiKey: CORE_API_KEY,
     }),
