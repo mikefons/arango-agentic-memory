@@ -11,6 +11,7 @@ import { getFlags } from "@/lib/flags";
 import { resolveModel } from "@/lib/model";
 import { makeTools, type GameState } from "@/lib/tools";
 import { firstExpedition, GUILD_TIER } from "@/lib/expedition";
+import { persona } from "@/lib/personas";
 import { START_ROOM } from "@/lib/world";
 
 const HINT_INSTRUCTION =
@@ -56,9 +57,12 @@ export async function POST(req: Request) {
   });
 
   const flags = await getFlags();
+  // This expedition's hero has a persona (E-3) — its voice colors the narration.
+  const system =
+    DM_SYSTEM + persona(state.expedition).voice + (flags.hint ? HINT_INSTRUCTION : "");
   const result = streamText({
     model,
-    system: flags.hint ? DM_SYSTEM + HINT_INSTRUCTION : DM_SYSTEM,
+    system,
     messages: convertToModelMessages(messages),
     tools: makeTools(ctx, state),
     stopWhen: stepCountIs(5),

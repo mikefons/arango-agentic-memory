@@ -237,6 +237,11 @@ exactly one persona block; nameplate renders.
 **Acceptance.** Two consecutive expeditions read as *different characters* inheriting
 one memory, and at least one NPC line references a previous hero's visit.
 
+**Shipped** (`lib/personas.ts` + test, chat-route voice append, guild-aware NPC prompt
+line, persona name/glyph across the pill / intro / end-modal / briefing / in-voice
+chronicle). **Decision honored:** the memory `agent_id` stays `hero-N`; the persona is a
+pure display + prompt layer (6 archetypes round-robin, names rotate per lap, deterministic).
+
 ---
 
 ### E-4 — Traitor arc + accusation endgame

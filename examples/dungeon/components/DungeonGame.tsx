@@ -30,6 +30,7 @@ import {
   TORCH_BUDGET,
 } from "@/lib/expedition";
 import { HandoffBriefing } from "./HandoffBriefing";
+import { persona } from "@/lib/personas";
 import type { PrimeResult } from "@/lib/types";
 
 const NEXT_HERO_TASK = "Descend into Ashfall Keep and expose the lies the last heroes could not.";
@@ -248,6 +249,7 @@ export function DungeonGame() {
     } catch {
       /* ignore */
     }
+    const p = persona(next.expedition);
     setMessages([
       {
         id: `hero-${next.expedition}`,
@@ -256,7 +258,7 @@ export function DungeonGame() {
           {
             type: "text",
             text:
-              `${next.heroId} descends into Ashfall Keep, torch freshly lit. ` +
+              `${p.glyph} ${p.name} descends into Ashfall Keep, torch freshly lit. ` +
               `The guild's ledger remembers what the last hero did not.`,
           },
         ],
@@ -272,7 +274,7 @@ export function DungeonGame() {
     setPhase("chronicling");
     const room = getRoom(g.roomId);
     const summary =
-      `Expedition ${g.expedition} (${g.heroId}): reached the ${room.name}, ` +
+      `${persona(g.expedition).name} (expedition ${g.expedition}) reached the ${room.name}, ` +
       `carried ${g.inventory.length} item(s), heard ${g.heardClaims.length} claim(s), ` +
       `caught ${g.caughtClaims.length} lie(s).`;
     await fetch("/api/chronicle", {
@@ -362,9 +364,12 @@ export function DungeonGame() {
           >
             ⚑ flee
           </button>
-          <span className="pill save" title={`Hero ${game.heroId} · torch ${game.torch}/${TORCH_BUDGET}`}>
+          <span
+            className="pill save"
+            title={`${persona(game.expedition).name} (${game.heroId}) · torch ${game.torch}/${TORCH_BUDGET}`}
+          >
             <span className="dot" />
-            {game.heroId} · 🔥 {game.torch}
+            {persona(game.expedition).glyph} {persona(game.expedition).name} · 🔥 {game.torch}
           </span>
           <ThemeToggle />
         </div>
@@ -450,7 +455,7 @@ export function DungeonGame() {
       {game.torch <= 0 && phase === "playing" && (
         <div className="expedition-over" role="dialog" aria-modal="true">
           <div className="eo-card">
-            <h2>{game.heroId}&rsquo;s torch gutters out.</h2>
+            <h2>{persona(game.expedition).name}&rsquo;s torch gutters out.</h2>
             <p>
               The dark closes in. What this hero learned dies with them &mdash; unless the
               Chronicler writes it into the guild&rsquo;s ledger for the next to inherit.
@@ -475,7 +480,7 @@ export function DungeonGame() {
         <HandoffBriefing
           briefing={briefing}
           maxTokens={BRIEFING_TOKENS}
-          heroLabel={heroId(game.expedition + 1)}
+          heroLabel={`${persona(game.expedition + 1).glyph} ${persona(game.expedition + 1).name}`}
           onSend={descendNextHero}
         />
       )}
