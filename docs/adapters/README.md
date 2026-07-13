@@ -6,10 +6,13 @@ stack:
 
 | Adapter | Surface | Transport | Guide |
 |---|---|---|---|
-| **Vercel AI SDK** | `LanguageModelV2Middleware` (retrieve→inject, store, capture tools) | HTTP `/v1` | [vercel.md](vercel.md) |
+| **Vercel AI SDK** | `LanguageModelV2Middleware` (retrieve→inject, store, capture tools/responses) + `prime`/`flush` helpers | HTTP `/v1` | [vercel.md](vercel.md) |
 | **LangChain / LangGraph** | `Retriever` · `ChatMessageHistory` · graph nodes | In-process Python | [langchain.md](langchain.md) |
 | **CrewAI** | crew memory `Storage` (G-Memory tiers) | In-process Python | [crewai.md](crewai.md) |
-| **MCP server** | 9 MCP tools for Claude Desktop / Cursor / Windsurf | stdio → HTTP `/v1` | [mcp.md](mcp.md) |
+| **MCP server** | 11 MCP tools for Claude Desktop / Cursor / Windsurf | stdio → HTTP `/v1` | [mcp.md](mcp.md) |
+
+For wiring several agents into a handoff pipeline, see the
+[orchestration guide](../orchestration.md).
 
 - **TS / Vercel** talks to the core over the HTTP boundary ([`api.md`](../api.md)).
 - **Python** adapters (LangChain, CrewAI) run **in-process** with the core — no HTTP

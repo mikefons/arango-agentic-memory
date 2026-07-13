@@ -600,7 +600,8 @@ a separate concern (MA-7).
 `POST /v1/prime` (MA-3) is the handoff verb over this: given a task it composes one
 budgeted briefing — retrieved history + the entities those memories mention + the read
 agents' most-reused tool runs — so the next agent starts warm instead of hand-crafting
-a query.
+a query. See the [orchestration guide](orchestration.md) for the end-to-end pipeline
+pattern (naming, per-harness recipes, the orchestrator/brain seam).
 
 ---
 

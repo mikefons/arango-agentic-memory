@@ -9,6 +9,7 @@ Start here. Pick the doc for what you're doing — they link rather than duplica
 | Run / configure / operate the service (env, jobs, scaling, security) | [ops.md](ops.md) |
 | Troubleshoot a problem | [ops.md → Troubleshooting](ops.md#troubleshooting) |
 | Wire an adapter (Vercel · LangChain · CrewAI · MCP) | [adapters/](adapters/README.md) |
+| Orchestrate a multi-agent pipeline (handoff: A writes → B primes) | [orchestration.md](orchestration.md) |
 | Understand the architecture + design decisions | [DESIGN.md](DESIGN.md) |
 | See what's planned (multi-agent handoff work packages) | [ROADMAP.md](ROADMAP.md) |
 | The Guild — the game demo's multi-agent redesign | [GUILD.md](GUILD.md) |
