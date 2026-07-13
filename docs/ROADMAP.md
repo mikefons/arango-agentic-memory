@@ -313,7 +313,9 @@ new endpoints, and a namespacing convention. Nobody can discover the intended pa
 **Acceptance.** A newcomer can build the three-stage pipeline from the doc alone against
 a local compose stack; lychee link check green.
 
----
+**Shipped** (`docs/orchestration.md`, linked from the docs index + DESIGN §14 + the
+adapters index). LangGraph recipe uses the in-process `prime()` call directly (no
+`prime` graph node was added). Also fixed the adapters index (9 → 11 MCP tools).
 
 ## MA-7 — Per-agent key binding + insight-tier write protection
 

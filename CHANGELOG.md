@@ -44,6 +44,9 @@ it has not yet been tagged or published to a registry.
 - Handoff eval (MA-5, `eval/handoff.py` + `make handoff-eval`): scores the multi-agent
   path — a writer ingests facts + tool runs, a reader `prime`s across `read_agent_ids`
   after a barrier — on context + procedural recall. Keyless smoke slice gates CI.
+- Orchestration guide (MA-6, `docs/orchestration.md`): the end-to-end handoff pattern —
+  naming conventions, a worked planner→researcher→writer pipeline, per-harness recipes,
+  and the orchestrator/brain seam.
 
 ### Added — durability & operations
 
