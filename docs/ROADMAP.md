@@ -283,7 +283,11 @@ token-overlap like `eval/locomo.py` — reuse, don't reimplement).
 **Acceptance.** `make handoff-eval` passes keyless in CI; deliberately breaking
 cross-agent reads (e.g. reverting MA-2's AQL) fails the gate.
 
----
+**Shipped** (`eval/handoff.py`, `tests/data/handoff_smoke.json`,
+`tests/test_handoff_eval.py`, `make handoff-eval`). Targets: context recall ≥ 0.8,
+procedural recall ≥ 0.6. Reader reads via `prime` (3 scenarios) + one `retrieve`-only
+(sync-boundary); the smoke slice gates via pytest in the Core CI job. The planned
+separate `sim/` tree was folded into `eval/`.
 
 ## MA-6 — Docs: multi-agent orchestration guide
 

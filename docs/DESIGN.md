@@ -849,6 +849,7 @@ The schema and core API are designed to support these without refactor.
 - Runs locally and in CI on a small fixed slice; full benchmark runs are manual/nightly.
 - Lite vs full mode compared on the same slice to quantify the quality/cost trade-off.
 - **Step 1 status:** the runner is implemented (`arango_memory.eval`) but **lite/BM25-only** and scored on a tiny hand-built smoke slice — it validates the ingest→index→retrieve→score *plumbing*, not real-data quality. Real-data quality is the job of the simulation harness below.
+- **Multi-agent handoff eval (MA-5, `eval/handoff.py`).** Scores the coordination layer, not just single-agent recall: a *writer* agent ingests facts + tool runs, then a *reader* (different `agent_id`) `prime`s across `read_agent_ids` (MA-2/MA-3) after a `force_view_sync` barrier (MA-1, zero sleeps) — measuring **context recall** (gold facts in the briefing) and **procedural recall** (gold tool runs surfaced). Scenarios cover clean A→B, a three-stage pipeline, distractor noise under a small budget, and a sync-boundary read. Keyless (BM25/FakeEmbedder) smoke slice runs as a pytest in CI, so reverting the cross-agent read or the barrier turns it red; `make handoff-eval` runs a larger BYO set. `sim/` (below) was folded into `eval/` — there is no separate `sim/` tree.
 
 ### Agentic simulation harness (real-data validation) — *requirement; lands as a milestone after Step 3 (§24)*
 
