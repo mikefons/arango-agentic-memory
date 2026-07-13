@@ -26,13 +26,54 @@ def store_memory(client: CoreClient, *, content: str, tenant_id: str, agent_id: 
 
 
 def search_memory(
-    client: CoreClient, *, query: str, tenant_id: str, agent_id: str, mode: str = "lite"
+    client: CoreClient,
+    *,
+    query: str,
+    tenant_id: str,
+    agent_id: str,
+    mode: str = "lite",
+    read_agent_ids: list[str] | None = None,
 ) -> Any:
-    """Retrieve relevant memories for a query (assembled context + hits)."""
-    ctx = {"tenant_id": tenant_id, "agent_id": agent_id, "access_level": "read"}
+    """Retrieve relevant memories for a query (assembled context + hits).
+
+    `read_agent_ids` (MA-2) reads across several agents in one fused pass.
+    """
+    ctx = {
+        "tenant_id": tenant_id, "agent_id": agent_id, "access_level": "read",
+        "read_agent_ids": read_agent_ids,
+    }
     return client.post(
         "/v1/retrieve", json={"query": query, "ctx": ctx, "opts": {"mode": mode}}
     ).json()
+
+
+def prime_memory(
+    client: CoreClient,
+    *,
+    task: str,
+    tenant_id: str,
+    agent_id: str,
+    read_agent_ids: list[str] | None = None,
+    mode: str = "lite",
+) -> Any:
+    """Task briefing for a handoff (MA-3): history + key entities + prior tool runs,
+    spanning `read_agent_ids`. The main entry point for an agent picking up a job."""
+    ctx = {
+        "tenant_id": tenant_id, "agent_id": agent_id, "access_level": "read",
+        "read_agent_ids": read_agent_ids,
+    }
+    return client.post(
+        "/v1/prime", json={"task": task, "ctx": ctx, "opts": {"mode": mode}}
+    ).json()
+
+
+def flush_memory(
+    client: CoreClient, *, tenant_id: str, agent_id: str, timeout_ms: int = 5000
+) -> Any:
+    """Read-your-writes barrier (MA-1): block until this tenant's queued writes have
+    committed and are retrievable — call between agent stages before the next reads."""
+    ctx = {"tenant_id": tenant_id, "agent_id": agent_id, "access_level": "read"}
+    return client.post("/v1/flush", json={"ctx": ctx, "timeout_ms": timeout_ms}).json()
 
 
 def record_step(

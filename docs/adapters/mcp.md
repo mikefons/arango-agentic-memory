@@ -1,8 +1,9 @@
 # MCP Server
 
 `arango_memory.mcp` — a [FastMCP](https://github.com/jlowin/fastmcp) **stdio**
-server that exposes the core's `/v1` HTTP API as 9 tools, so MCP clients (Claude
-Desktop, Cursor, Windsurf) get agentic memory without writing code.
+server that exposes the core's `/v1` HTTP API as 11 tools, so MCP clients (Claude
+Desktop, Cursor, Windsurf) get agentic memory — including multi-agent handoff — without
+writing code.
 
 ## Install & run
 ```bash
@@ -31,12 +32,14 @@ The server is a **client of the core** — start the core first (see [ops.md](..
 ```
 
 ## Tools
-Nine thin wrappers over the endpoints in [api.md](../api.md):
+Eleven thin wrappers over the endpoints in [api.md](../api.md):
 
 | Tool | Maps to |
 |---|---|
 | `store` | `POST /v1/store` — persist a memory |
-| `search` | `POST /v1/retrieve` — hybrid recall (`mode`: `lite`/`full`) |
+| `search` | `POST /v1/retrieve` — hybrid recall (`mode`; optional `read_agent_ids` for multi-agent, MA-2) |
+| `prime` | `POST /v1/prime` — task briefing for a handoff: history + entities + tool runs (MA-3) |
+| `flush` | `POST /v1/flush` — barrier: block until queued writes are readable (MA-1) |
 | `record_step` | `POST /v1/step` — log a procedural tool step |
 | `list_steps` | `GET /v1/steps` — replay steps (optional `tool_name`) |
 | `forget` | `POST /v1/forget` — soft-delete (right to be forgotten) |

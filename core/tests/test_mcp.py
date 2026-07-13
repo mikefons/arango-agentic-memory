@@ -61,10 +61,28 @@ def test_seed_and_entity_tools(api: TestClient) -> None:
     assert one["entity"]["id"] == entities[0]["id"]
 
 
+def test_prime_and_flush_tools(api: TestClient) -> None:
+    # Agent A writes (sync so it's immediately visible); agent B primes across the tier.
+    api.post("/v1/store", json={
+        "content": "the bridge is trapped",
+        "ctx": {"tenant_id": "mcp5", "agent_id": "shared", "access_level": "write"},
+        "sync": True,
+    })
+    briefing = tools.prime_memory(
+        api, task="is the bridge safe", tenant_id="mcp5", agent_id="b",
+        read_agent_ids=["b", "shared"],
+    )
+    assert "bridge" in briefing["context"].lower()
+    assert set(briefing) == {"context", "hits", "entities", "steps", "tokens_injected"}
+
+    flushed = tools.flush_memory(api, tenant_id="mcp5", agent_id="b")
+    assert flushed["status"] in {"flushed", "timeout"}
+
+
 async def test_server_registers_expected_tools() -> None:
     server = build_server()
     names = {tool.name for tool in await server.list_tools()}
     assert names == {
-        "store", "search", "record_step", "list_steps", "forget", "stats",
-        "get_entity", "list_entities", "seed",
+        "store", "search", "prime", "flush", "record_step", "list_steps", "forget",
+        "stats", "get_entity", "list_entities", "seed",
     }

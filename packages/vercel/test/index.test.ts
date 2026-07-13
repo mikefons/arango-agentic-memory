@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { arangoMemory } from '../src/index.js';
+import { arangoMemory, flush, prime } from '../src/index.js';
 
 const OPTS = { coreUrl: 'http://core', tenantId: 't1', agentId: 'a1' };
 
@@ -141,5 +141,92 @@ describe('wrapGenerate (store + tool capture)', () => {
     expect(steps[0].body.prev_step_key).toBeUndefined();   // first step
     expect(steps[1].body.tool_name).toBe('book');
     expect(steps[1].body.prev_step_key).toBe('S1');         // chained from the first
+  });
+});
+
+describe('captureResponses (MA-4 — store the model output)', () => {
+  it('stores the assistant response as a second turn', async () => {
+    const m = mockFetch({ '/v1/store': () => ({ ok: true, json: async () => ({}) }) });
+    const mw = arangoMemory(OPTS);
+    const params: any = { prompt: userPrompt('ask') };
+    const result = { content: [{ type: 'text', text: 'the answer is 42' }] };
+
+    await mw.wrapGenerate!({ doGenerate: async () => result as any, params, model: {} as any });
+    await vi.waitFor(() => expect(m.of('/v1/store').length).toBe(2));
+    const stored = m.of('/v1/store').map((s) => s.body.content);
+    expect(stored).toContain('ask');
+    expect(stored).toContain('[assistant] the answer is 42');
+  });
+
+  it('does not store the response when captureResponses is false', async () => {
+    const m = mockFetch({ '/v1/store': () => ({ ok: true, json: async () => ({}) }) });
+    const mw = arangoMemory({ ...OPTS, captureResponses: false });
+    const params: any = { prompt: userPrompt('ask') };
+    const result = { content: [{ type: 'text', text: 'hidden' }] };
+
+    await mw.wrapGenerate!({ doGenerate: async () => result as any, params, model: {} as any });
+    await vi.waitFor(() => expect(m.of('/v1/store').length).toBe(1));
+    expect(m.of('/v1/store')[0].body.content).toBe('ask');
+  });
+
+  it('taps the stream and stores the accumulated response onFinish', async () => {
+    const m = mockFetch({ '/v1/store': () => ({ ok: true, json: async () => ({}) }) });
+    const mw = arangoMemory(OPTS);
+    const params: any = { prompt: userPrompt('ask') };
+    const source = new ReadableStream({
+      start(c) {
+        c.enqueue({ type: 'text-delta', id: '1', delta: 'hel' });
+        c.enqueue({ type: 'text-delta', id: '1', delta: 'lo' });
+        c.close();
+      },
+    });
+
+    const out: any = await mw.wrapStream!({ doStream: async () => ({ stream: source }) as any, params, model: {} as any });
+    // Drain the returned stream so the tap's flush() runs.
+    const reader = out.stream.getReader();
+    while (!(await reader.read()).done) { /* consume */ }
+    await vi.waitFor(() => expect(m.of('/v1/store').some((s) => s.body.content === '[assistant] hello')).toBe(true));
+  });
+});
+
+describe('syncWrites + readAgentIds (MA-1b / MA-2b)', () => {
+  it('sends sync:true on stores when syncWrites is set', async () => {
+    const m = mockFetch({ '/v1/store': () => ({ ok: true, json: async () => ({}) }) });
+    const mw = arangoMemory({ ...OPTS, syncWrites: true, captureResponses: false });
+    await mw.wrapGenerate!({ doGenerate: async () => ({}) as any, params: { prompt: userPrompt('x') } as any, model: {} as any });
+    await vi.waitFor(() => expect(m.of('/v1/store').length).toBe(1));
+    expect(m.of('/v1/store')[0].body.sync).toBe(true);
+  });
+
+  it('threads readAgentIds into the retrieve ctx', async () => {
+    const m = mockFetch({ '/v1/retrieve': () => ({ ok: true, json: async () => ({ context: '' }) }) });
+    const mw = arangoMemory({ ...OPTS, readAgentIds: ['a1', 'crew::query'] });
+    await mw.transformParams!({ params: { prompt: userPrompt('q') } as any, type: 'generate', model: {} as any });
+    expect(m.of('/v1/retrieve')[0].body.ctx.read_agent_ids).toEqual(['a1', 'crew::query']);
+  });
+});
+
+describe('prime + flush helpers (MA-3b / MA-1b)', () => {
+  it('prime posts the task and returns the briefing', async () => {
+    const briefing = { context: '## Relevant history\n- x', hits: [], entities: [], steps: [], tokens_injected: 5 };
+    const m = mockFetch({ '/v1/prime': () => ({ ok: true, json: async () => briefing }) });
+    const res = await prime({ coreUrl: 'http://core', task: 'brief me', tenantId: 't', agentId: 'b', readAgentIds: ['b', 'shared'] });
+    expect(res).toEqual(briefing);
+    expect(m.of('/v1/prime')[0].body.task).toBe('brief me');
+    expect(m.of('/v1/prime')[0].body.ctx.read_agent_ids).toEqual(['b', 'shared']);
+  });
+
+  it('prime returns an empty briefing on fault', async () => {
+    mockFetch({ '/v1/prime': () => { throw new Error('down'); } });
+    const res = await prime({ coreUrl: 'http://core', task: 't', tenantId: 't', agentId: 'a' });
+    expect(res.context).toBe('');
+    expect(res.hits).toEqual([]);
+  });
+
+  it('flush posts the barrier and returns status', async () => {
+    const m = mockFetch({ '/v1/flush': () => ({ ok: true, json: async () => ({ status: 'flushed' }) }) });
+    const res = await flush({ coreUrl: 'http://core', tenantId: 't', agentId: 'a', timeoutMs: 3000 });
+    expect(res.status).toBe('flushed');
+    expect(m.of('/v1/flush')[0].body.timeout_ms).toBe(3000);
   });
 });
