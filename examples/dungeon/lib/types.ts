@@ -7,6 +7,7 @@ export interface Ctx {
   agent_id: string;
   session_id?: string;
   access_level?: AccessLevel;
+  read_agent_ids?: string[]; // read across several agents in one fused pass (MA-2)
 }
 
 export interface StoreResult {
@@ -19,12 +20,28 @@ export interface MemoryHit {
   text: string;
   score: number;
   source: string;
+  agent_id?: string; // provenance: which agent wrote it (MA-2)
 }
 
 export interface RetrieveResult {
   context: string;
   hits: MemoryHit[];
   tokens_injected: number;
+}
+
+/** Task briefing (MA-3) — history + key entities + prior tool runs. */
+export interface PrimeResult {
+  context: string;
+  hits: MemoryHit[];
+  entities: Array<Record<string, unknown>>;
+  steps: Array<Record<string, unknown>>;
+  tokens_injected: number;
+}
+
+/** Read-your-writes barrier result (MA-1). */
+export interface FlushResult {
+  status: "flushed" | "timeout";
+  pending?: number;
 }
 
 /** Entities never carry embeddings over the wire (§17 inversion defense). */

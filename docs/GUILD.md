@@ -193,6 +193,16 @@ compose stack); provenance color mapping stable per hero.
 **Acceptance.** A player can watch memory become context, shape it under a budget, and
 see whose knowledge they're inheriting — with zero explanation needed.
 
+**Shipped** (`app/api/prime` + `app/api/flush` routes, `lib/core` `prime()`/`flush()`,
+`lib/briefing.ts` + test, `components/HandoffBriefing.tsx`, `DungeonGame` phase flow,
+briefing CSS). **Refinements vs. the plan:** (1) **provenance is briefing badges**
+(`you`/`guild` on history items via `MemoryHit.agent_id`), *not* graph-node tint — E-1
+writes all world facts to `guild::query`, so per-hero graph tint would be meaningless;
+(2) **injection is visualize-only** — the screen previews `prime()`, and the hero's real
+turn-1 context still comes from the middleware `retrieve(readAgentIds)` (which reads the
+same ledger); pin/drop is a budget-visualization affordance. Literal first-turn injection
+is a future enhancement.
+
 ---
 
 ### E-3 — Hero personas + guild-aware NPCs

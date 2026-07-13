@@ -22,7 +22,18 @@ import { DungeonMap } from "./DungeonMap";
 import { Dossier } from "./Dossier";
 import { TabNav } from "./TabNav";
 import { buildShareUrl } from "@/lib/share";
-import { firstExpedition, nextExpedition, spendTorch, TORCH_BUDGET } from "@/lib/expedition";
+import {
+  firstExpedition,
+  heroId,
+  nextExpedition,
+  spendTorch,
+  TORCH_BUDGET,
+} from "@/lib/expedition";
+import { HandoffBriefing } from "./HandoffBriefing";
+import type { PrimeResult } from "@/lib/types";
+
+const NEXT_HERO_TASK = "Descend into Ashfall Keep and expose the lies the last heroes could not.";
+const BRIEFING_TOKENS = 1500;
 
 const EMPTY_GAME: GameState = {
   roomId: START_ROOM, inventory: [], heardClaims: [], caughtClaims: [], ...firstExpedition(),
@@ -224,47 +235,64 @@ export function DungeonGame() {
     }
   }, []);
 
-  const startNextExpedition = useCallback(
-    async (chronicle: boolean) => {
-      const g = gameRef.current;
-      if (chronicle) {
-        narrate("The Chronicler writes the expedition into the Great Ledger…");
-        const room = getRoom(g.roomId);
-        const summary =
-          `Expedition ${g.expedition} (${g.heroId}): reached the ${room.name}, ` +
-          `carried ${g.inventory.length} item(s), heard ${g.heardClaims.length} claim(s), ` +
-          `caught ${g.caughtClaims.length} lie(s).`;
-        await fetch("/api/chronicle", {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ summary }),
-        }).catch(() => undefined);
-        await runDream(); // the keep settles what the hero learned
-      }
-      const next = freshHero(g.expedition);
-      persistGame(next);
-      try {
-        localStorage.removeItem(MSG_KEY); // the new hero's context window is empty
-      } catch {
-        /* ignore */
-      }
-      setMessages([
-        {
-          id: `hero-${next.expedition}`,
-          role: "assistant",
-          parts: [
-            {
-              type: "text",
-              text:
-                `${next.heroId} descends into Ashfall Keep, torch freshly lit. ` +
-                `The guild's ledger remembers what the last hero did not.`,
-            },
-          ],
-        },
-      ]);
-    },
-    [narrate, runDream, persistGame, setMessages],
-  );
+  // Chronicle → briefing → send (E-2). Phase gates the modal vs. the briefing screen.
+  const [phase, setPhase] = useState<"playing" | "chronicling" | "briefing">("playing");
+  const [briefing, setBriefing] = useState<PrimeResult | null>(null);
+
+  // Retire the current hero (fresh hero, empty transcript). The guild ledger persists.
+  const descendNextHero = useCallback(() => {
+    const next = freshHero(gameRef.current.expedition);
+    persistGame(next);
+    try {
+      localStorage.removeItem(MSG_KEY); // the new hero's context window is empty
+    } catch {
+      /* ignore */
+    }
+    setMessages([
+      {
+        id: `hero-${next.expedition}`,
+        role: "assistant",
+        parts: [
+          {
+            type: "text",
+            text:
+              `${next.heroId} descends into Ashfall Keep, torch freshly lit. ` +
+              `The guild's ledger remembers what the last hero did not.`,
+          },
+        ],
+      },
+    ]);
+    setBriefing(null);
+    setPhase("playing");
+  }, [persistGame, setMessages]);
+
+  // Chronicle the departing hero, then prime the next one and show the briefing screen.
+  const beginChronicle = useCallback(async () => {
+    const g = gameRef.current;
+    setPhase("chronicling");
+    const room = getRoom(g.roomId);
+    const summary =
+      `Expedition ${g.expedition} (${g.heroId}): reached the ${room.name}, ` +
+      `carried ${g.inventory.length} item(s), heard ${g.heardClaims.length} claim(s), ` +
+      `caught ${g.caughtClaims.length} lie(s).`;
+    await fetch("/api/chronicle", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ summary }),
+    }).catch(() => undefined);
+    await fetch("/api/flush", { method: "POST" }).catch(() => undefined); // MA-1 barrier
+    await runDream(); // the keep settles what the hero learned
+    const nextHero = heroId(g.expedition + 1);
+    const brief = await fetch("/api/prime", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ task: NEXT_HERO_TASK, heroId: nextHero }),
+    })
+      .then((r) => (r.ok ? (r.json() as Promise<PrimeResult>) : null))
+      .catch(() => null);
+    setBriefing(brief ?? { context: "", hits: [], entities: [], steps: [], tokens_injected: 0 });
+    setPhase("briefing");
+  }, [runDream]);
 
   function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -328,8 +356,8 @@ export function DungeonGame() {
           </button>
           <button
             className="dream-btn"
-            onClick={() => startNextExpedition(false)}
-            disabled={dreaming}
+            onClick={descendNextHero}
+            disabled={dreaming || phase !== "playing"}
             title="Flee — retire this hero without chronicling (its findings are lost)"
           >
             ⚑ flee
@@ -419,7 +447,7 @@ export function DungeonGame() {
         </div>
       </footer>
 
-      {game.torch <= 0 && (
+      {game.torch <= 0 && phase === "playing" && (
         <div className="expedition-over" role="dialog" aria-modal="true">
           <div className="eo-card">
             <h2>{game.heroId}&rsquo;s torch gutters out.</h2>
@@ -427,11 +455,29 @@ export function DungeonGame() {
               The dark closes in. What this hero learned dies with them &mdash; unless the
               Chronicler writes it into the guild&rsquo;s ledger for the next to inherit.
             </p>
-            <button className="send" onClick={() => startNextExpedition(true)} disabled={dreaming}>
-              {dreaming ? "chronicling…" : "The Chronicler writes → send the next hero"}
+            <button className="send" onClick={beginChronicle}>
+              The Chronicler writes &rarr; brief the next hero
             </button>
           </div>
         </div>
+      )}
+
+      {phase === "chronicling" && (
+        <div className="expedition-over" role="dialog" aria-modal="true">
+          <div className="eo-card">
+            <h2>The Chronicler writes…</h2>
+            <p>Committing the hero&rsquo;s findings to the guild ledger, then assembling the briefing.</p>
+          </div>
+        </div>
+      )}
+
+      {phase === "briefing" && briefing && (
+        <HandoffBriefing
+          briefing={briefing}
+          maxTokens={BRIEFING_TOKENS}
+          heroLabel={heroId(game.expedition + 1)}
+          onSend={descendNextHero}
+        />
       )}
     </div>
   );

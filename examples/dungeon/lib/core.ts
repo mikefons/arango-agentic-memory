@@ -14,6 +14,8 @@ import type {
   DreamResult,
   Entity,
   EntityDetail,
+  FlushResult,
+  PrimeResult,
   RetrieveOpts,
   RetrieveResult,
   Step,
@@ -77,6 +79,22 @@ export function retrieve(query: string, ctx: Ctx, opts?: RetrieveOpts): Promise<
   return coreFetch<RetrieveResult>("/v1/retrieve", {
     method: "POST",
     body: JSON.stringify({ query, ctx: { access_level: "read", ...ctx }, opts }),
+  });
+}
+
+/** Task briefing for a handoff (MA-3): history + key entities + prior tool runs. */
+export function prime(task: string, ctx: Ctx, opts?: RetrieveOpts): Promise<PrimeResult> {
+  return coreFetch<PrimeResult>("/v1/prime", {
+    method: "POST",
+    body: JSON.stringify({ task, ctx: { access_level: "read", ...ctx }, opts }),
+  });
+}
+
+/** Read-your-writes barrier (MA-1): block until the tenant's queued writes land. */
+export function flush(ctx: Ctx, timeoutMs = 5000): Promise<FlushResult> {
+  return coreFetch<FlushResult>("/v1/flush", {
+    method: "POST",
+    body: JSON.stringify({ ctx, timeout_ms: timeoutMs }),
   });
 }
 
