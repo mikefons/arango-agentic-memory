@@ -7,12 +7,25 @@ from typing import Literal
 from pydantic import BaseModel, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+# Access scopes, ordered least → most privileged (MA-7). `consolidate` is a superset
+# of `write` (may also do normal writes) and is required to write an `*::insight` tier.
+Scope = Literal["read", "write", "consolidate"]
+_SCOPE_RANK: dict[str, int] = {"read": 0, "write": 1, "consolidate": 2}
+
+
+def scope_allows(have: str, need: str) -> bool:
+    """True if `have` is at least as privileged as `need` (MA-7 ordered scopes)."""
+    return _SCOPE_RANK.get(have, -1) >= _SCOPE_RANK.get(need, 99)
+
 
 class ApiKeyEntry(BaseModel):
-    """What an API key grants (DESIGN.md §17): a single tenant + read/write scope."""
+    """What an API key grants (DESIGN.md §17): a tenant, a scope, and optionally the
+    set of agents it may act as (MA-7). `agent_ids=None` → any agent (default). Entries
+    support a glob-lite suffix (`"research::*"`) to grant a whole crew tier."""
 
     tenant_id: str
-    scope: Literal["read", "write"] = "read"
+    scope: Scope = "read"
+    agent_ids: list[str] | None = None
 
 
 class Settings(BaseSettings):
@@ -154,6 +167,9 @@ class Settings(BaseSettings):
     oidc_algorithms: tuple[str, ...] = ("RS256",)
     oidc_tenant_claim: str = "tenant_id"
     oidc_scope_claim: str = "scope"
+    # Optional JWT claim (MA-7) whose value (string or list) restricts which agents the
+    # token may act as — the OIDC parity of `ApiKeyEntry.agent_ids`. Unset → any agent.
+    oidc_agent_claim: str | None = None
     # Clock-skew tolerance (seconds) for exp/nbf validation.
     oidc_leeway_seconds: int = Field(default=60, ge=0)
     # Durable write queue (DESIGN.md §15). "memory" = in-process (fast, zero-config —

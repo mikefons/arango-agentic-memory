@@ -46,7 +46,8 @@ Every memory operation is scoped by an **access context**:
 ## Authentication (§17)
 
 Static **bearer API keys**, configured on the core via `API_KEYS` (a JSON map
-`key → {tenant_id, scope}`, scope `read`|`write`). Send `Authorization: Bearer <key>`.
+`key → {tenant_id, scope, agent_ids?}`, scope `read`|`write`|`consolidate`). Send
+`Authorization: Bearer <key>`.
 
 - **Open by default** — when no keys are configured the core runs **open**: the
   request's `tenant_id`/`access_level` are trusted (the keyless dev/CI/demo posture).
@@ -54,6 +55,11 @@ Static **bearer API keys**, configured on the core via `API_KEYS` (a JSON map
   otherwise; `/health` stays public). The caller's **identity comes from the key**:
   the request's `tenant_id` must match the key's tenant (else `403`), and a write
   needs a `write`-scoped key — the body can no longer assert identity or escalate.
+- **Per-agent binding + insight protection (MA-7)** — an optional `agent_ids` list
+  scopes a key to specific agents (glob-lite suffix `"crew::*"` allowed): a write as
+  another agent is `403`, and cross-agent reads are silently filtered to the allowed
+  set. Writing an **`*::insight`** tier requires the ordered **`consolidate`** scope
+  (`read < write < consolidate`). `agent_ids` omitted → any agent (unchanged default).
 - Clients pass it through: Vercel adapter `arangoMemory({ apiKey })`, the dungeon
   `CORE_API_KEY`, the MCP server `ARANGO_MEMORY_API_KEY`.
 

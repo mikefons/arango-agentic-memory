@@ -71,6 +71,23 @@ def test_scope_from_roles_list() -> None:
     assert jwt_auth.verify_jwt(_sign(_claims(scope=["admin", "write"]))).scope == "write"
 
 
+def test_scope_consolidate(monkeypatch: pytest.MonkeyPatch) -> None:
+    # MA-7: consolidate is the highest scope and maps through from the claim.
+    assert jwt_auth.verify_jwt(_sign(_claims(scope="write consolidate"))).scope == "consolidate"
+
+
+def test_agent_claim_maps_to_binding(monkeypatch: pytest.MonkeyPatch) -> None:
+    # MA-7 OIDC parity: with oidc_agent_claim set, its value restricts the agents.
+    monkeypatch.setattr(settings, "oidc_agent_claim", "agents")
+    p = jwt_auth.verify_jwt(_sign(_claims(agents=["hero-1", "guild::*"])))
+    assert p.agent_ids == ("hero-1", "guild::*")
+
+
+def test_agent_claim_absent_means_any_agent(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(settings, "oidc_agent_claim", "agents")  # configured but claim missing
+    assert jwt_auth.verify_jwt(_sign(_claims())).agent_ids is None
+
+
 # ── verify_jwt: rejection matrix (all 401) ────────────────
 @pytest.mark.parametrize(
     "token_factory",

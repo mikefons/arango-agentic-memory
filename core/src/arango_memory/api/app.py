@@ -20,7 +20,7 @@ from pydantic import BaseModel, Field
 
 from .. import __version__
 from ..client import ArangoMemoryClient
-from ..config import settings
+from ..config import scope_allows, settings
 from ..embedding import Embedder, get_embedder
 from ..entity_api import get_entity, list_entities, seed
 from ..generation import Generator, get_generator
@@ -43,7 +43,7 @@ from ..retrieve.enrich import QueryCache
 from ..retrieve.prime import Include, prime
 from ..retrieve.search import force_view_sync, retrieve
 from ..schema.collections import ensure_schema, vector_index_state
-from ..security.auth import require_principal
+from ..security.auth import agent_allowed, require_principal
 from ..security.forget import forget
 from ..stats import stats
 from ..telemetry import latency
@@ -93,26 +93,51 @@ class AccessContext(BaseModel):
     read_agent_ids: list[str] | None = None
 
 
-def _authorize(
-    request: Request, *, tenant_id: str, access_level: str = "read", write: bool = False
-) -> None:
-    """ABAC + authn (§17).
+def _is_insight_tier(agent_id: str) -> bool:
+    """The consolidated-insight tier (§14) — Dream-State-only; guarded by MA-7."""
+    return agent_id.endswith("::insight")
 
-    Enforced mode (an API key authenticated the caller): identity comes from the
-    **key** — the body's `tenant_id` must match it, and a write needs a write-scoped
-    key. Open mode (no keys configured): the body-asserted `access_level` governs
-    writes, exactly as before.
+
+def _authorize(
+    request: Request,
+    *,
+    tenant_id: str,
+    access_level: str = "read",
+    write: bool = False,
+    agent_id: str | None = None,
+    read_agent_ids: list[str] | None = None,
+) -> list[str] | None:
+    """ABAC + authn (§17, MA-7). Returns the (possibly filtered) `read_agent_ids`.
+
+    Enforced mode (an API key / JWT authenticated the caller): identity comes from the
+    **credential** — the body's `tenant_id` must match, a write needs a write-scoped
+    credential, and if the credential binds specific agents (MA-7) then writes must
+    target an allowed `agent_id` (else 403) while cross-agent reads are silently filtered
+    to the allowed set (§15 — degrade, never break). Writes to an `*::insight` tier
+    additionally require `consolidate` scope. Open mode (no credential): the body-asserted
+    `access_level` governs writes, exactly as before — agent binding does not apply.
     """
     tenant_var.set(tenant_id)  # correlation: tag this request's logs with the tenant
     principal = getattr(request.state, "principal", None)
     if principal is None:  # open mode — body-asserted ABAC (unchanged)
         if write and access_level != "write":
             raise HTTPException(status_code=403, detail="write access required")
-        return
+        return read_agent_ids
     if tenant_id != principal.tenant_id:
         raise HTTPException(status_code=403, detail="tenant mismatch")
-    if write and principal.scope != "write":
+    if write and not scope_allows(principal.scope, "write"):
         raise HTTPException(status_code=403, detail="write access required")
+    if write and agent_id is not None:
+        if _is_insight_tier(agent_id) and not scope_allows(principal.scope, "consolidate"):
+            raise HTTPException(
+                status_code=403, detail="consolidate scope required to write the ::insight tier"
+            )
+        if not agent_allowed(principal.agent_ids, agent_id):
+            raise HTTPException(status_code=403, detail="agent not permitted for this credential")
+    # Reads: drop agent ids outside the allow-list rather than failing the request.
+    if read_agent_ids is not None and principal.agent_ids is not None:
+        return [a for a in read_agent_ids if agent_allowed(principal.agent_ids, a)]
+    return read_agent_ids
 
 
 class RetrieveOptions(BaseModel):
@@ -411,7 +436,13 @@ async def store_endpoint(
     req: StoreRequest,
     queue: WriteQueue = Depends(get_queue_dep),
 ) -> StoreResponse:
-    _authorize(request, tenant_id=req.ctx.tenant_id, access_level=req.ctx.access_level, write=True)
+    _authorize(
+        request,
+        tenant_id=req.ctx.tenant_id,
+        access_level=req.ctx.access_level,
+        write=True,
+        agent_id=req.ctx.agent_id,
+    )
     # Durable write path (§15): enqueue and return immediately; the worker
     # commits asynchronously. Keys are deterministic from the idempotency key,
     # so they're known without committing; entity_ids are resolved async.
@@ -437,7 +468,13 @@ async def step_endpoint(
     req: StepRequest,
     queue: WriteQueue = Depends(get_queue_dep),
 ) -> StepResponse:
-    _authorize(request, tenant_id=req.ctx.tenant_id, access_level=req.ctx.access_level, write=True)
+    _authorize(
+        request,
+        tenant_id=req.ctx.tenant_id,
+        access_level=req.ctx.access_level,
+        write=True,
+        agent_id=req.ctx.agent_id,
+    )
     intent = StepIntent(
         tool_name=req.tool_name,
         arguments=req.arguments,
@@ -660,13 +697,18 @@ async def retrieve_endpoint(
     generator: Generator = Depends(get_generator_dep),
     cache: QueryCache = Depends(get_cache_dep),
 ) -> RetrieveResponse:
-    _authorize(request, tenant_id=req.ctx.tenant_id, access_level=req.ctx.access_level)
+    read_agent_ids = _authorize(
+        request,
+        tenant_id=req.ctx.tenant_id,
+        access_level=req.ctx.access_level,
+        read_agent_ids=req.ctx.read_agent_ids,
+    )
     result = retrieve(
         client.db,
         query=req.query,
         tenant_id=req.ctx.tenant_id,
         agent_id=req.ctx.agent_id,
-        read_agent_ids=req.ctx.read_agent_ids,
+        read_agent_ids=read_agent_ids,
         k=req.opts.k,
         max_memory_tokens=req.opts.max_memory_tokens,
         embedder=embedder,
@@ -694,13 +736,18 @@ async def prime_endpoint(
 ) -> PrimeResponse:
     """Task briefing for a handoff (MA-3): history + key entities + prior tool runs,
     assembled under one token budget, spanning ctx.read_agent_ids."""
-    _authorize(request, tenant_id=req.ctx.tenant_id, access_level=req.ctx.access_level)
+    read_agent_ids = _authorize(
+        request,
+        tenant_id=req.ctx.tenant_id,
+        access_level=req.ctx.access_level,
+        read_agent_ids=req.ctx.read_agent_ids,
+    )
     result = prime(
         client.db,
         task=req.task,
         tenant_id=req.ctx.tenant_id,
         agent_id=req.ctx.agent_id,
-        read_agent_ids=req.ctx.read_agent_ids,
+        read_agent_ids=read_agent_ids,
         mode=req.opts.mode,
         k=req.opts.k,
         max_memory_tokens=req.opts.max_memory_tokens,
