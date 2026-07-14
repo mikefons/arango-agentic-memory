@@ -349,6 +349,15 @@ list silently filtered; unbound key unchanged (regression); `::insight` write wi
 the demo deployment gets a scoped key without any dungeon change (its key lists
 `dungeon-player`… i.e. `agent_ids:["dm"]` + tenant as today).
 
+**Shipped.** `ApiKeyEntry.agent_ids` + ordered `scope` (`read < write < consolidate`,
+`scope_allows`); `Principal.agent_ids` + `agent_allowed` (glob-lite suffix); `_authorize`
+enforces agent binding on writes (403), filters cross-agent reads silently (§15), and
+gates `*::insight` writes behind `consolidate`; OIDC parity via `oidc_agent_claim` +
+`consolidate` in the scope claim. Wired on `store`/`step` (writes) and `retrieve`/`prime`
+(read filter). Fully backward compatible — `agent_ids=None` and open mode unchanged.
+Tests: `test_authz_agents.py` + JWT-parity cases (all in-process, CI-gated). Docs:
+`ops.md`/`api.md` key examples + `OIDC_AGENT_CLAIM`.
+
 ---
 
 ## MA-8 — Vector-index reliability + resume P1 benchmark

@@ -86,14 +86,24 @@ limiter + cache; see Optional shared layer).
 **Authentication (§17)** — bearer API keys. Set `API_KEYS` to a JSON map to enforce:
 ```bash
 API_KEYS='{"k_acme_live":{"tenant_id":"acme","scope":"write"},
-           "k_acme_ro":{"tenant_id":"acme","scope":"read"}}'
+           "k_acme_ro":{"tenant_id":"acme","scope":"read"},
+           "k_researcher":{"tenant_id":"acme","scope":"write","agent_ids":["research-1","research::*"]},
+           "k_curator":{"tenant_id":"acme","scope":"consolidate","agent_ids":["research::*"]}}'
 ```
 Unset → **open** (body-trusted, the keyless default). Set → `/v1` requires
 `Authorization: Bearer <key>` (`401` otherwise), and `tenant_id`/`access_level` are
 taken from the key, not the request (`403` on tenant mismatch or read-key write).
-`/health` stays public. **Rotation:** add the new key alongside the old, roll
-clients over, then drop the old key (both are valid while both are listed). Keep
-keys in the host env / a gitignored `.env`, never in the image or VCS.
+`/health` stays public.
+
+**Per-agent binding + scopes (MA-7).** A key may add `agent_ids` to restrict which
+agents it can act as: a **write** with a `ctx.agent_id` outside the list is `403`, and
+cross-agent **reads** are silently filtered to the allowed set (they degrade, never fail).
+Entries support a glob-lite suffix (`"research::*"`) for a whole crew tier. Scope is now
+ordered `read < write < consolidate`; writing an **`*::insight`** tier (consolidated
+memory, normally Dream-State-only) requires **`consolidate`** scope — a plain `write` key
+gets `403`. `agent_ids` omitted → any agent (the pre-MA-7 default; existing keys are
+unchanged). **Rotation:** add the new key alongside the old, roll clients over, then drop
+the old key. Keep keys in the host env / a gitignored `.env`, never in the image or VCS.
 
 **OIDC / JWT (§17)** — for federated/SSO deployments, set `OIDC_ISSUER` to also accept
 signed bearer **JWTs** from an external IdP (Auth0/Okta/Cognito/Keycloak/…). Coexists
@@ -107,7 +117,8 @@ against the static keys), so you can migrate incrementally.
 | `OIDC_JWKS_URI` | `{issuer}/.well-known/jwks.json` | Signing-key endpoint (cached, `kid`-rotated) |
 | `OIDC_ALGORITHMS` | `["RS256"]` | Signature-alg allowlist (blocks `none`/HS confusion) |
 | `OIDC_TENANT_CLAIM` | `tenant_id` | Claim mapped to the tenant |
-| `OIDC_SCOPE_CLAIM` | `scope` | Claim mapped to read/write (`write` if it contains "write") |
+| `OIDC_SCOPE_CLAIM` | `scope` | Claim mapped to read/write/consolidate (highest match wins) |
+| `OIDC_AGENT_CLAIM` | — | Optional (MA-7): claim whose value restricts the agents the token may act as (parity with a key's `agent_ids`) |
 | `OIDC_LEEWAY_SECONDS` | `60` | Clock-skew tolerance for `exp`/`nbf` |
 
 Verification is **fail-closed** (a JWKS-fetch error is a `401`, never an open pass).

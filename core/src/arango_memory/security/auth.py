@@ -28,7 +28,27 @@ class Principal:
     """An authenticated caller: the tenant it owns and what it may do."""
 
     tenant_id: str
-    scope: str  # "read" | "write"
+    scope: str  # "read" | "write" | "consolidate" (ordered; MA-7)
+    # Agents this caller may act as (MA-7). None → any agent. Entries may be a glob-lite
+    # suffix (`"research::*"`). Restricts writes (403) and filters cross-agent reads.
+    agent_ids: tuple[str, ...] | None = None
+
+
+def agent_allowed(allowed: tuple[str, ...] | None, agent_id: str) -> bool:
+    """True if `agent_id` is permitted by an `agent_ids` allow-list (MA-7).
+
+    `None` allows any agent. A pattern ending in `*` matches by prefix
+    (`"research::*"` → `research::query`); otherwise it's an exact match.
+    """
+    if allowed is None:
+        return True
+    for pat in allowed:
+        if pat.endswith("*"):
+            if agent_id.startswith(pat[:-1]):
+                return True
+        elif agent_id == pat:
+            return True
+    return False
 
 
 def _bearer(request: Request) -> str | None:
@@ -60,7 +80,11 @@ def require_principal(request: Request) -> Principal | None:
 
             principal = verify_jwt(token)
         elif (entry := settings.api_keys.get(token)) is not None:
-            principal = Principal(tenant_id=entry.tenant_id, scope=entry.scope)
+            principal = Principal(
+                tenant_id=entry.tenant_id,
+                scope=entry.scope,
+                agent_ids=tuple(entry.agent_ids) if entry.agent_ids is not None else None,
+            )
 
     if principal is None:
         raise HTTPException(
