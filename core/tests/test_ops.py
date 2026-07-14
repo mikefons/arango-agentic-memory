@@ -90,3 +90,4 @@ def test_cli_parser_recognizes_commands() -> None:
     assert parser.parse_args(["embeddings-migrate"]).command == "embeddings-migrate"
     assert parser.parse_args(["replay"]).command == "replay"
     assert parser.parse_args(["explain"]).command == "explain"
+    assert parser.parse_args(["vector-diag"]).command == "vector-diag"

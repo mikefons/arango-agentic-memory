@@ -381,6 +381,18 @@ DESIGN §7/§23.
 MODE=lite` completes without manual sysctl or password surgery; any failure prints a
 real error string; §23 report recorded.
 
+**Shipped (infra + reliability; the run itself is user-executed).** (1) compose
+`sysctl-init` raises `vm.max_map_count` before arangod; (2) the eval/ops CLIs call
+`configure_logging()` and the degrade path now logs `str(exc)` (the real AQL reason), not
+just the class name; (3) `vector_n_lists` 256→**64** + new `vector_train_factor` (**40**)
+defers index creation to `n_lists × factor` docs via `vector_training_threshold`, so IVF
+centroids train on enough points; (4) `/health` reports `vector: trained|deferred|unknown`;
+(5) `ops vector-diag` surfaces the raw failure; docs cover the `n_lists ≪ corpus` rule, the
+rebuild-needed-on-`n_lists`-change gotcha, the resume checklist, and the ArangoGraph
+BM25+graph posture. **Deferred (needs the user's machine):** the actual LoCoMo §23 run +
+recording results — everything above de-risks it. All CI-gated (338 core tests pass,
+including new threshold/health/diag coverage).
+
 ---
 
 ## Explicitly out of scope (decided, with reasons)

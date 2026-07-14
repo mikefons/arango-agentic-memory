@@ -2,9 +2,23 @@
 # Enterprise 3.12.9.1 — needed for vector-index auto-training (DESIGN.md §6/§7).
 # Requires ARANGO_LICENSE_KEY (set it in .env; never commit it).
 services:
+  # Raise vm.max_map_count before arangod starts (MA-8): building the Faiss vector
+  # index over thousands of docs mmaps heavily and crashes arangod at the default
+  # (262144). A privileged one-shot init sets it on the shared host kernel, then exits.
+  # If your runtime forbids privileged containers (rootless/podman), remove this and
+  # set the sysctl on the host instead: `sudo sysctl -w vm.max_map_count=1048576`.
+  sysctl-init:
+    image: busybox:1.36
+    command: ["sh", "-c", "sysctl -w vm.max_map_count=1048576"]
+    privileged: true
+    restart: "no"
+
   arangodb:
     image: arangodb/enterprise:3.12.9.1
     container_name: arango-memory-db
+    depends_on:
+      sysctl-init:
+        condition: service_completed_successfully
     environment:
       ARANGO_ROOT_PASSWORD: ${ARANGO_PASSWORD:-changeme}
       ARANGO_LICENSE_KEY: ${ARANGO_LICENSE_KEY:-}

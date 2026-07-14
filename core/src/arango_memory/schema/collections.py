@@ -153,6 +153,13 @@ def has_vector_index(db: StandardDatabase) -> bool:
     return any(idx.get("type") == "vector" for idx in indexes)
 
 
+def vector_index_state(db: StandardDatabase) -> str:
+    """The vector arm's state for /health (MA-8): 'trained' if the Faiss index exists,
+    else 'deferred' (corpus below the training threshold → BM25-only for now). A cheap
+    index-metadata check, safe to call on a liveness probe."""
+    return "trained" if has_vector_index(db) else "deferred"
+
+
 def drop_vector_index(db: StandardDatabase) -> bool:
     """Drop the Faiss IVF index if present (retrieval self-heals). Returns True if dropped."""
     memories = db.collection("memories")
@@ -163,20 +170,34 @@ def drop_vector_index(db: StandardDatabase) -> bool:
     return False
 
 
-def ensure_vector_index(db: StandardDatabase, *, dimensions: int, n_lists: int) -> bool:
+def vector_training_threshold(n_lists: int, train_factor: int) -> int:
+    """Docs the corpus needs before the IVF index is built: `n_lists × train_factor`.
+
+    ArangoDB raises ERR 1555 below `n_lists` docs, but training *at* `n_lists` gives
+    one point per centroid — useless recall. `train_factor` (MA-8) holds off until the
+    centroids have enough points to train on. Always ≥ `n_lists` so the ERR-1555 floor
+    is respected even if `train_factor` is 1.
+    """
+    return max(n_lists, n_lists * train_factor)
+
+
+def ensure_vector_index(
+    db: StandardDatabase, *, dimensions: int, n_lists: int, train_factor: int = 1
+) -> bool:
     """Create the Faiss IVF index on `memories.embedding` if warm enough.
 
-    The index can only be built once the corpus has ≥ `n_lists` documents
-    (ArangoDB raises ERR 1555 "vector index not ready" otherwise). Returns True
-    if the index exists (or was just created), False if creation was deferred —
-    in which case retrieval falls back to BM25 (DESIGN.md §7, §15).
+    Deferred until the corpus reaches `vector_training_threshold(n_lists, train_factor)`
+    documents, so the IVF centroids train on enough points (DESIGN.md §7, MA-8). Returns
+    True if the index exists (or was just created), False if creation was deferred — in
+    which case retrieval falls back to BM25 (DESIGN.md §7, §15).
     """
     if has_vector_index(db):
         return True
-    # Only attempt creation once warm enough to train; below the threshold the
-    # build raises ERR 1555 and can leave a phantom index behind. The shared
-    # index trains on the aggregate corpus across tenants (§7), so count is total.
-    if cast(int, db.collection("memories").count()) < n_lists:
+    # Only attempt creation once warm enough to train; below the threshold the build is
+    # either rejected (ERR 1555) or badly under-trained. The shared index trains on the
+    # aggregate corpus across tenants (§7), so count is total.
+    corpus = cast(int, db.collection("memories").count())
+    if corpus < vector_training_threshold(n_lists, train_factor):
         return False
     try:
         db.collection("memories").add_index(

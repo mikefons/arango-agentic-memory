@@ -13,10 +13,45 @@ from arango.database import StandardDatabase
 
 from arango_memory.config import settings
 from arango_memory.ingest.store import store
-from arango_memory.retrieve.search import RetrieveResult, retrieve
-from arango_memory.schema.collections import ensure_vector_index, has_vector_index
+from arango_memory.retrieve.search import RetrieveResult, diagnose_vector, retrieve
+from arango_memory.schema.collections import (
+    ensure_vector_index,
+    has_vector_index,
+    vector_index_state,
+    vector_training_threshold,
+)
 
 _N_LISTS = 16
+
+
+def test_vector_training_threshold_math() -> None:
+    # factor 1 → just the ERR-1555 floor; higher factors hold off until well-trained (MA-8).
+    assert vector_training_threshold(64, 1) == 64
+    assert vector_training_threshold(64, 40) == 64 * 40
+    # never below n_lists even for a degenerate factor.
+    assert vector_training_threshold(16, 0) == 16
+
+
+def test_ensure_vector_index_defers_below_train_factor(db: StandardDatabase) -> None:
+    # 5 docs clears the raw n_lists floor (4) but not the training threshold (4×3=12),
+    # so the index defers rather than building an under-trained one (MA-8).
+    dims = settings.embedding_dimensions
+    for i in range(5):
+        store(db, content=f"doc {i}", tenant_id="t_factor", agent_id="a", turn_index=i)
+    assert ensure_vector_index(db, dimensions=dims, n_lists=4, train_factor=3) is False
+    assert has_vector_index(db) is False
+    assert vector_index_state(db) == "deferred"
+
+
+def test_diagnose_vector_reports_state_and_no_raw_error_when_healthy(db: StandardDatabase) -> None:
+    store(db, content="a memory to retrieve", tenant_id="t_diag", agent_id="a")
+    report = diagnose_vector(db, tenant_id="t_diag")
+    assert report["ok"] is True  # BM25 arm works even with the vector index deferred
+    assert report["index_state"] == "deferred"
+    assert report["training_threshold"] == vector_training_threshold(
+        settings.vector_n_lists, settings.vector_train_factor
+    )
+    assert "error" not in report
 
 
 def test_vector_index_deferred_until_warm_then_fuses(db: StandardDatabase) -> None:

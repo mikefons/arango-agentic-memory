@@ -105,8 +105,14 @@ class Settings(BaseSettings):
     max_memory_tokens: int = Field(default=1500, ge=0)
     n_probe: int = Field(default=10, ge=1)
     k: int = Field(default=10, ge=1)
-    # Faiss IVF training tier (DESIGN.md §7): index trains once corpus ≥ n_lists.
-    vector_n_lists: int = Field(default=256, ge=1)
+    # Faiss IVF partitions (DESIGN.md §7). Keep well below the corpus size — IVF
+    # trains one centroid per list, so `n_lists ≪ docs` (see `vector_train_factor`).
+    vector_n_lists: int = Field(default=64, ge=1)
+    # Defer index creation until the corpus is `n_lists × factor` documents, so the
+    # IVF centroids train on enough points. Building at exactly `n_lists` docs yields
+    # one point per centroid — badly under-trained (MA-8). Below the tier, retrieval
+    # stays BM25-only (§7, §15).
+    vector_train_factor: int = Field(default=40, ge=1)
     # Graph expansion (DESIGN.md §9 stage 4): relates_to hops from seed entities (3 max).
     graph_hops: int = Field(default=2, ge=0, le=3)
     # Episodic decay (DESIGN.md §11): effective_strength = strength · exp(-λ · Δdays).

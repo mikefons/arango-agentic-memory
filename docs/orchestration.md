@@ -144,6 +144,15 @@ Both cover **BM25 + graph**; the **vector arm** updates on its own cadence and i
 covered — so use `sync`/`flush` at **stage boundaries, not every turn**. Full detail:
 DESIGN.md §15.
 
+## Managed deploy (ArangoGraph) — supported posture
+
+ArangoGraph (managed ArangoDB) **cannot pass `--vector-index`**, so the Faiss vector arm
+is unavailable there. The core degrades cleanly to **BM25 + graph (lite mode)** — the
+consistency guarantees above are unchanged, and `GET /health` reports `vector: deferred`.
+For the full vector arm, self-host the Enterprise image (see [ops.md](ops.md) — the
+`docker compose` stack raises `vm.max_map_count` and trains the index once the corpus is
+warm). The live demo runs this posture: BM25+graph on ArangoGraph, vector on self-hosted.
+
 ## See also
 - [handoff eval](../core/src/arango_memory/eval/handoff.py) — the executable spec of this
   pattern (writer → reader, scored, CI-gated).

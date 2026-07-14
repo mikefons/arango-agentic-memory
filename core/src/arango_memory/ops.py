@@ -10,11 +10,13 @@ Commands:
   embeddings-migrate re-embed docs on a model change (stale only), then rebuild
   replay             re-enqueue + commit dead-lettered writes (§15)
   explain            EXPLAIN the hot-path queries; flag full-collection scans (§6)
+  vector-diag        probe the vector arm; print the raw failure reason (MA-8)
 """
 
 from __future__ import annotations
 
 import argparse
+import json
 from typing import Any, cast
 
 from arango.cursor import Cursor
@@ -28,13 +30,21 @@ from .ingest.extract import Extractor, get_extractor
 from .ingest.queue import InProcessQueue
 from .ingest.worker import WriteWorker
 from .models import utcnow_iso
+from .retrieve.search import diagnose_vector
 from .schema.collections import drop_vector_index, ensure_vector_index
+from .telemetry.logging import configure_logging
 
 
-def rebuild_vector_index(db: StandardDatabase, *, dimensions: int, n_lists: int) -> bool:
-    """Drop the Faiss IVF index and recreate it from the current corpus."""
+def rebuild_vector_index(
+    db: StandardDatabase, *, dimensions: int, n_lists: int, train_factor: int = 1
+) -> bool:
+    """Drop the Faiss IVF index and recreate it from the current corpus. The training
+    threshold (MA-8) still applies — a rebuild below it defers rather than building an
+    under-trained index."""
     drop_vector_index(db)
-    return ensure_vector_index(db, dimensions=dimensions, n_lists=n_lists)
+    return ensure_vector_index(
+        db, dimensions=dimensions, n_lists=n_lists, train_factor=train_factor
+    )
 
 
 def _reembed(db: StandardDatabase, collection: str, source_field: str, embedder: Embedder) -> int:
@@ -67,7 +77,10 @@ def migrate_embeddings(
         "entities": _reembed(db, "entities", "name", embedder),
     }
     rebuild_vector_index(
-        db, dimensions=embedder.dimensions, n_lists=n_lists or settings.vector_n_lists
+        db,
+        dimensions=embedder.dimensions,
+        n_lists=n_lists or settings.vector_n_lists,
+        train_factor=settings.vector_train_factor,
     )
     return counts
 
@@ -155,19 +168,33 @@ def _build_parser() -> argparse.ArgumentParser:
     sub.add_parser("embeddings-migrate", help="re-embed stale docs, then rebuild the index")
     sub.add_parser("replay", help="re-enqueue + commit dead-lettered writes")
     sub.add_parser("explain", help="EXPLAIN hot-path queries; flag full-collection scans")
+    sub.add_parser("vector-diag", help="probe the vector arm; print the raw failure reason")
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
+    # Configure logging first so any degradation prints the real reason, not a bare
+    # class name (MA-8) — the opacity that stalled the P1 benchmark.
+    configure_logging()
     args = _build_parser().parse_args(argv)
     db = ArangoMemoryClient().connect()
     embedder = get_embedder()
 
     if args.command == "vector-rebuild":
         built = rebuild_vector_index(
-            db, dimensions=embedder.dimensions, n_lists=settings.vector_n_lists
+            db,
+            dimensions=embedder.dimensions,
+            n_lists=settings.vector_n_lists,
+            train_factor=settings.vector_train_factor,
         )
-        print("vector index: rebuilt" if built else "vector index: deferred (corpus < n_lists)")
+        print(
+            "vector index: rebuilt"
+            if built
+            else "vector index: deferred (corpus < n_lists × train_factor)"
+        )
+    elif args.command == "vector-diag":
+        report = diagnose_vector(db, embedder=embedder)
+        print(json.dumps(report, indent=2))
     elif args.command == "embeddings-migrate":
         counts = migrate_embeddings(db, embedder=embedder)
         print(f"re-embedded: {counts}")

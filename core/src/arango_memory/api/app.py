@@ -42,7 +42,7 @@ from ..lifecycle.salience import compute_centrality
 from ..retrieve.enrich import QueryCache
 from ..retrieve.prime import Include, prime
 from ..retrieve.search import force_view_sync, retrieve
-from ..schema.collections import ensure_schema
+from ..schema.collections import ensure_schema, vector_index_state
 from ..security.auth import require_principal
 from ..security.forget import forget
 from ..stats import stats
@@ -337,9 +337,19 @@ async def health(client: ArangoMemoryClient = Depends(get_client)) -> dict[str, 
     # (so a DB blip can't trigger a liveness-probe restart loop — that's /ready's job).
     # `arango` is informational; `latency` is process-global p50/p95/p99 (§18/§23),
     # surfaced here (not /v1/stats, which is per-tenant). Wire k8s livenessProbe here.
+    arango = client.ping()
+    # Vector arm state (MA-8) — 'trained'/'deferred' when the DB is reachable, else
+    # 'unknown'. Best-effort so a DB blip can't fail the liveness probe.
+    vector = "unknown"
+    if arango:
+        try:
+            vector = vector_index_state(client.db)
+        except Exception:  # noqa: BLE001 — health must never raise
+            vector = "unknown"
     return {
         "status": "ok",
-        "arango": client.ping(),
+        "arango": arango,
+        "vector": vector,
         "mode": settings.memory_mode,
         "latency_ms": latency.snapshot(),
     }
