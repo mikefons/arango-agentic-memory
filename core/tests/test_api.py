@@ -20,6 +20,7 @@ def test_health(api: TestClient) -> None:
     body = resp.json()
     assert body["status"] == "ok"
     assert body["arango"] is True
+    assert body["vector"] in {"trained", "deferred"}  # MA-8: vector-arm state surfaced
     assert body["mode"] == "lite"
     assert isinstance(body["latency_ms"], dict)  # process-global p50/p95/p99 (§23)
 

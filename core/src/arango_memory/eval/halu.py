@@ -26,6 +26,7 @@ from ..client import ArangoMemoryClient
 from ..generation import Generator, get_generator
 from ..retrieve.search import retrieve
 from ..schema.collections import ensure_schema
+from ..telemetry.logging import configure_logging
 from .locomo import QA, Sample, load_dataset
 
 _ANSWER_SYSTEM = (
@@ -176,6 +177,8 @@ def _build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     from .locomo import run_eval
 
+    # Surface real degradation reasons during the run (MA-8).
+    configure_logging()
     args = _build_parser().parse_args(argv)
     db = ArangoMemoryClient().connect()
     ensure_schema(db)

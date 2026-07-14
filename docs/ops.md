@@ -68,7 +68,8 @@ need no API keys.
 | `MEMORY_MODE` | `lite` | `full` (adds HyDE + adaptive gate + prospective indexing) |
 
 **Behavior knobs** — retrieval: `MAX_MEMORY_TOKENS` (1500), `K` (10), `GRAPH_HOPS`
-(2), `VECTOR_N_LISTS` (256); lifecycle: `DECAY_LAMBDA` (0.02), `DECAY_FLOOR` (0.1),
+(2), `VECTOR_N_LISTS` (64), `VECTOR_TRAIN_FACTOR` (40 — index trains at
+`n_lists × factor` docs); lifecycle: `DECAY_LAMBDA` (0.02), `DECAY_FLOOR` (0.1),
 `CONSOLIDATION_MENTION_THRESHOLD` (5), `DREAM_BREAKER_THRESHOLD` (0.5),
 `CORROBORATION_BASE` (0.5), `ONTOLOGY_EVOLUTION` (`false`),
 `ONTOLOGY_MIN_SUPPORT` (3); working memory: `WORKING_SESSION_TTL_SECONDS` (3600),
@@ -190,15 +191,40 @@ set `GENERATION_PROVIDER=anthropic` + `ANTHROPIC_API_KEY` or it no-ops on the fa
 
 ## Vector index (§7)
 
-A Faiss IVF index trains lazily once the corpus reaches `VECTOR_N_LISTS` docs
-(ArangoDB errors below that), and the read path self-heals to BM25 until then.
+A Faiss IVF index trains lazily once the corpus reaches **`VECTOR_N_LISTS × VECTOR_TRAIN_FACTOR`**
+docs (defaults 64 × 40 = 2 560), and the read path self-heals to BM25 until then. The
+factor exists because IVF trains one centroid per list — building at exactly `n_lists`
+docs gives ~one point per centroid, which returns garbage (the `n_lists ≪ corpus` rule).
+Keep `VECTOR_N_LISTS` well below your expected corpus.
 
 ```bash
 python -m arango_memory.ops vector-rebuild        # drop + recreate the index
 python -m arango_memory.ops embeddings-migrate     # re-embed stale docs, then rebuild
+python -m arango_memory.ops vector-diag            # probe the arm; print the RAW failure reason
 ```
 Run `embeddings-migrate` after switching `EMBEDDING_PROVIDER`/`EMBEDDING_MODEL`
 (dimensions/version change). `purge` (hard delete) drops the index; it self-heals.
+`vector-diag` runs a real retrieval and prints the exact `AQLQueryExecuteError` (not the
+swallowed "retrieve degraded") plus the corpus/threshold/index-state — use it first when
+the vector arm looks off.
+
+**Changing `VECTOR_N_LISTS` needs a wipe or rebuild:** `ensure_vector_index` no-ops when an
+index already exists, so a new `n_lists` only takes effect after `ops vector-rebuild` (or
+`docker compose down -v`).
+
+### Running the LoCoMo benchmark (§23)
+
+Needs real embeddings (`EMBEDDING_PROVIDER=openai` + `OPENAI_API_KEY`) and the converted
+dataset (`core/converted.json`, gitignored — build it with `locomo_convert`).
+
+1. **One clean ArangoDB on 8529** — `docker ps | grep arango` should show exactly the
+   root-compose container. `docker compose up` now raises `vm.max_map_count` for you.
+2. **Start fresh so the index retrains at the current `n_lists`:** `docker compose down -v && up`.
+3. `make benchmark DATASET=converted.json MODE=lite` (from `core/`).
+4. **If it degrades:** `python -m arango_memory.ops vector-diag` prints the raw AQL error +
+   corpus/threshold/index-state. With defaults the vector index trains at 2 560 docs, so a
+   small run may legitimately stay BM25-only (`vector: deferred`) — lower `VECTOR_N_LISTS`
+   **and** `VECTOR_TRAIN_FACTOR` together for a small-corpus vector run.
 
 ---
 
@@ -206,8 +232,10 @@ Run `embeddings-migrate` after switching `EMBEDDING_PROVIDER`/`EMBEDDING_MODEL`
 
 - **`GET /ready`** — readiness: `200` when the DB is reachable, `503` when not (wire the
   orchestrator's readiness probe here; `/health` stays liveness-only). Public.
-- **`GET /health`** — liveness + DB reachability + process-global latency
-  (`{status, arango, mode, latency_ms}`). `latency_ms` holds p50/p95/p99 (ms) over
+- **`GET /health`** — liveness + DB reachability + vector-arm state + process-global
+  latency (`{status, arango, vector, mode, latency_ms}`). `vector` is `trained` /
+  `deferred` (corpus below the training threshold → BM25-only) / `unknown` (DB
+  unreachable). `latency_ms` holds p50/p95/p99 (ms) over
   a rolling window per operation (`retrieval.lite`, `retrieval.full`, `write`),
   for checking tail latency against the §23 targets (**core retrieval p99 ≤ 200ms;
   lite end-to-end ≤ 250ms**) without an OTEL exporter. Empty until traffic flows;
@@ -264,8 +292,10 @@ Run `embeddings-migrate` after switching `EMBEDDING_PROVIDER`/`EMBEDDING_MODEL`
 
 | Symptom | Cause / fix |
 |---|---|
-| Retrieval returns hits but **no vector results** | The Faiss IVF index trains only once the corpus reaches `VECTOR_N_LISTS` docs (default 256); below that the read path is **BM25-only** by design and self-heals. Confirm with `python -m arango_memory.ops explain` / check `has_vector_index`. |
-| `ERR 1554/1555 vector index not ready` on rebuild | Same threshold — the corpus is below `VECTOR_N_LISTS`. Wait for more data or lower `VECTOR_N_LISTS` for small deployments. |
+| Retrieval returns hits but **no vector results** | The Faiss IVF index trains only once the corpus reaches `VECTOR_N_LISTS × VECTOR_TRAIN_FACTOR` docs (default 64 × 40 = 2 560); below that the read path is **BM25-only** by design and self-heals. Check `GET /health` → `vector: deferred`, or `python -m arango_memory.ops vector-diag`. |
+| `ERR 1554/1555 vector index not ready` on rebuild | Corpus below the threshold. Wait for more data, or lower `VECTOR_N_LISTS` **and** `VECTOR_TRAIN_FACTOR` for small deployments — then `ops vector-rebuild` (a plain restart won't rebuild an existing index). |
+| Persistent **"retrieve degraded"** with no reason | Run `python -m arango_memory.ops vector-diag` — it prints the raw `AQLQueryExecuteError`. The CLIs now call `configure_logging()`, so `LOG_FORMAT=json` also surfaces the `detail` field. A common cause is an under-trained index built at the old `n_lists`-only threshold; `ops vector-rebuild`. |
+| arangod **crashes during index build** / `Connection refused` mid-run | `vm.max_map_count` too low for the Faiss mmap. `docker compose up` now raises it via the `sysctl-init` service; on a rootless/podman host set it manually: `sudo sysctl -w vm.max_map_count=1048576`. |
 | Connection refused / IPv6 weirdness on localhost | Use `ARANGO_URL=http://127.0.0.1:8529` (not `localhost`) to avoid IPv6 resolution issues. |
 | `failed_writes` is growing | Writes are exhausting retries (bad data or a downstream outage). Inspect the collection, fix the cause, then `python -m arango_memory.ops replay`. |
 | Writes accepted (`status:queued`) but never appear | With `WRITE_QUEUE_BACKEND=memory`, unacked work is **lost on crash** — set `WRITE_QUEUE_BACKEND=arango` in production. Also confirm the write worker thread is running (single process / not blocked). |

@@ -25,7 +25,13 @@ from ..embedding_cache import embed_cached
 from ..generation import Generator, get_generator
 from ..lifecycle.decay import effective_strength, reset_access
 from ..models import utcnow_iso
-from ..schema.collections import SEARCH_VIEW, ensure_vector_index, has_vector_index
+from ..schema.collections import (
+    SEARCH_VIEW,
+    ensure_vector_index,
+    has_vector_index,
+    vector_index_state,
+    vector_training_threshold,
+)
 from ..telemetry import metrics, span
 from ..telemetry.logging import logger
 from .enrich import QueryCache, hyde, should_skip_retrieval
@@ -224,7 +230,11 @@ def _embed_query(emb: Embedder, query: str, *, tenant_id: str) -> list[float]:
         return embed_cached(emb, query, tenant_id=tenant_id)
     except Exception as exc:  # noqa: BLE001 — §15: embedder down → BM25-only
         metrics.emit("degraded", op="retrieve", reason=type(exc).__name__)
-        logger.warning("retrieve degraded to bm25-only", extra={"reason": type(exc).__name__})
+        # Log the full message (MA-8): the class name alone hid the real cause.
+        logger.warning(
+            "retrieve degraded to bm25-only",
+            extra={"reason": type(exc).__name__, "detail": str(exc)},
+        )
         return []
 
 
@@ -325,7 +335,12 @@ def retrieve(
             )
     except Exception as exc:  # noqa: BLE001 — §15: memory failures never break the turn
         metrics.emit("degraded", op="retrieve", reason=type(exc).__name__)
-        logger.warning("retrieve degraded", extra={"reason": type(exc).__name__})
+        # Log the full message (MA-8): the class name alone hid the AQL reason (e.g. an
+        # under-trained IVF index), which cost a full day of benchmark triage.
+        logger.warning(
+            "retrieve degraded",
+            extra={"reason": type(exc).__name__, "detail": str(exc)},
+        )
         return RetrieveResult()
     metrics.emit(
         "retrieval",
@@ -391,7 +406,10 @@ def _retrieve_impl(
     # builds the index lazily; until then we run BM25-only. The one-time build
     # cost moves to the durable write path in Step 3.
     vector_ready = has_vector_index(db) or ensure_vector_index(
-        db, dimensions=emb.dimensions, n_lists=n_lists or settings.vector_n_lists
+        db,
+        dimensions=emb.dimensions,
+        n_lists=n_lists or settings.vector_n_lists,
+        train_factor=settings.vector_train_factor,
     )
     if vector_ready and query_vec:  # query_vec empty → embedder degraded, BM25-only (§15)
         vector_rows = _run(db, _VECTOR_QUERY, {"qvec": query_vec, **scope})
@@ -445,3 +463,43 @@ def _retrieve_impl(
         for c in selected
     ]
     return RetrieveResult(context=context, hits=hits, tokens_injected=tokens)
+
+
+def diagnose_vector(
+    db: StandardDatabase,
+    *,
+    query: str = "diagnostic probe",
+    tenant_id: str = "diag",
+    embedder: Embedder | None = None,
+) -> dict[str, Any]:
+    """Vector-arm diagnostic (MA-8) — surfaces the *raw* failure the normal retrieve path
+    swallows, for triaging a `retrieve degraded`.
+
+    Reports corpus size vs. the training threshold and the index state, then runs the real
+    retrieval via `_retrieve_impl` (which does not swallow, unlike `retrieve`). On failure
+    it captures the exact exception string (e.g. the AQL reason for an under-trained IVF
+    index) instead of the bare class name. Read-only apart from a lazy index build.
+    """
+    emb = embedder or get_embedder()
+    n_lists = settings.vector_n_lists
+    factor = settings.vector_train_factor
+    corpus = cast(int, db.collection("memories").count())
+    report: dict[str, Any] = {
+        "corpus": corpus,
+        "n_lists": n_lists,
+        "train_factor": factor,
+        "training_threshold": vector_training_threshold(n_lists, factor),
+        "index_state": vector_index_state(db),
+        "dimensions": emb.dimensions,
+    }
+    try:
+        result = _retrieve_impl(
+            db, query=query, tenant_id=tenant_id, agent_id=tenant_id, embedder=emb
+        )
+        report["ok"] = True
+        report["hits"] = len(result.hits)
+    except Exception as exc:  # noqa: BLE001 — the whole point is to expose the raw error
+        report["ok"] = False
+        report["error_type"] = type(exc).__name__
+        report["error"] = str(exc)
+    return report

@@ -25,6 +25,7 @@ from arango.database import StandardDatabase
 from ..client import ArangoMemoryClient
 from ..schema.collections import ensure_schema
 from ..telemetry import latency
+from ..telemetry.logging import configure_logging
 from .locomo import QuestionScore, Sample, load_dataset, run_eval
 
 # §23 targets.
@@ -162,6 +163,9 @@ def _build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
+    # Install the logging formatter (MA-8) so a `retrieve degraded` prints the real AQL
+    # reason instead of vanishing behind Python's bare fallback handler.
+    configure_logging()
     args = _build_parser().parse_args(argv)
     db = ArangoMemoryClient().connect()
     ensure_schema(db)
