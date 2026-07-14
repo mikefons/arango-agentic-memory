@@ -1,7 +1,9 @@
 import type { GameState } from "@/lib/tools";
 import { ledger, metNpcs, trustOf } from "@/lib/world";
+import type { GuildSave } from "@/lib/guild";
+import { LedgerPanel } from "./LedgerPanel";
 
-export function Dossier({ game }: { game: GameState }) {
+export function Dossier({ game, guild }: { game: GameState; guild: GuildSave }) {
   const ev = { inventory: game.inventory, heardClaims: game.heardClaims };
   const npcs = metNpcs(game.heardClaims);
   const entries = ledger(ev, game.caughtClaims);
@@ -14,6 +16,9 @@ export function Dossier({ game }: { game: GameState }) {
       </div>
 
       <div className="dossier-body">
+        {/* Guild meta-progression (E-5) */}
+        <LedgerPanel game={game} guild={guild} />
+
         {/* Satchel */}
         <div className="section">
           <h3>Satchel <span className="count">{game.inventory.length}</span></h3>

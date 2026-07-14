@@ -30,25 +30,31 @@ import {
   TORCH_BUDGET,
 } from "@/lib/expedition";
 import { HandoffBriefing } from "./HandoffBriefing";
+import { GuildIntro } from "./GuildIntro";
 import { persona } from "@/lib/personas";
 import type { PrimeResult } from "@/lib/types";
+import { absorb, loseHero, EMPTY_GUILD, type GuildSave } from "@/lib/guild";
 
 const NEXT_HERO_TASK = "Descend into Ashfall Keep and expose the lies the last heroes could not.";
 const BRIEFING_TOKENS = 1500;
 
 const EMPTY_GAME: GameState = {
-  roomId: START_ROOM, inventory: [], heardClaims: [], caughtClaims: [], ...firstExpedition(),
+  roomId: START_ROOM, inventory: [], heardClaims: [], caughtClaims: [],
+  visited: [START_ROOM], ...firstExpedition(),
 };
 
 /** A fresh hero keeps the expedition/torch counters but starts the world anew.
  * `wary` persists — once the keep is spooked by a false accusation, it stays spooked. */
 function freshHero(current: number, wary?: boolean): GameState {
-  return { roomId: START_ROOM, inventory: [], heardClaims: [], caughtClaims: [], wary,
-           ...nextExpedition(current) };
+  return { roomId: START_ROOM, inventory: [], heardClaims: [], caughtClaims: [],
+           visited: [START_ROOM], wary, ...nextExpedition(current) };
 }
 
 const LS_KEY = "md-gamestate";
 const MSG_KEY = "md-messages";
+const GUILD_KEY = "md-guild";
+const ONBOARDED_KEY = "md-onboarded";
+const CATCH_HINT_KEY = "md-hinted-catch";
 
 interface ToolOut {
   ok?: boolean;
@@ -69,11 +75,44 @@ export function DungeonGame() {
   gameRef.current = game;
   const streamRef = useRef<HTMLDivElement>(null);
 
-  // resume position from a prior session
+  // Guild meta-progression (E-5): what persists across every hero.
+  const [guild, setGuild] = useState<GuildSave>(EMPTY_GUILD);
+  const guildRef = useRef(guild);
+  guildRef.current = guild;
+  // Onboarding (E-5): a 3-beat intro on first load; a one-line hint on the first catch.
+  const [showIntro, setShowIntro] = useState(false);
+  const [catchHint, setCatchHint] = useState(false);
+
+  // resume position from a prior session; show onboarding only for a first-time player
   useEffect(() => {
+    let hadSave = false;
     try {
       const saved = localStorage.getItem(LS_KEY);
-      if (saved) setGame({ ...EMPTY_GAME, ...(JSON.parse(saved) as Partial<GameState>) });
+      if (saved) {
+        setGame({ ...EMPTY_GAME, ...(JSON.parse(saved) as Partial<GameState>) });
+        hadSave = true;
+      }
+      const g = localStorage.getItem(GUILD_KEY);
+      if (g) setGuild({ ...EMPTY_GUILD, ...(JSON.parse(g) as Partial<GuildSave>) });
+      if (!localStorage.getItem(ONBOARDED_KEY) && !hadSave) setShowIntro(true);
+    } catch {
+      /* ignore */
+    }
+  }, []);
+
+  const persistGuild = useCallback((next: GuildSave) => {
+    setGuild(next);
+    try {
+      localStorage.setItem(GUILD_KEY, JSON.stringify(next));
+    } catch {
+      /* ignore */
+    }
+  }, []);
+
+  const dismissIntro = useCallback(() => {
+    setShowIntro(false);
+    try {
+      localStorage.setItem(ONBOARDED_KEY, "1");
     } catch {
       /* ignore */
     }
@@ -116,7 +155,10 @@ export function DungeonGame() {
       }
       const out = part.output as ToolOut;
       if ((part.type === "tool-move" || part.type === "tool-look") && out.roomId && out.roomId !== next.roomId) {
-        next = { ...next, roomId: out.roomId };
+        const visited = next.visited?.includes(out.roomId)
+          ? next.visited
+          : [...(next.visited ?? []), out.roomId];
+        next = { ...next, roomId: out.roomId, visited };
         changed = true;
       }
       if (part.type === "tool-take" && out.ok && out.item && !next.inventory.includes(out.item)) {
@@ -149,6 +191,26 @@ export function DungeonGame() {
   useEffect(() => {
     streamRef.current?.scrollTo({ top: streamRef.current.scrollHeight, behavior: "smooth" });
   }, [messages]);
+
+  // Fold the hero's progress into the guild's persistent knowledge (E-5): the union of
+  // rooms ever mapped + claims ever heard outlives every hero.
+  useEffect(() => {
+    const next = absorb(guildRef.current, game.visited ?? [], game.heardClaims);
+    if (next !== guildRef.current) persistGuild(next);
+  }, [game.visited, game.heardClaims, persistGuild]);
+
+  // First-catch hint (E-5): point a new player at the dossier the first time a lie falls.
+  useEffect(() => {
+    if (game.caughtClaims.length === 0) return;
+    try {
+      if (!localStorage.getItem(CATCH_HINT_KEY)) {
+        localStorage.setItem(CATCH_HINT_KEY, "1");
+        setCatchHint(true);
+      }
+    } catch {
+      /* ignore */
+    }
+  }, [game.caughtClaims.length]);
 
   // shared graph fetch (map + room cards); also re-run after a dream
   const refreshGraph = useCallback(() => {
@@ -248,11 +310,14 @@ export function DungeonGame() {
   } | null>(null);
   const [perished, setPerished] = useState(false);
 
-  // Retire the current hero (fresh hero, empty transcript). The guild ledger persists.
+  // Retire the current hero (fresh hero, empty transcript). The guild ledger persists —
+  // and records another hero lost to the dark (E-5).
   const descendNextHero = useCallback(() => {
+    persistGuild(loseHero(guildRef.current));
     const next = freshHero(gameRef.current.expedition, gameRef.current.wary);
     persistGame(next);
     setPerished(false);
+    setCatchHint(false);
     try {
       localStorage.removeItem(MSG_KEY); // the new hero's context window is empty
     } catch {
@@ -275,7 +340,7 @@ export function DungeonGame() {
     ]);
     setBriefing(null);
     setPhase("playing");
-  }, [persistGame, setMessages]);
+  }, [persistGame, persistGuild, setMessages]);
 
   // Chronicle the departing hero, then prime the next one and show the briefing screen.
   const beginChronicle = useCallback(async () => {
@@ -343,6 +408,15 @@ export function DungeonGame() {
 
   const room = getRoom(game.roomId);
   const busy = status === "streaming" || status === "submitted";
+  const visitedNames = (game.visited ?? []).map((id) => getRoom(id).name);
+  const shareStats = {
+    room: room.name,
+    items: game.inventory.length,
+    lies: game.caughtClaims.length,
+    hero: persona(game.expedition).name,
+    glyph: persona(game.expedition).glyph,
+    expedition: game.expedition,
+  };
 
   return (
     <div className="app">
@@ -356,7 +430,7 @@ export function DungeonGame() {
               </svg>
             </span>
             <span className="wordmark">
-              Memory&nbsp;<b>Dungeon</b>
+              The&nbsp;<b>Guild</b>
             </span>
           </div>
           <TabNav />
@@ -377,16 +451,7 @@ export function DungeonGame() {
           </button>
           <button
             className="dream-btn share-btn"
-            onClick={() =>
-              window.open(
-                buildShareUrl({
-                  room: room.name,
-                  items: game.inventory.length,
-                  lies: game.caughtClaims.length,
-                }),
-                "_blank",
-              )
-            }
+            onClick={() => window.open(buildShareUrl(shareStats), "_blank")}
             title="Share this run — open the OG card image"
           >
             ⧉ share
@@ -411,7 +476,7 @@ export function DungeonGame() {
       </header>
 
       <main>
-        <DungeonMap currentRoom={room.name} graph={graph} />
+        <DungeonMap currentRoom={room.name} graph={graph} visited={visitedNames} />
 
         <section className="pane narrative">
           <div className="stream" ref={streamRef}>
@@ -465,10 +530,21 @@ export function DungeonGame() {
               <span>look · move · take</span>
               <span>memory · full mode</span>
             </div>
+            {catchHint && (
+              <div className="catch-hint" role="status">
+                <span>
+                  A lie just fell. See the <b>Contradiction Ledger</b> in the dossier — the guild
+                  remembers it now, across every hero.
+                </span>
+                <button className="catch-hint-x" onClick={() => setCatchHint(false)} aria-label="dismiss">
+                  ×
+                </button>
+              </div>
+            )}
           </div>
         </section>
 
-        <Dossier game={game} />
+        <Dossier game={game} guild={guild} />
       </main>
 
       <footer>
@@ -540,16 +616,7 @@ export function DungeonGame() {
             <div className="eo-actions">
               <button
                 className="send"
-                onClick={() =>
-                  window.open(
-                    buildShareUrl({
-                      room: room.name,
-                      items: game.inventory.length,
-                      lies: game.caughtClaims.length,
-                    }),
-                    "_blank",
-                  )
-                }
+                onClick={() => window.open(buildShareUrl(shareStats), "_blank")}
               >
                 ⧉ share the verdict
               </button>
@@ -575,6 +642,8 @@ export function DungeonGame() {
           </div>
         </div>
       )}
+
+      {showIntro && <GuildIntro onDone={dismissIntro} />}
     </div>
   );
 }

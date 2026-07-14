@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
 
-import { caughtCount, criticalPathLength, evidenceChain } from "../lib/accuse";
+import { caughtCount, criticalPathLength, evidenceChain, totalCaughtLies } from "../lib/accuse";
 import { TORCH_BUDGET } from "../lib/expedition";
 import type { MemoryGraph } from "../lib/explorer";
-import { ACCUSE_THRESHOLD, isExposable, roomOfItem, traitorNpc } from "../lib/world";
+import { ACCUSE_THRESHOLD, isExposable, NPCS, roomOfItem, traitorNpc } from "../lib/world";
 
 const traitor = traitorNpc();
 
@@ -34,6 +34,15 @@ describe("traitor accusation (E-4)", () => {
     const chain = evidenceChain(traitor, graphWith([traitor.claims[0].subject]));
     expect(chain).toHaveLength(1);
     expect(chain[0]).toEqual({ lie: traitor.claims[0].subject, truth: traitor.claims[0].truth });
+  });
+
+  it("totals caught lies across every NPC, ignoring non-lie nodes", () => {
+    expect(totalCaughtLies(graphWith([]))).toBe(0);
+    const veldLie = NPCS.veld.claims.find((c) => c.lie)!.subject;
+    const saroLie = traitor.claims.find((c) => c.lie)!.subject;
+    // one Veld lie + one Saro lie + a truthful subject + noise → only the two lies count
+    const g = graphWith([veldLie, saroLie, NPCS.mara.claims[0].subject, "Unrelated Node"]);
+    expect(totalCaughtLies(g)).toBe(2);
   });
 
   it("is unwinnable in a single expedition — critical path exceeds the torch", () => {

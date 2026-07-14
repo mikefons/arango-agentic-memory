@@ -35,6 +35,8 @@ export interface GameState {
   expedition: number;
   heroId: string;
   torch: number;
+  // Rooms this hero has stood in (E-5) — the current context vs the guild's map memory.
+  visited?: string[];
   // Set once a hero dies to a false/unproven accusation (E-4) — NPCs grow warier.
   wary?: boolean;
 }

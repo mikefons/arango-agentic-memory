@@ -2,6 +2,7 @@
 
 import { useMemo } from "react";
 import type { DungeonGraph, GraphNode } from "@/lib/graph";
+import { roomTint } from "@/lib/guild";
 
 const CX = 140;
 const CY = 205;
@@ -24,13 +25,16 @@ function ring(items: GraphNode[], radius: number, start = -Math.PI / 2): Record<
   return out;
 }
 
-function isHere(name: string, currentRoom: string): boolean {
-  const a = name.toLowerCase();
-  const b = currentRoom.toLowerCase();
-  return a === b || b.includes(a) || a.includes(b);
-}
-
-export function DungeonMap({ currentRoom, graph }: { currentRoom: string; graph: DungeonGraph }) {
+export function DungeonMap({
+  currentRoom,
+  graph,
+  visited = [],
+}: {
+  currentRoom: string;
+  graph: DungeonGraph;
+  /** Room names the current hero has stood in — bright vs the guild's dim memory (E-5). */
+  visited?: string[];
+}) {
   const { rooms, lore, pos } = useMemo(() => {
     const rooms = graph.nodes.filter((n) => n.kind === "room").sort((a, b) => a.name.localeCompare(b.name));
     const lore = graph.nodes
@@ -73,10 +77,14 @@ export function DungeonMap({ currentRoom, graph }: { currentRoom: string; graph:
             })}
             {rooms.map((n) => {
               const p = pos[n.id];
-              const here = isHere(n.name, currentRoom);
+              const tint = roomTint(n.name, currentRoom, visited);
+              const here = tint === "here";
               return (
-                <g className={`node room${here ? " here" : ""}`} key={n.id} transform={`translate(${p.x},${p.y})`}>
-                  <title>{n.name}</title>
+                <g className={`node room ${tint}`} key={n.id} transform={`translate(${p.x},${p.y})`}>
+                  <title>
+                    {n.name}
+                    {tint === "guild" ? " — the guild remembers; this hero hasn't been" : ""}
+                  </title>
                   <circle className="ring" r={here ? 15 : 12} />
                   <circle className="core" r={here ? 3.6 : 2.8} />
                   <text y={-20}>{n.name.replace(/^the\s+/i, "")}</text>
@@ -89,7 +97,8 @@ export function DungeonMap({ currentRoom, graph }: { currentRoom: string; graph:
 
       <div className="map-legend">
         <div className="legend-row"><span className="swatch here" /> you are here</div>
-        <div className="legend-row"><span className="swatch room" /> discovered room</div>
+        <div className="legend-row"><span className="swatch visited" /> visited this run</div>
+        <div className="legend-row"><span className="swatch guild" /> guild remembers · unvisited</div>
         <div className="legend-row"><span className="swatch lore" /> remembered detail</div>
       </div>
     </section>
