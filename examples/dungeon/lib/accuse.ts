@@ -8,7 +8,7 @@
  */
 
 import { isSuperseded, type MemoryGraph } from "./explorer";
-import { npcOfClaim, roomOfItem, type Npc } from "./world";
+import { npcOfClaim, roomOfItem, NPCS, type Npc } from "./world";
 
 /** Names of every superseded (caught) entity in the guild graph. */
 function superseded(graph: MemoryGraph): Set<string> {
@@ -19,6 +19,15 @@ function superseded(graph: MemoryGraph): Set<string> {
 export function caughtCount(npc: Npc, graph: MemoryGraph): number {
   const caught = superseded(graph);
   return npc.claims.filter((c) => c.lie && caught.has(c.subject)).length;
+}
+
+/** Total lies the guild has exposed across every NPC — the guild's running tally. */
+export function totalCaughtLies(graph: MemoryGraph): number {
+  const caught = superseded(graph);
+  return Object.values(NPCS).reduce(
+    (n, npc) => n + npc.claims.filter((c) => c.lie && caught.has(c.subject)).length,
+    0,
+  );
 }
 
 /** truth ⇒ lie pairs for the caught lies — the evidence chain shown on a win. */

@@ -550,6 +550,10 @@ footer .live .dot { width: 5px; height: 5px; border-radius: 50%; background: cur
 .node.lore .core { fill: var(--faint); }
 .node.room.here .ring { fill: var(--ember-dim); stroke: var(--ember); }
 .node.room.here .core { fill: var(--ember); }
+/* Two-tone cartography (E-5): guild memory (dim) vs this hero's context (bright). */
+.node.room.guild .ring { stroke: var(--border); }
+.node.room.guild .core { fill: var(--faint); }
+.node.room.guild text { fill: var(--faint); opacity: 0.85; }
 .node text {
   font-family: var(--font-mono), monospace;
   font-size: 8.5px;
@@ -578,6 +582,8 @@ footer .live .dot { width: 5px; height: 5px; border-radius: 50%; background: cur
 .swatch { width: 9px; height: 9px; border-radius: 50%; flex: none; }
 .swatch.here { background: var(--ember); box-shadow: 0 0 6px var(--ember); }
 .swatch.room { background: var(--fg-soft); }
+.swatch.visited { background: var(--fg-soft); }
+.swatch.guild { background: var(--faint); opacity: 0.7; }
 .swatch.lore { background: var(--faint); }
 
 /* ---------- Dossier: persons + contradiction ledger (3.5c-3) ---------- */
@@ -1011,3 +1017,82 @@ footer .live .dot { width: 5px; height: 5px; border-radius: 50%; background: cur
 }
 .eo-actions { display: flex; gap: 0.6rem; justify-content: center; }
 .eo-card .send.ghost { background: transparent; color: var(--fg-soft); border: 1px solid var(--border-strong); }
+
+/* ---------- Guild ledger: meta-progression (E-5) ---------- */
+.guild-ledger { background: var(--bg-1); }
+.guild-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 9px;
+  margin-bottom: 14px;
+}
+.guild-stat {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 9px 11px;
+  background: var(--bg-2);
+}
+.gs-val { font-family: var(--font-serif), serif; font-size: 20px; color: var(--fg); line-height: 1.1; }
+.gs-val .gs-sub { font-family: var(--font-mono), monospace; font-size: 10px; color: var(--faint); }
+.gs-label {
+  font-family: var(--font-mono), monospace;
+  font-size: 9px;
+  letter-spacing: 0.11em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin-top: 3px;
+}
+
+.case-board {
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  padding: 11px 12px;
+  background: var(--bg-2);
+}
+.case-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
+.case-title { font-size: 12px; color: var(--fg-soft); }
+.case-num { font-family: var(--font-mono), monospace; font-size: 12px; color: var(--ember); }
+.meter.case { height: 6px; }
+.meter.case > i { background: linear-gradient(90deg, var(--ember-soft), var(--ember)); }
+.meter.case.high > i { background: linear-gradient(90deg, #2f7d66, var(--truth)); }
+.case-foot {
+  font-family: var(--font-mono), monospace;
+  font-size: 9.5px;
+  letter-spacing: 0.02em;
+  color: var(--faint);
+  margin-top: 8px;
+}
+
+/* First-catch hint (E-5) */
+.catch-hint {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin-top: 10px;
+  padding: 9px 11px;
+  border: 1px solid var(--ember-dim);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--ember) 8%, transparent);
+  font-size: 12px;
+  color: var(--fg-soft);
+  animation: rise 0.4s ease;
+}
+.catch-hint b { color: var(--ember); font-weight: 600; }
+.catch-hint-x {
+  margin-left: auto;
+  background: none;
+  border: none;
+  color: var(--muted);
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+  flex: none;
+}
+.catch-hint-x:hover { color: var(--fg); }
+
+/* Onboarding intro (E-5) */
+.intro-modal .eo-card { text-align: center; max-width: 30rem; }
+.intro-glyph { font-size: 34px; margin-bottom: 6px; }
+.intro-dots { display: flex; gap: 7px; justify-content: center; margin: 16px 0 4px; }
+.intro-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--border-strong); }
+.intro-dot.on { background: var(--ember); box-shadow: 0 0 6px var(--ember); }

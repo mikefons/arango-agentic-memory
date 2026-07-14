@@ -322,6 +322,18 @@ game drops players in cold.
 a returning player can see at a glance what the guild knows that their current hero
 hasn't loaded.
 
+**Shipped** (`lib/guild.ts` — pure meta-progression + two-tone cartography helpers;
+`components/LedgerPanel.tsx` — Guild Ledger stats + case-board meter reading the
+persistent `/v1/graph`; `components/GuildIntro.tsx` — 3-beat onboarding; `DungeonMap`
+two-tone rooms (guild memory vs hero context) via `roomTint`; first-catch hint +
+`GameState.visited` tracking in `DungeonGame`; `share.ts`/`api/og` hero-persona card;
+"Memory Dungeon" → "The Guild" reframing; README loop + GIF placeholder). **Refinements
+vs. the plan:** (1) `expeditions` is derived from the live hero number, not double-stored
+— `GuildSave` persists only `heroesLost` + the room/claim unions, avoiding drift;
+(2) the case meter reuses `caughtCount` on the traitor so it reflects *exactly* when
+`accuse` will succeed; (3) the demo GIF is a committed placeholder (`docs/guild-loop.gif`)
+to be re-recorded — CI's offline link-check needs the target to resolve.
+
 ---
 
 ## Explicitly out of scope (decided)

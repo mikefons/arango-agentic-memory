@@ -33,6 +33,9 @@ export async function GET(req: Request) {
   const room = searchParams.get("room") ?? "Ashfall Keep";
   const items = Number(searchParams.get("items") ?? 0) || 0;
   const lies = Number(searchParams.get("lies") ?? 0) || 0;
+  const hero = searchParams.get("hero") ?? "";
+  const glyph = searchParams.get("glyph") ?? "";
+  const expedition = Number(searchParams.get("expedition") ?? 0) || 0;
 
   let entities = 0;
   let relations = 0;
@@ -71,14 +74,14 @@ export async function GET(req: Request) {
         />
         <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
           <span style={{ color: EMBER, fontSize: 34 }}>▲</span>
-          <span style={{ letterSpacing: 8, fontSize: 22, color: "#8f8f8f" }}>MEMORY DUNGEON</span>
+          <span style={{ letterSpacing: 8, fontSize: 22, color: "#8f8f8f" }}>THE GUILD</span>
         </div>
 
         <div style={{ display: "flex", marginTop: 30, fontSize: 64, fontWeight: 700 }}>
-          A Run Through Ashfall Keep
+          {hero ? `${glyph} ${hero}` : "A Run Through Ashfall Keep"}
         </div>
         <div style={{ display: "flex", marginTop: 14, fontSize: 28, color: "#c9c9c9" }}>
-          last seen in {room}
+          {expedition ? `expedition ${expedition} · last seen in ${room}` : `last seen in ${room}`}
         </div>
 
         <div style={{ display: "flex", gap: 24, marginTop: "auto" }}>

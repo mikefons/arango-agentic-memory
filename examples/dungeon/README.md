@@ -1,17 +1,36 @@
-# 🏰 Memory Dungeon
+# 🏰 The Guild
 
-A text-adventure where the world **persists across sessions** and the **NPCs lie** —
-the reference agent + Next.js UI for the ArangoDB agentic memory core (DESIGN.md §3.5c).
+A text-adventure about **multi-agent handoff**: a guild sends **expendable heroes**
+one at a time into a keep where the **NPCs lie**, and the only thing that survives a
+hero's death is what they wrote to the guild's **shared memory**. The reference agent +
+Next.js UI for the ArangoDB agentic memory core (DESIGN.md §3.5c).
 
-The dungeon's state isn't in React or a SQL row: it lives in the agentic-memory
-graph. Rooms, items, and NPCs are **entities**; the map is the **knowledge graph**;
-tool calls become **procedural memory**; and catching a lying NPC is the backend's
-**bi-temporal supersession + conflict detection** made playable.
+Nothing lives in React or a SQL row: the world lives in the agentic-memory graph.
+Rooms, items, and NPCs are **entities**; the map is the **knowledge graph**; each
+hero's actions become **procedural memory**; catching a lying NPC is the backend's
+**bi-temporal supersession + conflict detection** made playable — and because the guild
+remembers across heroes, the traitor can only be caught by **evidence that outlives the
+hero who found it**.
+
+## The loop
+
+```
+descend (new hero, own agent_id, fresh torch)
+  → explore & interrogate — findings written to the shared guild ledger (sync, MA-1)
+  → torch (context window) burns down
+  → the Chronicler flushes + writes a summary (MA-1 barrier)
+  → Handoff Briefing: the next hero is primed from memory (MA-3), you shape it
+  → next hero inherits the ledger (read_agent_ids, MA-2) — but not the transcript
+  → … until the guild has caught enough of the traitor's lies to accuse them
+```
+
+![The Guild loop](../../docs/guild-loop.gif)
+<!-- TODO(E-5): record docs/guild-loop.gif — one full expedition → chronicle → briefing → next hero. -->
 
 > Design of record: [`docs/mockups/dungeon-ui.html`](../../docs/mockups/dungeon-ui.html) — open it in a browser (has a light/dark toggle).
 
-> **Next: The Guild.** This game is being redesigned around multi-agent handoff —
-> expendable heroes, a torch-as-context-window, and a live Handoff Briefing screen.
+> **The Guild** redesign — expendable heroes, a torch-as-context-window, a live Handoff
+> Briefing screen, and a traitor you can only catch across expeditions.
 > Design + work packages: [`docs/GUILD.md`](../../docs/GUILD.md).
 
 ## Architecture
@@ -57,6 +76,7 @@ The footer shows **core online** once the stack is up.
 - **Handoff Briefing (The Guild, E-2)** ✅ between expeditions, a **briefing screen** renders `POST /v1/prime` (MA-3) live — the incoming hero's inherited **history** (with `you`/`guild` provenance badges), **key entities**, and **prior tool runs**, filling a **token-budget bar** you can **pin/drop** items against. The chronicle first calls `POST /v1/flush` (MA-1 barrier) so the briefing includes the departing hero's last turns. You watch memory become context.
 - **Hero personas (The Guild, E-3)** ✅ each expedition's hero gets a deterministic **persona** — a name, glyph, and voice (cowardly bard, literal golem, arrogant knight, …) that colors the DM's narration — so consecutive heroes read as different characters inheriting one ledger. NPCs react to being re-questioned by "the guild". The memory `agent_id` stays `hero-N`; the persona is display + prompt only.
 - **Traitor endgame (The Guild, E-4)** ✅ a **win condition**: the merchant **Saro** is the culprit, his lies scattered so no single torch can catch them all. The `accuse` tool resolves from the **persistent `/v1/graph`** (superseded lie-subjects), so caught lies **accumulate across expeditions** — you win by accusing Saro once the guild has exposed enough (threshold 4). A wrong or unproven accusation is **fatal** (the hero perishes, un-chronicled) and leaves NPCs warier. Winning shows the confession + an **evidence chain** (truth ⇒ lie) built from the graph. Unwinnable in one expedition — enforced by a content test.
+- **Meta-progression + onboarding (The Guild, E-5)** ✅ a **Guild Ledger** in the dossier shows what compounds across runs — expeditions sent, heroes lost, map filled, claims heard — and a **case-board meter** toward the accusation threshold that reads the *persistent* graph (evidence from heroes long dead). The **map is two-tone**: rooms the guild has ever mapped (dim memory) vs the rooms *this* hero has stood in (bright context) — memory-vs-context as cartography. A first-load **3-beat intro** teaches the loop, a one-line hint points at the ledger on the first catch, and the share card carries the hero's persona + expedition. Pure logic in `lib/guild.ts` (unit-tested).
 - **Feature toggles** ✅ all OFF by default; opt in via env or **Vercel Edge Config** (`lib/flags.ts`). Knobs: `DUNGEON_HINT` (DM hint level) and `SCENE_ART`.
 - **Scene art** ✅ (gated by `SCENE_ART=1` + `OPENAI_API_KEY` + `BLOB_READ_WRITE_TOKEN`) — `/api/scene` generates a dark-fantasy room image and caches it in Vercel Blob; the room card uses it as a backdrop under the memory glimpse. Off → cards keep the glimpse.
 
