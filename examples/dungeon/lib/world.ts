@@ -66,8 +66,16 @@ export const DUNGEON: Record<string, Room> = {
     name: "The Archive",
     description:
       "Shelves of swollen tomes. The archivist Mara works by candlelight, cross-referencing a ledger dated only last month.",
-    exits: { up: "smithy", south: "vault" },
+    exits: { up: "smithy", south: "vault", east: "countinghouse" },
     items: ["sealed dispatch"],
+  },
+  countinghouse: {
+    id: "countinghouse",
+    name: "The Counting House",
+    description:
+      "Strongbox-keys hang on hooks and coin is stacked in neat towers. The merchant Saro tallies a fortune he shouldn't have, and smiles a beat too quickly when you enter.",
+    exits: { west: "archive" },
+    items: [],
   },
 };
 
@@ -123,7 +131,12 @@ export interface Npc {
   room: string;
   baseTrust: number; // 0..100
   claims: Claim[];
+  traitor?: boolean; // the arc's culprit — accusable once enough of their lies are exposed (E-4)
 }
+
+/** The traitor and how many of their lies the guild must expose to accuse them (E-4). */
+export const TRAITOR_ID = "saro";
+export const ACCUSE_THRESHOLD = 4;
 
 export const NPCS: Record<string, Npc> = {
   veld: {
@@ -172,6 +185,56 @@ export const NPCS: Record<string, Npc> = {
       },
     ],
   },
+  saro: {
+    id: "saro",
+    name: "Saro",
+    role: "merchant",
+    room: "countinghouse",
+    baseTrust: 60,
+    traitor: true,
+    claims: [
+      {
+        id: "saro-vault",
+        text: "I never once set foot in that drowned vault — why would I?",
+        lie: true,
+        subject: "Saro's Vault Denial",
+        refutedBy: "Veld's confession that Saro paid him to look away",
+        needs: { heard: "veld-key" },
+        truth: "Saro at the Vault",
+        confession: "…so the gaoler talked. Fine — I was there. But I took only what was owed me.",
+      },
+      {
+        id: "saro-key",
+        text: "I have never held a key to any strongbox in my life.",
+        lie: true,
+        subject: "Saro's Key Denial",
+        refutedBy: "the brass key you carry",
+        needs: { item: "brass key" },
+        truth: "Saro's Stolen Key",
+        confession: "That key is a duplicate. The vault was already— no. You have me.",
+      },
+      {
+        id: "saro-forge",
+        text: "Those strongboxes were burst by the flood, not by any hand.",
+        lie: true,
+        subject: "Saro's Flood Story",
+        refutedBy: "the smith's hammer, its face marked with box-iron",
+        needs: { item: "smith's hammer" },
+        truth: "Saro Forced the Boxes",
+        confession: "The hammer, then. I pried them. Water doesn't leave dents shaped like a claw.",
+      },
+      {
+        id: "saro-alibi",
+        text: "I was trading in the low market all that week — ask anyone.",
+        lie: true,
+        subject: "Saro's Alibi",
+        refutedBy: "the sealed dispatch under his own mark, dated here",
+        needs: { item: "sealed dispatch" },
+        truth: "Saro's Broken Alibi",
+        confession: "The dispatch is dated. I know. I was here. I was always here.",
+      },
+    ],
+  },
 };
 
 export interface Evidence {
@@ -186,6 +249,22 @@ export function npcsInRoom(roomId: string): Npc[] {
 export function getNpc(idOrName: string): Npc | undefined {
   const q = idOrName.trim().toLowerCase();
   return Object.values(NPCS).find((n) => n.id === q || n.name.toLowerCase() === q);
+}
+
+/** The arc's traitor (E-4). */
+export function traitorNpc(): Npc {
+  return NPCS[TRAITOR_ID];
+}
+
+/** The room that holds an item (for critical-path reasoning). */
+export function roomOfItem(item: string): string | undefined {
+  const q = item.toLowerCase();
+  return Object.values(DUNGEON).find((r) => r.items.some((i) => i.toLowerCase() === q))?.id;
+}
+
+/** The NPC who utters a given claim id (for critical-path reasoning). */
+export function npcOfClaim(claimId: string): Npc | undefined {
+  return Object.values(NPCS).find((n) => n.claims.some((c) => c.id === claimId));
 }
 
 /** Find an NPC present in a room by id or (partial) name. */

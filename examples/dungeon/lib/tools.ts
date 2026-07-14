@@ -13,6 +13,7 @@ import { z } from "zod";
 import * as core from "./core";
 import type { Ctx } from "./types";
 import {
+  ACCUSE_THRESHOLD,
   DIRECTIONS,
   exitsOf,
   findClaim,
@@ -23,6 +24,7 @@ import {
   resolveMove,
   type Dir,
 } from "./world";
+import { caughtCount, evidenceChain } from "./accuse";
 
 export interface GameState {
   roomId: string;
@@ -33,6 +35,8 @@ export interface GameState {
   expedition: number;
   heroId: string;
   torch: number;
+  // Set once a hero dies to a false/unproven accusation (E-4) — NPCs grow warier.
+  wary?: boolean;
 }
 
 const remember = (content: string, ctx: Ctx) =>
@@ -162,6 +166,49 @@ export function makeTools(ctx: Ctx, state: GameState) {
           npc: person.name,
           claimId: claim.id,
           confession: claim.confession ?? `${person.name} falls silent, caught out.`,
+        };
+      },
+    }),
+
+    accuse: tool({
+      description:
+        "Formally accuse a person in this room of being the traitor. Succeeds only if the " +
+        "guild has already exposed enough of their lies — proof that persists across " +
+        "expeditions. A wrong or unproven accusation is fatal.",
+      inputSchema: z.object({ npc: z.string().describe("who to accuse") }),
+      execute: async ({ npc }) => {
+        const here = getRoom(state.roomId);
+        const person = findNpcInRoom(here.id, npc);
+        if (!person) {
+          return { ok: false as const, reason: `There is no one called ${npc} here to accuse.` };
+        }
+        // Resolve from the persistent guild graph — caught lies accumulate across heroes.
+        const graph = await core.memoryGraph(ctx.tenant_id).catch(() => ({ nodes: [], edges: [] }));
+        const caught = caughtCount(person, graph);
+        if (person.traitor && caught >= ACCUSE_THRESHOLD) {
+          return {
+            ok: true as const,
+            accuse: true as const,
+            win: true as const,
+            npc: person.name,
+            caught,
+            needed: ACCUSE_THRESHOLD,
+            chain: evidenceChain(person, graph),
+            confession:
+              `${person.name}: "The guild remembers more than any one of you ever could. ` +
+              `Yes. It was me."`,
+          };
+        }
+        return {
+          ok: true as const,
+          accuse: true as const,
+          win: false as const,
+          npc: person.name,
+          caught,
+          needed: ACCUSE_THRESHOLD,
+          reason: person.traitor
+            ? "You lack the proof — the guild has caught too few of their lies. The accusation founders, and the keep turns on you."
+            : `${person.name} is no traitor. The false accusation rings out, and the dark closes in.`,
         };
       },
     }),

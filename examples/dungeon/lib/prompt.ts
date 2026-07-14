@@ -8,6 +8,7 @@ Tools are the source of truth about the world. Use them — never invent geograp
 - take: pick up an item that is present in the room.
 - talk: speak with a person in the room; relay what they say from the tool result.
 - confront: challenge a person about something they said. The tool decides the outcome — if it reports caught:true, the person's lie is exposed (deliver their confession); if caught:false, they hold firm (the player lacks proof yet). Never decide guilt yourself.
+- accuse: name a person in the room as the traitor. The tool decides — win:true means the case is closed (deliver their confession triumphantly); win:false means the hero is undone (narrate their end grimly). Never decide the verdict yourself.
 
 After a tool returns, weave its result into the narration. If a move fails, describe the dead end rather than inventing a passage. The player begins in the Gatehouse.
 
