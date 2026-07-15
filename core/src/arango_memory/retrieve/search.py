@@ -105,23 +105,32 @@ FOR start IN @seed_ids
            AND mem._key NOT IN @seed_keys
         // mean EWA weight of the bridging relates_to edges (§12); 0 for the 0-hop self.
         LET path_w = LENGTH(p.edges) == 0 ? 0 : AVERAGE(p.edges[*].weight)
+        // Aggregate only the scalar ranking fields — NOT the memory doc. All rows for a
+        // given key are the same `mem`, so MAX() of its scalars returns that constant;
+        // this avoids buffering the 1536-dim embedding of every path row through the
+        // COLLECT (which blew the AQL memory limit on a real-embedding corpus, MA-8).
         COLLECT key = mem._key AGGREGATE hops = MIN(LENGTH(p.edges)),
                                           belief = MAX(related.belief),
                                           centrality = MAX(related.centrality),
-                                          weight = MAX(path_w) INTO rows = mem
+                                          weight = MAX(path_w),
+                                          accessed_at = MAX(mem.accessed_at),
+                                          strength = MAX(mem.strength)
         // closer hops rank higher, scaled 0.5–1.0 by the bridge's salience —
         // the strongest of corroboration (belief, §12), PageRank centrality (§9),
         // or recency-weighted relation strength (EWA weight, §12) — then decayed by
         // the connected memory's freshness (§11, lazy decay).
         LET salience = MAX([NOT_NULL(belief, 0), NOT_NULL(centrality, 0), NOT_NULL(weight, 0)])
-        LET age_days = DATE_DIFF(NOT_NULL(rows[0].accessed_at, @now), @now, "s") / 86400.0
-        LET decay = NOT_NULL(rows[0].strength, 1.0) * EXP(@neg_lam * age_days)
+        LET age_days = DATE_DIFF(NOT_NULL(accessed_at, @now), @now, "s") / 86400.0
+        LET decay = NOT_NULL(strength, 1.0) * EXP(@neg_lam * age_days)
         LET score = (1.0 / (1.0 + hops)) * (0.5 + 0.5 * salience) * decay
         SORT score DESC
         LIMIT @pool
-        RETURN { key: key, score: score, agent_id: rows[0].agent_id,
-                 text: rows[0].text, embedding: rows[0].embedding, type: rows[0].type,
-                 strength: rows[0].strength, accessed_at: rows[0].accessed_at }
+        // Fetch the heavy fields (text/embedding) only for the surviving pool — a point
+        // lookup per row, so embeddings never enter the traversal's memory footprint.
+        LET doc = DOCUMENT("memories", key)
+        RETURN { key: key, score: score, agent_id: doc.agent_id,
+                 text: doc.text, embedding: doc.embedding, type: doc.type,
+                 strength: strength, accessed_at: accessed_at }
 """
 
 _ENCODER = tiktoken.get_encoding("cl100k_base")
