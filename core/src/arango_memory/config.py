@@ -118,6 +118,10 @@ class Settings(BaseSettings):
     max_memory_tokens: int = Field(default=1500, ge=0)
     n_probe: int = Field(default=10, ge=1)
     k: int = Field(default=10, ge=1)
+    # MMR relevance↔diversity balance for the final top-k re-rank (§9). 1.0 = pure
+    # relevance (best recall of the single most-relevant memory); lower trades relevance
+    # for diversity in the returned set. Tune per workload — QA/recall favours higher.
+    mmr_lambda: float = Field(default=0.5, ge=0.0, le=1.0)
     # Faiss IVF partitions (DESIGN.md §7). Keep well below the corpus size — IVF
     # trains one centroid per list, so `n_lists ≪ docs` (see `vector_train_factor`).
     vector_n_lists: int = Field(default=64, ge=1)
