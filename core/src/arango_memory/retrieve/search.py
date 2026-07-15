@@ -252,18 +252,29 @@ def _embed_query(emb: Embedder, query: str, *, tenant_id: str) -> list[float]:
 
 
 def _mmr(
-    query_emb: list[float], candidates: list[_Candidate], k: int, *, lambda_: float | None = None
+    candidates: list[_Candidate], k: int, *, lambda_: float | None = None
 ) -> list[_Candidate]:
     """Maximal-marginal-relevance re-rank (§9). `lambda_` in [0,1] balances relevance vs
-    diversity (1.0 = pure relevance → best recall); defaults to `settings.mmr_lambda`."""
+    diversity (1.0 = pure relevance → best recall); defaults to `settings.mmr_lambda`.
+
+    Relevance is the **fused RRF score** (min-max normalized), NOT a single arm's query
+    cosine — otherwise MMR discards BM25's lexical wins that the fusion earned, collapsing
+    recall (measured 0.56 → 0.18 on LoCoMo). Diversity is the max cosine to already-picked
+    candidates, so near-duplicates are still spread.
+    """
     lam = settings.mmr_lambda if lambda_ is None else lambda_
+    if not candidates:
+        return []
+    lo = min(c.fused_score for c in candidates)
+    hi = max(c.fused_score for c in candidates)
+    span = (hi - lo) or 1.0
     selected: list[_Candidate] = []
     remaining = list(candidates)
     while remaining and len(selected) < k:
         best: _Candidate | None = None
         best_val = -math.inf
         for cand in remaining:
-            relevance = _cos(query_emb, cand.embedding)
+            relevance = (cand.fused_score - lo) / span
             diversity = max((_cos(cand.embedding, s.embedding) for s in selected), default=0.0)
             val = lam * relevance - (1.0 - lam) * diversity
             if val > best_val:
@@ -467,7 +478,7 @@ def _retrieve_impl(
             cand.strength, cand.accessed_at or now, now, settings.decay_lambda
         )
 
-    selected = _mmr(query_vec, fused, k)
+    selected = _mmr(fused, k)
     selected.sort(key=lambda c: -c.fused_score)
     context, tokens = _assemble_tiered(selected, max_memory_tokens)
 
