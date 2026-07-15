@@ -69,7 +69,9 @@ need no API keys.
 
 **Behavior knobs** — retrieval: `MAX_MEMORY_TOKENS` (1500), `K` (10), `GRAPH_HOPS`
 (2), `VECTOR_N_LISTS` (64), `VECTOR_TRAIN_FACTOR` (40 — index trains at
-`n_lists × factor` docs); lifecycle: `DECAY_LAMBDA` (0.02), `DECAY_FLOOR` (0.1),
+`n_lists × factor` docs), `MMR_LAMBDA` (0.5 — final re-rank relevance↔diversity;
+1.0 = pure relevance, raise for QA/recall); lifecycle: `DECAY_LAMBDA` (0.02),
+`DECAY_FLOOR` (0.1),
 `CONSOLIDATION_MENTION_THRESHOLD` (5), `DREAM_BREAKER_THRESHOLD` (0.5),
 `CORROBORATION_BASE` (0.5), `ONTOLOGY_EVOLUTION` (`false`),
 `ONTOLOGY_MIN_SUPPORT` (3); working memory: `WORKING_SESSION_TTL_SECONDS` (3600),

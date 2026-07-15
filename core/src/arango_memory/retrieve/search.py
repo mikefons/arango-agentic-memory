@@ -141,7 +141,6 @@ FOR start IN @seed_ids
 _ENCODER = tiktoken.get_encoding("cl100k_base")
 
 _RRF_K = 60
-_MMR_LAMBDA = 0.5
 _GRAPH_SEED_COUNT = 10
 
 # Tier token budget as fractions of max_memory_tokens (§9: 400/700/300/100 of 1500).
@@ -252,8 +251,12 @@ def _embed_query(emb: Embedder, query: str, *, tenant_id: str) -> list[float]:
         return []
 
 
-def _mmr(query_emb: list[float], candidates: list[_Candidate], k: int) -> list[_Candidate]:
-    """Maximal-marginal-relevance re-rank for diversity (§9)."""
+def _mmr(
+    query_emb: list[float], candidates: list[_Candidate], k: int, *, lambda_: float | None = None
+) -> list[_Candidate]:
+    """Maximal-marginal-relevance re-rank (§9). `lambda_` in [0,1] balances relevance vs
+    diversity (1.0 = pure relevance → best recall); defaults to `settings.mmr_lambda`."""
+    lam = settings.mmr_lambda if lambda_ is None else lambda_
     selected: list[_Candidate] = []
     remaining = list(candidates)
     while remaining and len(selected) < k:
@@ -262,7 +265,7 @@ def _mmr(query_emb: list[float], candidates: list[_Candidate], k: int) -> list[_
         for cand in remaining:
             relevance = _cos(query_emb, cand.embedding)
             diversity = max((_cos(cand.embedding, s.embedding) for s in selected), default=0.0)
-            val = _MMR_LAMBDA * relevance - (1.0 - _MMR_LAMBDA) * diversity
+            val = lam * relevance - (1.0 - lam) * diversity
             if val > best_val:
                 best_val, best = val, cand
         assert best is not None
