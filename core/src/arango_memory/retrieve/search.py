@@ -96,7 +96,12 @@ _GRAPH_QUERY = """
 FOR start IN @seed_ids
   FOR entity IN 1..1 OUTBOUND start mentions
     FILTER entity.invalid_at == null
+    // BFS + global vertex-uniqueness visits each reachable entity once, not once per
+    // path — without it, hub entities cause a combinatorial path fan-out that dominated
+    // retrieval latency (~900ms/query at 200 docs → ~110ms). `p` is then each entity's
+    // shortest bridging path, which is what the hop/weight ranking below wants anyway.
     FOR related, redge, p IN 0..@hops ANY entity relates_to
+      OPTIONS { bfs: true, uniqueVertices: "global" }
       FILTER related.invalid_at == null
       FOR mem IN 1..1 INBOUND related mentions
         FILTER mem.tenant_id == @tenant_id
