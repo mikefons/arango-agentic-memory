@@ -7,7 +7,18 @@ from collections.abc import Callable
 from arango.database import StandardDatabase
 
 from arango_memory.ingest.store import store
-from arango_memory.retrieve.search import RetrieveResult, retrieve
+from arango_memory.retrieve.search import _GRAPH_QUERY, RetrieveResult, retrieve
+
+
+def test_graph_query_does_not_buffer_embeddings_through_collect() -> None:
+    # Regression (MA-8): the graph arm must aggregate scalar ranking fields only and
+    # fetch the heavy doc (text/embedding) via a point lookup *after* LIMIT — never
+    # `INTO rows = mem`, which buffered a 1536-dim embedding per path row and blew the
+    # AQL memory limit on a real-embedding corpus.
+    assert "INTO rows" not in _GRAPH_QUERY
+    assert 'DOCUMENT("memories", key)' in _GRAPH_QUERY
+    # the DOCUMENT lookup must come after the LIMIT, not before.
+    assert _GRAPH_QUERY.index("LIMIT @pool") < _GRAPH_QUERY.index("DOCUMENT(")
 
 
 def test_graph_expansion_surfaces_connected_memory(
