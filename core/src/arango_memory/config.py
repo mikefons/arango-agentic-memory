@@ -122,6 +122,11 @@ class Settings(BaseSettings):
     # relevance (best recall of the single most-relevant memory); lower trades relevance
     # for diversity in the returned set. Tune per workload — QA/recall favours higher.
     mmr_lambda: float = Field(default=0.5, ge=0.0, le=1.0)
+    # RRF weight of the graph arm relative to BM25/vector (both 1.0). The graph arm ranks
+    # by hop distance, not query relevance, so at equal weight it dominates the fusion and
+    # buries the real hits (LoCoMo recall@10: 0.06 at 1.0 → 0.48 at 0.1). Keep it low but
+    # > 0 so graph-only memories can still be surfaced.
+    rrf_graph_weight: float = Field(default=0.1, ge=0.0, le=1.0)
     # Faiss IVF partitions (DESIGN.md §7). Keep well below the corpus size — IVF
     # trains one centroid per list, so `n_lists ≪ docs` (see `vector_train_factor`).
     vector_n_lists: int = Field(default=64, ge=1)
