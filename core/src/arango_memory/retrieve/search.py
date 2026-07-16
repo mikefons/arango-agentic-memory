@@ -209,10 +209,21 @@ def _seed_keys(ranked_lists: list[list[dict[str, Any]]]) -> list[str]:
     return seeds
 
 
+def _arm_weight(name: str) -> float:
+    """RRF weight per arm (§9). BM25 and vector rank by *query relevance*, so they carry
+    full weight. The graph arm is a **recall expander**, not a relevance ranker — it ranks
+    by hop distance × salience × decay, which is query-agnostic — so at equal weight it
+    dominates the fusion and buries the lexical/semantic hits (measured: LoCoMo recall
+    0.06 at weight 1.0 vs 0.48 at 0.1). Keep it small but non-zero so graph-only memories
+    can still surface."""
+    return settings.rrf_graph_weight if name == "graph" else 1.0
+
+
 def _rrf_fuse(ranked_lists: list[list[dict[str, Any]]], names: list[str]) -> list[_Candidate]:
-    """Reciprocal-rank fusion across ranked result lists, keyed by document."""
+    """Weighted reciprocal-rank fusion across ranked result lists, keyed by document."""
     by_key: dict[str, _Candidate] = {}
     for rows, name in zip(ranked_lists, names, strict=True):
+        weight = _arm_weight(name)
         for rank, row in enumerate(rows, start=1):
             key = row["key"]
             cand = by_key.get(key)
@@ -228,7 +239,7 @@ def _rrf_fuse(ranked_lists: list[list[dict[str, Any]]], names: list[str]) -> lis
                 )
                 by_key[key] = cand
             cand.signals.add(name)
-            cand.fused_score += 1.0 / (_RRF_K + rank)
+            cand.fused_score += weight / (_RRF_K + rank)
     return sorted(by_key.values(), key=lambda c: c.fused_score, reverse=True)
 
 

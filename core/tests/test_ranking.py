@@ -27,6 +27,21 @@ def test_rrf_rewards_documents_present_in_both_lists() -> None:
     assert fused[0].fused_score > fused[1].fused_score
 
 
+def test_graph_arm_cannot_outrank_a_top_bm25_hit() -> None:
+    # Regression: the graph arm ranks by hop distance, not query relevance. At equal RRF
+    # weight a graph-rank-1 doc outranked a BM25-rank-1 doc and buried the real hits
+    # (LoCoMo recall 0.48 → 0.06). It must stay down-weighted.
+    bm25 = [_row("relevant")] + [_row(f"f{i}") for i in range(49)]
+    graph = [_row("connected")] + [_row(f"g{i}") for i in range(49)]
+    fused = _rrf_fuse([bm25, graph], ["bm25", "graph"])
+
+    assert fused[0].key == "relevant"  # BM25's best wins the fusion
+    by_key = {c.key: c for c in fused}
+    assert by_key["relevant"].fused_score > by_key["connected"].fused_score
+    # …but a graph-only memory is still surfaceable (non-zero score, §9 expansion).
+    assert by_key["connected"].fused_score > 0.0
+
+
 def test_mmr_selects_most_relevant_first_caps_k_and_dedupes() -> None:
     # Relevance is the fused score (not query cosine); b has the highest → picked first.
     cands = [
