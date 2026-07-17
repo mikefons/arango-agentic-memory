@@ -69,8 +69,10 @@ need no API keys.
 
 **Behavior knobs** — retrieval: `MAX_MEMORY_TOKENS` (1500), `K` (10), `GRAPH_HOPS`
 (2), `VECTOR_N_LISTS` (64), `VECTOR_TRAIN_FACTOR` (40 — index trains at
-`n_lists × factor` docs), `MMR_LAMBDA` (0.5 — final re-rank relevance↔diversity;
-1.0 = pure relevance, raise for QA/recall); lifecycle: `DECAY_LAMBDA` (0.02),
+`n_lists × factor` docs), `MMR_LAMBDA` (1.0 — final re-rank relevance↔diversity;
+1.0 = pure relevance/fusion order, lower trades recall for a more varied result set),
+`RRF_GRAPH_WEIGHT` (0.1 — the graph arm expands recall but ranks by hop distance, not
+query relevance, so it stays down-weighted); lifecycle: `DECAY_LAMBDA` (0.02),
 `DECAY_FLOOR` (0.1),
 `CONSOLIDATION_MENTION_THRESHOLD` (5), `DREAM_BREAKER_THRESHOLD` (0.5),
 `CORROBORATION_BASE` (0.5), `ONTOLOGY_EVOLUTION` (`false`),

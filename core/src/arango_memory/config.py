@@ -119,9 +119,13 @@ class Settings(BaseSettings):
     n_probe: int = Field(default=10, ge=1)
     k: int = Field(default=10, ge=1)
     # MMR relevance↔diversity balance for the final top-k re-rank (§9). 1.0 = pure
-    # relevance (best recall of the single most-relevant memory); lower trades relevance
-    # for diversity in the returned set. Tune per workload — QA/recall favours higher.
-    mmr_lambda: float = Field(default=0.5, ge=0.0, le=1.0)
+    # relevance (fusion order); lower trades relevance for diversity in the returned set.
+    # Defaults to pure relevance: diversity is a *context-window* concern (don't feed the
+    # model 10 near-duplicates), and it should not gate what retrieval *finds*. Measured
+    # on the LoCoMo benchmark (1531 questions), the diversity penalty cost ~30% of recall:
+    # lambda 0.5 → recall@10 0.312, lambda 1.0 → 0.443. Lower it if your workload wants a
+    # spread of memories more than the single best one.
+    mmr_lambda: float = Field(default=1.0, ge=0.0, le=1.0)
     # RRF weight of the graph arm relative to BM25/vector (both 1.0). The graph arm ranks
     # by hop distance, not query relevance, so at equal weight it dominates the fusion and
     # buries the real hits (LoCoMo recall@10: 0.06 at 1.0 → 0.48 at 0.1). Keep it low but
