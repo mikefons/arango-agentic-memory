@@ -27,6 +27,35 @@ def test_rrf_rewards_documents_present_in_both_lists() -> None:
     assert fused[0].fused_score > fused[1].fused_score
 
 
+def test_arm_weights_are_configurable_per_arm(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    from arango_memory.config import settings
+    from arango_memory.retrieve.search import _arm_weight
+
+    assert _arm_weight("bm25") == 1.0  # the reference relevance ranker, never weighted down
+    monkeypatch.setattr(settings, "rrf_graph_weight", 0.1)
+    monkeypatch.setattr(settings, "rrf_vector_weight", 0.25)
+    assert _arm_weight("graph") == 0.1
+    assert _arm_weight("vector") == 0.25
+    assert _arm_weight("unknown-arm") == 1.0  # unrecognised arms default to full weight
+
+
+def test_vector_arm_weight_scales_its_fusion_contribution(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    from arango_memory.config import settings
+
+    bm25 = [_row("lexical")]
+    vector = [_row("semantic")]
+
+    monkeypatch.setattr(settings, "rrf_vector_weight", 1.0)  # equal → vector ties bm25
+    equal = {c.key: c.fused_score for c in _rrf_fuse([bm25, vector], ["bm25", "vector"])}
+    assert equal["semantic"] == equal["lexical"]
+
+    monkeypatch.setattr(settings, "rrf_vector_weight", 0.2)  # down-weighted → bm25 wins
+    tuned = _rrf_fuse([bm25, vector], ["bm25", "vector"])
+    assert tuned[0].key == "lexical"
+    by_key = {c.key: c.fused_score for c in tuned}
+    assert by_key["semantic"] > 0.0  # still surfaceable, just not dominant
+
+
 def test_graph_arm_cannot_outrank_a_top_bm25_hit() -> None:
     # Regression: the graph arm ranks by hop distance, not query relevance. At equal RRF
     # weight a graph-rank-1 doc outranked a BM25-rank-1 doc and buried the real hits
