@@ -210,13 +210,26 @@ def _seed_keys(ranked_lists: list[list[dict[str, Any]]]) -> list[str]:
 
 
 def _arm_weight(name: str) -> float:
-    """RRF weight per arm (§9). BM25 and vector rank by *query relevance*, so they carry
-    full weight. The graph arm is a **recall expander**, not a relevance ranker — it ranks
-    by hop distance × salience × decay, which is query-agnostic — so at equal weight it
-    dominates the fusion and buries the lexical/semantic hits (measured: LoCoMo recall
-    0.06 at weight 1.0 vs 0.48 at 0.1). Keep it small but non-zero so graph-only memories
-    can still surface."""
-    return settings.rrf_graph_weight if name == "graph" else 1.0
+    """RRF weight per arm (§9).
+
+    RRF assumes every input list ranks by the *same* notion of relevance. These arms don't:
+
+    - **bm25** — ranks by "does this text answer this query". A true relevance ranker (1.0).
+    - **vector** — ranks by embedding proximity to the *query*. That's topical similarity,
+      which is only relevance when the query looks like the answer. On question→statement
+      corpora it ranks noise (see `vector_weight`); HyDE (full mode) is the intended fix,
+      since it embeds a hypothetical answer instead.
+    - **graph** — ranks by hop distance × salience × decay: query-agnostic. A recall
+      *expander*, not a ranker. At equal weight it buries the real hits (measured on
+      LoCoMo: recall 0.06 at weight 1.0 vs 0.48 at 0.1).
+
+    A mis-weighted arm doesn't just add noise — it *displaces* correct hits from the top-k,
+    so an arm can score worse than useless. Tune per corpus.
+    """
+    return {
+        "graph": settings.rrf_graph_weight,
+        "vector": settings.rrf_vector_weight,
+    }.get(name, 1.0)
 
 
 def _rrf_fuse(ranked_lists: list[list[dict[str, Any]]], names: list[str]) -> list[_Candidate]:
