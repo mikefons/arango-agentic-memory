@@ -4,10 +4,11 @@ Aggregates the per-sample eval into overall + per-category metrics and compares
 them to the §23 targets. The real LoCoMo dataset is a manual/nightly BYO run
 (large, externally licensed); the runner is tested on the smoke slice.
 
-Covers the retrieval-side, deterministically computable metrics (token-F1,
-Recall@k, Deducible/per-category, tokens-injected). Hallucination Rate and Noise
-Reduction Rate need a generated answer + a judge (the full agent loop) — a
-separate harness, out of scope here.
+Covers Recall@k (deterministic), token-F1 (of the generated answer vs gold when a
+real generator is configured; a retrieved-turn proxy otherwise — see `locomo`),
+Deducible/per-category, and tokens-injected. Hallucination Rate and Noise
+Reduction Rate need an LLM judge (the full agent loop) — a separate harness, out
+of scope here.
 
 CLI: `python -m arango_memory.eval.benchmark <dataset.json> [--mode] [--k]`
 (exits nonzero if below targets, so it can gate a nightly run).
