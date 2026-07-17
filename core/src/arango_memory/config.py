@@ -113,6 +113,11 @@ class Settings(BaseSettings):
 
     # Enrichment mode (DESIGN.md §10)
     memory_mode: Literal["lite", "full"] = "lite"
+    # Full-mode adaptive gate (§9 stage 1): spend an LLM call to decide whether the turn
+    # needs memory at all, skipping retrieval when not. Pure cost optimization — a wrong
+    # SKIP returns an empty result, i.e. an unrecoverable miss. Set false when every turn
+    # needs memory (QA/eval workloads); then full mode is HyDE-only and makes no gate call.
+    adaptive_gate: bool = True
 
     # Retrieval defaults (DESIGN.md §9)
     max_memory_tokens: int = Field(default=1500, ge=0)

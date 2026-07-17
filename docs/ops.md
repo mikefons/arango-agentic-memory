@@ -72,7 +72,9 @@ need no API keys.
 `n_lists × factor` docs), `MMR_LAMBDA` (1.0 — final re-rank relevance↔diversity;
 1.0 = pure relevance/fusion order, lower trades recall for a more varied result set),
 `RRF_GRAPH_WEIGHT` (0.1 — the graph arm expands recall but ranks by hop distance, not
-query relevance, so it stays down-weighted); lifecycle: `DECAY_LAMBDA` (0.02),
+query relevance, so it stays down-weighted), `ADAPTIVE_GATE` (`true` — full mode only:
+spend an LLM call to skip retrieval when the turn needs no memory; set `false` when every
+turn does, making full mode HyDE-only with no gate call); lifecycle: `DECAY_LAMBDA` (0.02),
 `DECAY_FLOOR` (0.1),
 `CONSOLIDATION_MENTION_THRESHOLD` (5), `DREAM_BREAKER_THRESHOLD` (0.5),
 `CORROBORATION_BASE` (0.5), `ONTOLOGY_EVOLUTION` (`false`),
