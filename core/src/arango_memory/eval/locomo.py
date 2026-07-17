@@ -1,8 +1,13 @@
 """LoCoMo-style runner: ingest multi-session conversations, query, score.
 
-Deliberately small and dependency-free. Scoring is lite-mode-appropriate:
-Recall@k (did retrieval surface the supporting fact) is the primary metric;
-token-level F1 of the top hit against the gold answer is a secondary signal.
+Deliberately small and dependency-free. Two metrics:
+  - **Recall@k** — did retrieval surface the supporting fact (retrieval quality).
+  - **token-F1** — overlap of the *answer* with the gold answer (end-to-end quality).
+    When a real generator is configured, the answer is generated from the retrieved
+    context (the metric this benchmark is about). With the fake generator there is no
+    answer to score, so F1 falls back to the top retrieved turn — a weak proxy that
+    can't approach the §23 target (a full turn vs a short gold answer), so read F1 only
+    on a real-generator run.
 """
 
 from __future__ import annotations
@@ -15,8 +20,25 @@ from pathlib import Path
 
 from arango.database import StandardDatabase
 
+from ..config import settings
+from ..generation import Generator, get_generator
 from ..ingest.store import store
 from ..retrieve.search import retrieve
+
+_ANSWER_SYSTEM = (
+    "You answer a question using ONLY the provided conversation memory. Reply with the "
+    "shortest phrase that answers it — a name, date, place, or a few words. If the memory "
+    "does not contain the answer, reply 'unknown'. Do not explain."
+)
+
+
+def _answer(question: str, context: str, generator: Generator) -> str:
+    """Generate a concise answer from the retrieved context (end-to-end F1 input)."""
+    prompt = f"Memory:\n{context}\n\nQuestion: {question}\nAnswer:"
+    try:
+        return generator.complete(prompt, system=_ANSWER_SYSTEM).strip()
+    except Exception:  # noqa: BLE001 — a generation hiccup scores 0, never breaks the run
+        return ""
 
 
 @dataclass(frozen=True)
@@ -134,6 +156,11 @@ def run_eval(
         db, sample, agent_id, attempts=consistency_attempts, delay=consistency_delay
     )
 
+    # Score F1 against a generated answer when a real generator is configured; otherwise
+    # fall back to the top retrieved turn (a weak proxy — see the module docstring).
+    generator = get_generator()
+    answer_from_generation = settings.generation_provider != "fake"
+
     result = EvalResult(sample_id=sample.sample_id, k=k)
     for qa in sample.qa:
         retrieved = retrieve(
@@ -146,12 +173,15 @@ def run_eval(
             max_memory_tokens=max_memory_tokens,
         )
         hit_texts = [h.text for h in retrieved.hits]
-        top = hit_texts[0] if hit_texts else ""
+        if answer_from_generation:
+            predicted = _answer(qa.question, retrieved.context, generator)
+        else:
+            predicted = hit_texts[0] if hit_texts else ""
         result.questions.append(
             QuestionScore(
                 question=qa.question,
                 recall_hit=_recall_hit(hit_texts, qa.gold_fact),
-                f1=_token_f1(top, qa.answer),
+                f1=_token_f1(predicted, qa.answer),
                 category=qa.category,
                 tokens_injected=retrieved.tokens_injected,
             )
