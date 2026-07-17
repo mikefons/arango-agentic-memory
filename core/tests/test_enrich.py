@@ -18,6 +18,21 @@ def test_gate_default_retrieves() -> None:
     assert should_skip_retrieval("q", generator=FakeGenerator()) is False
 
 
+def test_gate_disabled_never_skips_and_makes_no_llm_call(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    from arango_memory.config import settings
+
+    calls: list[str] = []
+    always_skip = FakeGenerator(handler=lambda p, s: calls.append(p) or "SKIP")  # type: ignore[func-returns-value]
+    # Sanity: with the gate on, this generator would skip.
+    assert should_skip_retrieval("q", generator=always_skip) is True
+    assert len(calls) == 1
+
+    monkeypatch.setattr(settings, "adaptive_gate", False)
+    # Off → never skips, and spends no LLM call (the gate is a cost optimization).
+    assert should_skip_retrieval("q", generator=always_skip) is False
+    assert len(calls) == 1  # unchanged — no second call
+
+
 def test_hyde_embeds_the_generated_hypothetical() -> None:
     emb = FakeEmbedder(dimensions=32)
     gen = FakeGenerator(handler=lambda p, s: "a hypothetical answer about cats")

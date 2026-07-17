@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from ..config import settings
 from ..embedding import Embedder
 from ..generation import Generator
 from ..telemetry import metrics
@@ -70,7 +71,16 @@ class QueryCache:
 def should_skip_retrieval(
     query: str, *, generator: Generator, cache: QueryCache | None = None
 ) -> bool:
-    """Adaptive gate: True if the model is confident no stored memory is needed."""
+    """Adaptive gate: True if the model is confident no stored memory is needed.
+
+    The gate is a *cost* optimization — it spends an LLM call to avoid a retrieval. With
+    `adaptive_gate=false` it never skips and makes no call, which is what you want when
+    every turn needs memory (QA/eval workloads), or when a wrong SKIP is more expensive
+    than the retrieval it saves: a skip returns an empty result, so a false SKIP is an
+    unrecoverable miss.
+    """
+    if not settings.adaptive_gate:
+        return False
     if cache is not None and (cached := cache.get_gate(query)) is not None:
         return cached
     verdict = generator.complete(query, system=_GATE_SYSTEM).strip().upper()
