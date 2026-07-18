@@ -1,7 +1,7 @@
 # ArangoDB Agentic Memory System — Design Specification
 
 > **Status:** ✅ **v1 build sequence complete (Steps 0–7).** v2: all §21 adapters shipped (MCP, LangChain/LangGraph, CrewAI) + full §19 entity API + **Step 3e heavy extraction tier done**, hardened into a deployable service. Authoritative reference.
-> **Last updated:** 2026-06-19 (rev 78 — benchmark prep: latency in the report + `make benchmark`)
+> **Last updated:** 2026-07-18 (rev 79 — P1 real-data LoCoMo results + retrieval-ranking fix chain, §23)
 >
 > The **rev-by-rev build log** lives in [`HISTORY.md`](HISTORY.md); user-visible changes are in
 > [`CHANGELOG.md`](../CHANGELOG.md); the doc map is [`docs/README.md`](README.md). This file is
@@ -926,6 +926,42 @@ metrics remain the pass/fail gate. **Run the full set** (not one sample) so the 
 vector index trains (≥ `VECTOR_N_LISTS` docs) and the vector arm engages. This is a
 *retrieval-quality* run; answer-generation quality (Hallucination/NRR) is the separate
 `halu.py` harness.
+
+### P1 real-data results (rev 79)
+
+First real LoCoMo run (10 conversations, 1,531 scored questions, `openai` embeddings).
+The run surfaced — and we fixed — a chain of retrieval-ranking defects; recall roughly
+doubled and the F1 metric was corrected from a construction artifact into a real
+end-to-end number.
+
+| Stage | Recall@k | token-F1 | What changed |
+|---|---|---|---|
+| First real run | 0.215 | — | baseline (post MA-8 index/logging fixes) |
+| MMR relevance = fused score (#125) | — | — | MMR ranked by query-cosine, discarding fusion → fixed |
+| Graph arm down-weighted in RRF (#126) | 0.31 | — | equal RRF weight let the query-agnostic graph arm bury BM25 (0.06→0.48 in isolation) |
+| `MMR_LAMBDA=1.0` default (#127) | 0.44 | — | diversity was gating *what retrieval finds*; relevance-first |
+| F1 scores a generated answer (#131) | 0.41 | **0.21** | F1 had compared a raw retrieved turn to a short gold answer — unreachable by construction; now generates then scores |
+
+**Headline (lite + real generator): Recall@k ≈ 0.42, token-F1 ≈ 0.21.**
+
+**Findings.**
+- **BM25 is the dominant relevance signal** for this corpus. The vector and graph arms
+  rank by *proximity* / *hop-distance*, not "does this answer the query"; at equal RRF
+  weight each **displaces** correct BM25 hits (worse than useless), hence `RRF_GRAPH_WEIGHT`
+  (0.1) and `RRF_VECTOR_WEIGHT` (1.0, tunable). Configured via per-arm RRF weights (#130).
+- **HyDE (full mode) did not help here** — it rehabilitated the vector arm at high
+  influence (0.14→0.36) but still lowered recall vs BM25-led lite (0.44→0.36), because the
+  question↔evidence lexical overlap (~0.27) is a *retrieval-content* gap, not a query-form
+  one. `ADAPTIVE_GATE` (#129) is toggle-able so full-mode gains aren't masked by the gate.
+- **F1 is recall-bounded** (≈ 0.5 × recall): you cannot answer what was never retrieved,
+  so the lever for both is recall.
+
+**The plateau is category-bound, not tunable.** Single-hop ≈ 0.36 and temporal ≈ 0.33 are
+reachable by single-shot retrieval; **multi-hop ≈ 0.19** is the anchor. A multi-hop
+question needs evidence from *several* turns that aren't all near one query embedding, so
+single-shot top-k cannot gather the chain at any weighting. Closing 0.42 → the 0.6 target
+requires **multi-hop query decomposition / iterative retrieval** — a retrieval *mode*, not
+a knob (scoped in [ROADMAP.md](ROADMAP.md)).
 
 ### Latency targets (corrected Rev 2 — split by path)
 - **Core retrieval** (DB ops only: vector + BM25 + graph + fusion + assembly): **p99 ≤ 200ms**
