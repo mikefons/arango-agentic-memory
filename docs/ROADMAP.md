@@ -407,42 +407,85 @@ including new threshold/health/diag coverage).
 
 ---
 
-## RQ-1 — Multi-hop query decomposition / iterative retrieval
+## RQ-1 — Multi-hop retrieval (query decomposition)
+
+*Scoped, not started. Decisions below are locked; build is deferred until scheduled.*
 
 **Problem.** The P1 LoCoMo run plateaued at **Recall@k ≈ 0.42** (from 0.215 — see
 DESIGN §23). Single-shot retrieval maxed out: BM25 carries it, and every ranking bug
-(#125–#131) is fixed. The residual gap to the 0.6 target is **category-bound** — single-hop
-≈ 0.36 and temporal ≈ 0.33 are reachable, but **multi-hop ≈ 0.19** is the anchor. A
-multi-hop question (*"Where does the person Alice met at the reunion work?"*) needs
-evidence from **several turns that aren't all near one query embedding**, so a single
-top-k retrieval cannot gather the chain *at any weighting*. This is the one lever left,
-and it's a retrieval **mode**, not a knob.
+(#125–#131) is fixed. The residual gap to the 0.6 target is **category-bound**:
 
-**Design.**
-- **Decompose (or iterate).** Given a query, use the generator to either (a) split it into
-  sub-questions, retrieve each, and union the evidence; or (b) run **read→retrieve→read**:
-  retrieve, let the model name what's still missing, retrieve again (1–2 extra hops, capped).
-  Start with (a) — cheaper, one extra LLM call, no agentic loop.
-- **New retrieve mode** `mode="multihop"` (or a `decompose=true` opt-in on full mode), so
-  it's off the default hot path. Reuses the existing fused `retrieve()` per sub-query;
-  fuses the sub-results with RRF, dedupes, and assembles under the same token budget.
-- **Answer** from the unioned context (the #131 answer step already exists).
-- **Cost/latency:** N sub-queries = N embeddings + N retrievals + 1–2 LLM calls. Gate it
-  behind the mode; document the latency (well outside the §23 lite target — it's an
-  augmented path like HyDE).
+| Category | Recall | Ceiling reason |
+|---|---|---|
+| single-hop | ~0.36 | reachable — BM25 finds the one evidence turn |
+| temporal | ~0.33 | reachable |
+| **multi-hop** | **~0.19** | **the anchor** — see below |
 
-**Files.** `core/src/arango_memory/retrieve/` (a `decompose.py` + a `multihop` branch in
-`search.retrieve`), `config.py` (`decompose_max_subqueries`, `decompose_max_hops`),
-`eval/locomo.py` (score the mode), docs, tests.
+A multi-hop question — *"Where does the person Alice met at the reunion work?"* — needs
+**two evidence turns that don't co-locate near one query embedding**: turn A ("Alice met
+Bob at the reunion") and turn B ("Bob works at Acme"). The query matches A but not B; B is
+only findable *after* "Bob" is known. No single top-k pass over any arm weighting can
+gather that chain. The existing **graph arm** expands one hop, but it seeds from the
+*query's* hits and expands by static `relates_to` edges — it surfaces "things related to
+Alice," not "Bob's employer." RQ-1 makes the second hop **query-directed** via the
+generator. This is the one lever left, and it's a retrieval **mode**, not a knob.
 
-**Acceptance.** On the LoCoMo **multi-hop** category, recall rises materially above the
-single-shot 0.19 baseline without regressing single-hop/temporal; overall Recall@k moves
-toward 0.6. Measured on the real dataset (not the smoke slice).
+**Approach (locked): decomposition first.** One generator call splits the question into the
+minimal set of independent lookups; retrieve each with the existing fused `retrieve()`;
+union + re-fuse; answer from the union. Deterministic, bounded latency, no agentic loop.
+The iterative **read→retrieve→read** variant (handles dependent chains where hop 2 needs
+hop 1's *result*) is strictly more powerful but is a serial loop — **deferred**; add it only
+if multi-hop recall stalls below ~0.35 after decomposition. LoCoMo multi-hop is dominantly
+*parallel* evidence (both facts stated independently), so decomposition should capture most
+of the lift; measure it before paying for the loop's complexity.
 
-**Decisions to make at scope time.** decomposition vs iterative-read (recommend
-decomposition first); how to fuse sub-query results (weighted RRF vs simple union);
-per-sub-query k; the hop/sub-query cap. Deliberately **not started** — it's an L-sized
-feature that deserves its own detailed scope + design pass, like the MA items.
+**Algorithm.**
+```
+retrieve(mode="multihop", Q):
+  subqs = decompose(Q, generator)              # → [Q] if model returns 0/1 lookups
+  if len(subqs) <= 1: return _retrieve_impl(Q) # transparent single-shot fallback
+  lists = [ _retrieve_impl(sq, k=sub_k) for sq in subqs[:decompose_max_subqueries] ]
+  fused = rrf_fuse(lists)                       # each sub-query is an arm at weight 1.0
+  selected = mmr(fused, k)                      # unchanged
+  context = assemble_tiered(selected, budget)  # same token budget
+  answer from context                          # locomo #131 step already does this
+```
+- **Transparent fallback** (0/1 sub-questions ⇒ identical to today's `retrieve()`) is the
+  safety property: a mis-fire never scores *below* single-shot, it just adds nothing.
+- **Fuse via `_rrf_fuse`**, each sub-query's list as an input arm at weight 1.0 (all are
+  true relevance rankers, unlike the bm25/vector/graph asymmetry). A doc found by *multiple*
+  sub-questions accumulates RRF mass — exactly the multi-hop signal to reward. Reuses
+  existing fusion math; no new code.
+- **Budget unchanged:** more sub-queries widen the candidate *pool*, not the injected
+  context — downstream token cost to the agent stays flat.
+
+**Surface (locked): new `mode="multihop"`.** Extend the `mode` Literal to
+`lite|full|multihop`, orthogonal to full-mode enrichment (HyDE/gate). Default stays `lite`;
+`multihop` is opt-in like HyDE, with documented N× latency (outside the §23 lite target).
+
+**Files.**
+- `retrieve/decompose.py` (new) — `decompose(query, *, generator, cache) -> list[str]` +
+  `_DECOMPOSE_SYSTEM`, mirroring the `enrich.py` pattern (system prompt + one
+  `generator.complete()` + `QueryCache` memoization).
+- `retrieve/search.py` — `multihop` branch in `_retrieve_impl`; factor the per-query core so
+  it's callable per sub-query.
+- `config.py` — `decompose_max_subqueries: int = 4` (ge=1, le=8);
+  `decompose_max_hops: int = 0` (reserved for the iterative variant; 0 = off).
+- `api/app.py` + models — extend the `mode` Literal.
+- `eval/locomo.py` — already threads `mode`; run with `mode="multihop"`.
+- `docs/DESIGN.md §9`, `docs/ops.md` — document the mode, knobs, latency.
+- tests — `test_decompose.py` (prompt/parse/fallback via `FakeGenerator`), a multihop-path
+  test in eval/search.
+
+**Acceptance.** Measured on the **real** LoCoMo dataset (not the smoke slice):
+multi-hop recall rises materially above 0.19 (target this pass: **≥ 0.30**); single-hop and
+temporal **do not regress** (guaranteed by the transparent fallback); overall Recall@k moves
+toward 0.6; latency documented; default-mode latency unchanged.
+
+**Risks.** (1) Bad decomposition retrieves noise — bounded by the sub-query cap + fallback;
+worst case ≈ single-shot. (2) Latency multiplier — bounded by the cap, off the hot path.
+(3) Eval cost — a real-generator multihop run over 1531 Qs makes N× retrievals + a decompose
+call each; smoke on the multi-hop subset first and estimate cost before the full run.
 
 ---
 
