@@ -141,7 +141,7 @@ def _authorize(
 
 
 class RetrieveOptions(BaseModel):
-    mode: Literal["lite", "full"] = settings.memory_mode
+    mode: Literal["lite", "full", "multihop"] = settings.memory_mode
     max_memory_tokens: int = settings.max_memory_tokens
     n_probe: int = settings.n_probe
     k: int = settings.k
@@ -209,7 +209,7 @@ class PrimeInclude(BaseModel):
 
 
 class PrimeOptions(BaseModel):
-    mode: Literal["lite", "full"] = "lite"
+    mode: Literal["lite", "full", "multihop"] = "lite"
     k: int = settings.k
     max_memory_tokens: int = 1500
     include: PrimeInclude = Field(default_factory=PrimeInclude)
