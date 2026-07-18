@@ -531,7 +531,8 @@ def _retrieve_impl(
     Full mode adds the adaptive gate (may skip retrieval) and HyDE (embeds a
     hypothetical answer instead of the raw query) ahead of the core stages (§9).
     Multihop mode (RQ-1) decomposes the query into independent sub-lookups, gathers
-    each, and fuses the results a second time before the shared MMR/assembly tail.
+    each *plus the original query*, and fuses the results a second time before the
+    shared MMR/assembly tail — so it is a superset of the single-shot result.
     """
     emb = embedder or get_embedder()
 
@@ -563,8 +564,13 @@ def _retrieve_impl(
         gen = generator or get_generator()
         subqueries = decompose(query, generator=gen, cache=cache)
         if len(subqueries) > 1:
-            per_sub = [gather(sq, _embed_query(emb, sq, tenant_id=tenant_id)) for sq in subqueries]
-            fused = _fuse_candidate_lists(per_sub)
+            # Always fuse the *original* query's list alongside the sub-queries, so multihop
+            # is a superset of single-shot: decomposition can only add evidence, never lose
+            # a hit the full question would have found (RQ-1d). Sub-queries reach the extra
+            # hops; the original anchors the direct-relevance hits for the gold turn.
+            queries = [query, *subqueries]
+            lists = [gather(q, _embed_query(emb, q, tenant_id=tenant_id)) for q in queries]
+            fused = _fuse_candidate_lists(lists)
         else:
             fused = gather(query, _embed_query(emb, query, tenant_id=tenant_id))
     else:
