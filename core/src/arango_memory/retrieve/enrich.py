@@ -34,11 +34,12 @@ class HydeResult:
 
 
 class QueryCache:
-    """In-process cache for HyDE results and adaptive-gate decisions, keyed by query."""
+    """In-process cache for HyDE results, adaptive-gate, and decomposition, keyed by query."""
 
     def __init__(self) -> None:
         self._hyde: dict[str, HydeResult] = {}
         self._gate: dict[str, bool] = {}
+        self._decompose: dict[str, list[str]] = {}
         self._hits = 0
         self._lookups = 0
 
@@ -66,6 +67,14 @@ class QueryCache:
 
     def set_gate(self, query: str, skip: bool) -> None:
         self._gate[query] = skip
+
+    def get_decompose(self, query: str) -> list[str] | None:
+        value = self._decompose.get(query)
+        self._record(value is not None)
+        return value
+
+    def set_decompose(self, query: str, subqueries: list[str]) -> None:
+        self._decompose[query] = subqueries
 
 
 def should_skip_retrieval(
