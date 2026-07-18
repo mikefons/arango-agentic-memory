@@ -34,6 +34,7 @@ from ..schema.collections import (
 )
 from ..telemetry import metrics, span
 from ..telemetry.logging import logger
+from .decompose import decompose
 from .enrich import QueryCache, hyde, should_skip_retrieval
 
 # Lazy decay (§11): the Ebbinghaus multiplier strength·exp(-λ·Δdays) is folded into
@@ -404,51 +405,25 @@ def retrieve(
     return result
 
 
-def _retrieve_impl(
+def _gather_fused(
     db: StandardDatabase,
     *,
     query: str,
+    query_vec: list[float],
+    agent_ids: list[str],
     tenant_id: str,
-    agent_id: str,
-    read_agent_ids: list[str] | None = None,
-    k: int = 10,
-    max_memory_tokens: int = 1500,
-    embedder: Embedder | None = None,
-    mode: str = "lite",
-    candidate_pool: int = 100,
-    n_lists: int | None = None,
-    graph_hops: int | None = None,
-    generator: Generator | None = None,
-    cache: QueryCache | None = None,
-) -> RetrieveResult:
-    """BM25 (+ vector when trained) → RRF → MMR → tiered token-budget assembly.
+    candidate_pool: int,
+    n_lists: int | None,
+    graph_hops: int | None,
+    dimensions: int,
+    decay_binds: dict[str, Any],
+    now: str,
+) -> list[_Candidate]:
+    """One query's arms (BM25 + vector + graph) → RRF fusion → recency boost.
 
-    Full mode adds the adaptive gate (may skip retrieval) and HyDE (embeds a
-    hypothetical answer instead of the raw query) ahead of the core stages (§9).
+    The per-query core of retrieval, sorted by the recency-decayed fused score.
+    Multihop (RQ-1) calls this once per sub-query and fuses the results a second time.
     """
-    emb = embedder or get_embedder()
-
-    # Full-mode enrichment (§9 stages 1–2). The query vector is computed once
-    # here and reused for both vector search and MMR relevance.
-    if mode == "full":
-        gen = generator or get_generator()
-        if should_skip_retrieval(query, generator=gen, cache=cache):
-            return RetrieveResult()
-        try:
-            query_vec = hyde(query, generator=gen, embedder=emb, cache=cache).embedding
-        except Exception as exc:  # noqa: BLE001 — §15: skip HyDE, fall back to query text
-            metrics.emit("degraded", op="retrieve", reason=type(exc).__name__)
-            logger.warning("hyde failed; using query text", extra={"reason": type(exc).__name__})
-            query_vec = _embed_query(emb, query, tenant_id=tenant_id)
-    else:
-        query_vec = _embed_query(emb, query, tenant_id=tenant_id)
-
-    # Reference instant + decay rate shared by the AQL arms and the post-fusion pass.
-    now = utcnow_iso()
-    decay_binds = {"now": now, "neg_lam": -settings.decay_lambda}
-
-    # Multi-agent read (MA-2): a 1-element list on the default path keeps the same plan.
-    agent_ids = read_agent_ids or [agent_id]
     scope = {"tenant_id": tenant_id, "agent_ids": agent_ids, "pool": candidate_pool}
     bm25_rows = _run(db, _BM25_QUERY, {"query": query, **scope, **decay_binds})
 
@@ -459,7 +434,7 @@ def _retrieve_impl(
     # cost moves to the durable write path in Step 3.
     vector_ready = has_vector_index(db) or ensure_vector_index(
         db,
-        dimensions=emb.dimensions,
+        dimensions=dimensions,
         n_lists=n_lists or settings.vector_n_lists,
         train_factor=settings.vector_train_factor,
     )
@@ -490,8 +465,6 @@ def _retrieve_impl(
             names.append("graph")
 
     fused = _rrf_fuse(ranked_lists, names)
-    if not fused:
-        return RetrieveResult()
 
     # Recency/access boost (§9 stage 5, §11): decay the fused score by time since
     # last access, so stale memories sink in ranking and token-budget priority.
@@ -501,6 +474,120 @@ def _retrieve_impl(
         cand.fused_score *= effective_strength(
             cand.strength, cand.accessed_at or now, now, settings.decay_lambda
         )
+    fused.sort(key=lambda c: -c.fused_score)
+    return fused
+
+
+def _fuse_candidate_lists(lists: list[list[_Candidate]]) -> list[_Candidate]:
+    """Second-level RRF across sub-query candidate lists (RQ-1 multi-hop).
+
+    Each list is already a full relevance ranking (bm25/vector/graph fused + recency),
+    so all fuse at weight 1.0 — unlike the per-arm weighting inside `_gather_fused`. A
+    document surfaced by several sub-questions accumulates RRF mass, which is exactly the
+    multi-hop signal to reward. The merged candidate's fused_score is recomputed from
+    rank alone; arm provenance (signals) is unioned for the hit `source`.
+    """
+    by_key: dict[str, _Candidate] = {}
+    for cands in lists:
+        for rank, cand in enumerate(cands, start=1):
+            merged = by_key.get(cand.key)
+            if merged is None:
+                merged = _Candidate(
+                    key=cand.key,
+                    text=cand.text,
+                    embedding=cand.embedding,
+                    type=cand.type,
+                    strength=cand.strength,
+                    accessed_at=cand.accessed_at,
+                    agent_id=cand.agent_id,
+                )
+                merged.signals = set(cand.signals)
+                by_key[cand.key] = merged
+            else:
+                merged.signals |= cand.signals
+            merged.fused_score += 1.0 / (_RRF_K + rank)
+    return sorted(by_key.values(), key=lambda c: c.fused_score, reverse=True)
+
+
+def _retrieve_impl(
+    db: StandardDatabase,
+    *,
+    query: str,
+    tenant_id: str,
+    agent_id: str,
+    read_agent_ids: list[str] | None = None,
+    k: int = 10,
+    max_memory_tokens: int = 1500,
+    embedder: Embedder | None = None,
+    mode: str = "lite",
+    candidate_pool: int = 100,
+    n_lists: int | None = None,
+    graph_hops: int | None = None,
+    generator: Generator | None = None,
+    cache: QueryCache | None = None,
+) -> RetrieveResult:
+    """BM25 (+ vector when trained) → RRF → MMR → tiered token-budget assembly.
+
+    Full mode adds the adaptive gate (may skip retrieval) and HyDE (embeds a
+    hypothetical answer instead of the raw query) ahead of the core stages (§9).
+    Multihop mode (RQ-1) decomposes the query into independent sub-lookups, gathers
+    each, and fuses the results a second time before the shared MMR/assembly tail.
+    """
+    emb = embedder or get_embedder()
+
+    # Reference instant + decay rate shared by the AQL arms and the post-fusion pass.
+    now = utcnow_iso()
+    decay_binds = {"now": now, "neg_lam": -settings.decay_lambda}
+    # Multi-agent read (MA-2): a 1-element list on the default path keeps the same plan.
+    agent_ids = read_agent_ids or [agent_id]
+
+    def gather(q: str, vec: list[float]) -> list[_Candidate]:
+        """Run the per-query arm gather with this call's shared scope bound."""
+        return _gather_fused(
+            db,
+            query=q,
+            query_vec=vec,
+            agent_ids=agent_ids,
+            tenant_id=tenant_id,
+            candidate_pool=candidate_pool,
+            n_lists=n_lists,
+            graph_hops=graph_hops,
+            dimensions=emb.dimensions,
+            decay_binds=decay_binds,
+            now=now,
+        )
+
+    if mode == "multihop":
+        # RQ-1: split into independent sub-lookups; ≤1 falls back to single-shot on the
+        # original query (decompose() returns [query]), so a mis-fire never regresses.
+        gen = generator or get_generator()
+        subqueries = decompose(query, generator=gen, cache=cache)
+        if len(subqueries) > 1:
+            per_sub = [gather(sq, _embed_query(emb, sq, tenant_id=tenant_id)) for sq in subqueries]
+            fused = _fuse_candidate_lists(per_sub)
+        else:
+            fused = gather(query, _embed_query(emb, query, tenant_id=tenant_id))
+    else:
+        # Full-mode enrichment (§9 stages 1–2). The query vector is computed once
+        # here and reused for both vector search and MMR relevance.
+        if mode == "full":
+            gen = generator or get_generator()
+            if should_skip_retrieval(query, generator=gen, cache=cache):
+                return RetrieveResult()
+            try:
+                query_vec = hyde(query, generator=gen, embedder=emb, cache=cache).embedding
+            except Exception as exc:  # noqa: BLE001 — §15: skip HyDE, fall back to query text
+                metrics.emit("degraded", op="retrieve", reason=type(exc).__name__)
+                logger.warning(
+                    "hyde failed; using query text", extra={"reason": type(exc).__name__}
+                )
+                query_vec = _embed_query(emb, query, tenant_id=tenant_id)
+        else:
+            query_vec = _embed_query(emb, query, tenant_id=tenant_id)
+        fused = gather(query, query_vec)
+
+    if not fused:
+        return RetrieveResult()
 
     selected = _mmr(fused, k)
     selected.sort(key=lambda c: -c.fused_score)
