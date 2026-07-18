@@ -158,7 +158,7 @@ def _format(report: BenchmarkReport) -> str:
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="arango_memory.eval.benchmark")
     parser.add_argument("dataset", help="path to a LoCoMo-style dataset JSON")
-    parser.add_argument("--mode", choices=["lite", "full"], default="lite")
+    parser.add_argument("--mode", choices=["lite", "full", "multihop"], default="lite")
     parser.add_argument("--k", type=int, default=10)
     return parser
 

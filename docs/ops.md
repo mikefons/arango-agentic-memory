@@ -77,7 +77,12 @@ vector arm hurts on your corpus: it ranks by proximity to the *query*, which is 
 relevance when the query resembles the answer; full mode's HyDE is the intended fix),
 `ADAPTIVE_GATE` (`true` — full mode only:
 spend an LLM call to skip retrieval when the turn needs no memory; set `false` when every
-turn does, making full mode HyDE-only with no gate call); lifecycle: `DECAY_LAMBDA` (0.02),
+turn does, making full mode HyDE-only with no gate call),
+`DECOMPOSE_MAX_SUBQUERIES` (4 — multihop mode (§9, RQ-1) only: cap on the sub-lookups a
+query is split into; each adds one retrieval, so this bounds the fan-out. Latency is ~N×
+a single retrieve plus one decompose LLM call — an augmented path, off the lite hot path),
+`DECOMPOSE_MAX_HOPS` (0 — reserved for the iterative read→retrieve→read variant; off);
+lifecycle: `DECAY_LAMBDA` (0.02),
 `DECAY_FLOOR` (0.1),
 `CONSOLIDATION_MENTION_THRESHOLD` (5), `DREAM_BREAKER_THRESHOLD` (0.5),
 `CORROBORATION_BASE` (0.5), `ONTOLOGY_EVOLUTION` (`false`),
@@ -245,6 +250,13 @@ dataset (`core/converted.json`, gitignored — build it with `locomo_convert`).
    corpus/threshold/index-state. With defaults the vector index trains at 2 560 docs, so a
    small run may legitimately stay BM25-only (`vector: deferred`) — lower `VECTOR_N_LISTS`
    **and** `VECTOR_TRAIN_FACTOR` together for a small-corpus vector run.
+
+**Multi-hop mode (RQ-1).** `MODE=multihop` decomposes each question into sub-lookups for
+the multi-hop category (§9). It needs a real generator (`GENERATION_PROVIDER=anthropic` +
+`ANTHROPIC_API_KEY`) — with the `fake` generator, decomposition returns one lookup and it
+falls back to single-shot. Cost per question is one decompose call + up to
+`DECOMPOSE_MAX_SUBQUERIES`× the retrievals, so **smoke a subset first** (build a
+multi-hop-only `converted.json`) and estimate token spend before the full 1531-Q run.
 
 ---
 
