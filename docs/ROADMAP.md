@@ -38,9 +38,12 @@ Sizes: S ≈ ≤1 day, M ≈ 2–3 days.
 | 6 | MA-6 | Docs: multi-agent orchestration guide | S | MA-1..3 |
 | 7 | MA-7 | Per-agent key binding + insight-tier write protection | S | — |
 | 8 | MA-8 | Vector-index reliability + resume P1 benchmark | M | — |
+| 9 | RQ-1 | Multi-hop query decomposition / iterative retrieval | L | — |
 
 Recommended sequence: **MA-1 → MA-2 → MA-3 → MA-4 → MA-5 → MA-6**, with MA-7/MA-8
-schedulable any time (no dependencies on the others).
+schedulable any time (no dependencies on the others). MA-1…MA-8 are **shipped**; **RQ-1**
+(multi-hop retrieval) is the identified next lever for benchmark recall (DESIGN §23) and
+is the only open item.
 
 **Companion:** [GUILD.md](GUILD.md) redesigns the `examples/dungeon` demo around this
 work — expendable heroes, a torch-as-context-window budget, and a Handoff Briefing
@@ -401,6 +404,45 @@ rebuild-needed-on-`n_lists`-change gotcha, the resume checklist, and the ArangoG
 BM25+graph posture. **Deferred (needs the user's machine):** the actual LoCoMo §23 run +
 recording results — everything above de-risks it. All CI-gated (338 core tests pass,
 including new threshold/health/diag coverage).
+
+---
+
+## RQ-1 — Multi-hop query decomposition / iterative retrieval
+
+**Problem.** The P1 LoCoMo run plateaued at **Recall@k ≈ 0.42** (from 0.215 — see
+DESIGN §23). Single-shot retrieval maxed out: BM25 carries it, and every ranking bug
+(#125–#131) is fixed. The residual gap to the 0.6 target is **category-bound** — single-hop
+≈ 0.36 and temporal ≈ 0.33 are reachable, but **multi-hop ≈ 0.19** is the anchor. A
+multi-hop question (*"Where does the person Alice met at the reunion work?"*) needs
+evidence from **several turns that aren't all near one query embedding**, so a single
+top-k retrieval cannot gather the chain *at any weighting*. This is the one lever left,
+and it's a retrieval **mode**, not a knob.
+
+**Design.**
+- **Decompose (or iterate).** Given a query, use the generator to either (a) split it into
+  sub-questions, retrieve each, and union the evidence; or (b) run **read→retrieve→read**:
+  retrieve, let the model name what's still missing, retrieve again (1–2 extra hops, capped).
+  Start with (a) — cheaper, one extra LLM call, no agentic loop.
+- **New retrieve mode** `mode="multihop"` (or a `decompose=true` opt-in on full mode), so
+  it's off the default hot path. Reuses the existing fused `retrieve()` per sub-query;
+  fuses the sub-results with RRF, dedupes, and assembles under the same token budget.
+- **Answer** from the unioned context (the #131 answer step already exists).
+- **Cost/latency:** N sub-queries = N embeddings + N retrievals + 1–2 LLM calls. Gate it
+  behind the mode; document the latency (well outside the §23 lite target — it's an
+  augmented path like HyDE).
+
+**Files.** `core/src/arango_memory/retrieve/` (a `decompose.py` + a `multihop` branch in
+`search.retrieve`), `config.py` (`decompose_max_subqueries`, `decompose_max_hops`),
+`eval/locomo.py` (score the mode), docs, tests.
+
+**Acceptance.** On the LoCoMo **multi-hop** category, recall rises materially above the
+single-shot 0.19 baseline without regressing single-hop/temporal; overall Recall@k moves
+toward 0.6. Measured on the real dataset (not the smoke slice).
+
+**Decisions to make at scope time.** decomposition vs iterative-read (recommend
+decomposition first); how to fuse sub-query results (weighted RRF vs simple union);
+per-sub-query k; the hop/sub-query cap. Deliberately **not started** — it's an L-sized
+feature that deserves its own detailed scope + design pass, like the MA items.
 
 ---
 
