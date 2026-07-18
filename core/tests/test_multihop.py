@@ -63,6 +63,26 @@ def test_multihop_surfaces_a_memory_the_single_query_cannot_reach(
     assert any("coral" in h.text for h in multi.hits), "multihop reaches m2 via decomposition"
 
 
+def test_multihop_retains_the_original_query_hits(
+    db: StandardDatabase,
+    wait_for_searchable: Callable[..., RetrieveResult],
+) -> None:
+    # Superset property (RQ-1d): a memory the ORIGINAL question finds must survive even when
+    # the sub-queries point elsewhere — decomposition adds evidence, never subtracts it.
+    ctx = {"tenant_id": "t_mh_super", "agent_id": "a"}
+    store(db, content="Alice visited Portland", turn_index=0, **ctx)
+    store(db, content="Keynote covered coral reefs", turn_index=1, **ctx)
+    wait_for_searchable(db, query="Alice visited Portland", **ctx)
+
+    question = "Where did Alice visit on her Portland trip?"  # directly matches m1
+    # Sub-queries deliberately aim only at m2, not m1.
+    gen = FakeGenerator(handler=lambda prompt, system: "What did the keynote cover?\nCoral reefs?")
+
+    multi = retrieve(db, query=question, **ctx, k=10, mode="multihop", generator=gen)
+    assert any("Portland" in h.text for h in multi.hits), "original-query hit must be retained"
+    assert any("coral" in h.text for h in multi.hits), "sub-query hit is also present"
+
+
 def test_multihop_falls_back_to_single_shot_on_one_subquery(
     db: StandardDatabase,
     wait_for_searchable: Callable[..., RetrieveResult],

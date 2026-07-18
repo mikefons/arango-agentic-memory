@@ -463,17 +463,19 @@ Query Text
 Decompose (one LLM call)   split into independent sub-lookups (≤ DECOMPOSE_MAX_SUBQUERIES)
   │                        0/1 lookups → [query], i.e. transparent single-shot fallback
   ▼
-For each sub-query:        run Stages 3–5 (arms → RRF → recency) → a fused candidate list
-  │
+For [original query] +     run Stages 3–5 (arms → RRF → recency) → a fused candidate list
+each sub-query:            per query. The original query is always included, so multihop
+  │                        is a superset of single-shot (RQ-1d).
   ▼
-Second-level RRF           fuse the sub-query lists at weight 1.0; a doc corroborated
-  │                        across sub-questions accumulates rank mass (the multi-hop signal)
+Second-level RRF           fuse the lists at weight 1.0; a doc corroborated across
+  │                        queries accumulates rank mass (the multi-hop signal)
   ▼
 Stages 5–6 tail            MMR diversity → tiered token budget (unchanged)
 ```
 
-Because a ≤1-lookup decomposition runs the *exact* single-shot path on the original
-query, the mode cannot regress single-hop retrieval. Cost is N sub-queries = N
+Because the original query is one of the fused lists (and a ≤1-lookup decomposition
+runs the *exact* single-shot path), the mode does not drop hits the full question
+would have found on its own. Cost is N sub-queries = N
 retrievals + 1 decompose call, so it is an *augmented* path (like HyDE), off the lite
 hot path. It composes with neither the adaptive gate nor HyDE — decomposition is its
 only LLM step.
