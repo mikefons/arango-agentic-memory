@@ -21,6 +21,11 @@ it has not yet been tagged or published to a registry.
 - Hybrid retrieval: BM25 + Faiss vector + graph traversal → RRF fusion → MMR
   diversity → tiered token-budget assembly. Lite mode (zero hot-path LLM calls)
   and full mode (adaptive gate + HyDE).
+- Multi-hop retrieval (RQ-1): `mode="multihop"` decomposes a query into independent
+  sub-lookups (one LLM call), retrieves each, and RRF-fuses the results a second time
+  so evidence corroborated across sub-questions ranks up — the path to multi-hop-category
+  recall. A ≤1-lookup decomposition falls back to the exact single-shot path, so the mode
+  cannot regress single-hop. Knobs: `DECOMPOSE_MAX_SUBQUERIES`, `DECOMPOSE_MAX_HOPS`.
 - Bitemporal validity, PII redaction at ingest, right-to-be-forgotten.
 - In-process lifecycle passes (keyless, no Pregel): PageRank salience, label-
   propagation community detection, Dream-State consolidation, Ebbinghaus lazy

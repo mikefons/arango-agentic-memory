@@ -70,3 +70,8 @@ def test_cli_parser() -> None:
     assert args.dataset == "data.json"
     assert args.mode == "full"
     assert args.k == 5
+
+
+def test_cli_parser_accepts_multihop_mode() -> None:
+    args = _build_parser().parse_args(["data.json", "--mode", "multihop"])
+    assert args.mode == "multihop"

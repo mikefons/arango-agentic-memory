@@ -1,7 +1,7 @@
 # ArangoDB Agentic Memory System — Design Specification
 
 > **Status:** ✅ **v1 build sequence complete (Steps 0–7).** v2: all §21 adapters shipped (MCP, LangChain/LangGraph, CrewAI) + full §19 entity API + **Step 3e heavy extraction tier done**, hardened into a deployable service. Authoritative reference.
-> **Last updated:** 2026-07-18 (rev 79 — P1 real-data LoCoMo results + retrieval-ranking fix chain, §23)
+> **Last updated:** 2026-07-18 (rev 80 — RQ-1 multi-hop retrieve mode: query decomposition + second-level RRF, §9)
 >
 > The **rev-by-rev build log** lives in [`HISTORY.md`](HISTORY.md); user-visible changes are in
 > [`CHANGELOG.md`](../CHANGELOG.md); the doc map is [`docs/README.md`](README.md). This file is
@@ -450,6 +450,34 @@ Stage 6: Context Assembly (token budget)   [CORE]
   Sort by score within tier; unused budget rolls up. tiktoken counting.
 ```
 
+### Multi-hop mode (RQ-1)
+
+`mode="multihop"` addresses the category-bound recall ceiling (DESIGN §23): a
+multi-hop question needs evidence from turns that don't co-locate near one query
+embedding, so no single top-k pass can gather the chain. It wraps the six stages:
+
+```
+Query Text
+  │
+  ▼
+Decompose (one LLM call)   split into independent sub-lookups (≤ DECOMPOSE_MAX_SUBQUERIES)
+  │                        0/1 lookups → [query], i.e. transparent single-shot fallback
+  ▼
+For each sub-query:        run Stages 3–5 (arms → RRF → recency) → a fused candidate list
+  │
+  ▼
+Second-level RRF           fuse the sub-query lists at weight 1.0; a doc corroborated
+  │                        across sub-questions accumulates rank mass (the multi-hop signal)
+  ▼
+Stages 5–6 tail            MMR diversity → tiered token budget (unchanged)
+```
+
+Because a ≤1-lookup decomposition runs the *exact* single-shot path on the original
+query, the mode cannot regress single-hop retrieval. Cost is N sub-queries = N
+retrievals + 1 decompose call, so it is an *augmented* path (like HyDE), off the lite
+hot path. It composes with neither the adaptive gate nor HyDE — decomposition is its
+only LLM step.
+
 ---
 
 ## 10. Lite vs Full Enrichment Modes
@@ -470,7 +498,9 @@ A single `mode` setting controls which expensive enrichments run. This is the pr
 - **Lite mode** has **zero LLM calls in the retrieval hot path** and minimal calls at write time → predictable low latency and cost. It is the default for the walking skeleton and a supported production mode for latency-sensitive deployments.
 - **Full mode** enables all recall-boosting enrichments for quality-sensitive deployments, with caching to amortize repeat LLM calls.
 
-Default: **lite**. Opt into full explicitly.
+Default: **lite**. Opt into full explicitly. A third mode, **multihop** (§9, RQ-1),
+is orthogonal to this axis: it decomposes the query for multi-hop recall and does not
+enable HyDE / the gate / write-time enrichments.
 
 ---
 

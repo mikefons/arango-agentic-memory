@@ -38,7 +38,7 @@ type:            ## Mypy type-check
 
 ci: lint type test  ## Everything CI runs
 
-benchmark:       ## LoCoMo benchmark vs §23 (DATASET=… MODE=lite|full K=…)
+benchmark:       ## LoCoMo benchmark vs §23 (DATASET=… MODE=lite|full|multihop K=…)
 	$(UVRUN) python -m arango_memory.eval.benchmark $(DATASET) --mode $(MODE) --k $(K)
 
 HANDOFF_DATASET ?= tests/data/handoff_smoke.json
