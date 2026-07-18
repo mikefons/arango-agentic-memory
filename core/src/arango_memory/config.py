@@ -154,6 +154,12 @@ class Settings(BaseSettings):
     vector_train_factor: int = Field(default=40, ge=1)
     # Graph expansion (DESIGN.md §9 stage 4): relates_to hops from seed entities (3 max).
     graph_hops: int = Field(default=2, ge=0, le=3)
+    # Multi-hop retrieval (RQ-1, DESIGN.md §9): mode="multihop" decomposes the query into
+    # independent sub-lookups, retrieves each, and re-fuses. The cap bounds the fan-out
+    # (N sub-queries = N retrievals + 1 decompose call); 1 disables decomposition entirely.
+    decompose_max_subqueries: int = Field(default=4, ge=1, le=8)
+    # Reserved for the iterative read→retrieve→read variant; 0 = off (decomposition only).
+    decompose_max_hops: int = Field(default=0, ge=0, le=2)
     # Episodic decay (DESIGN.md §11): effective_strength = strength · exp(-λ · Δdays).
     # The sweep soft-deprecates memories whose effective strength drops below floor.
     decay_lambda: float = Field(default=0.02, ge=0.0)
