@@ -1,7 +1,7 @@
 # ArangoDB Agentic Memory System — Design Specification
 
 > **Status:** ✅ **v1 build sequence complete (Steps 0–7).** v2: all §21 adapters shipped (MCP, LangChain/LangGraph, CrewAI) + full §19 entity API + **Step 3e heavy extraction tier done**, hardened into a deployable service. Authoritative reference.
-> **Last updated:** 2026-07-19 (rev 81 — RQ-1 multi-hop measured negative on LoCoMo: single-turn gold evidence, decomposition hurts recall; §23)
+> **Last updated:** 2026-07-19 (rev 82 — RQ-1 multi-hop is benchmark-dependent: negative on LoCoMo, +0.165 all-hops recall on MuSiQue (BX-1); §23)
 >
 > The **rev-by-rev build log** lives in [`HISTORY.md`](HISTORY.md); user-visible changes are in
 > [`CHANGELOG.md`](../CHANGELOG.md); the doc map is [`docs/README.md`](README.md). This file is
@@ -994,39 +994,52 @@ RQ-1 multi-hop-decomposition experiment below. That experiment came back **negat
 see the next subsection — so the residual gap to 0.6 is a *retrieval-content* gap
 (question↔evidence lexical overlap ≈ 0.27), not one that query decomposition can close.
 
-### RQ-1 multi-hop decomposition — measured, negative (rev 80)
+### RQ-1 multi-hop decomposition — benchmark-dependent (rev 82)
 
-RQ-1 hypothesized that decomposing a multi-hop question into sub-lookups would lift the
-multi-hop category (DESIGN §9, `mode="multihop"`). Measured on a **281-question multi-hop
-subset** (real `openai` embeddings, `anthropic` generator, same corpus):
+RQ-1 hypothesized that decomposing a multi-hop question into sub-lookups would lift
+multi-hop recall (DESIGN §9, `mode="multihop"`). The result depends entirely on whether the
+benchmark's evidence is *actually* multi-turn: **negative on LoCoMo, strongly positive on
+MuSiQue.**
+
+**LoCoMo — negative** (281-question multi-hop subset, real `openai` embeddings, `anthropic`
+generator):
 
 | Config | Recall@k | token-F1 |
 |---|---|---|
 | **lite (single-shot)** | **0.317** | 0.257 |
 | multihop (decomposition + original-query superset fix) | 0.132 | 0.164 |
 
-**Decomposition *hurt* recall by more than half — the hypothesis was wrong for this
-benchmark.** Root cause is in the data, not the implementation: every LoCoMo multi-hop
-`gold_fact` is a **single evidence turn** (median 168 chars). These questions are multi-hop
-in *reasoning* (e.g. "home country" → *Sweden*), not in *retrieval* — there is one turn to
-find, and the **full question** matches it best by direct lexical overlap. Splitting the
-query floods the candidate pool with sub-query hits; second-level RRF then outvotes the one
-gold turn (the superset fix keeps it in the *pool* but cannot keep it in the top-k). Since
-the target is single-turn, up-weighting the original query can at best asymptote *back* to
-0.317 — decomposition has no headroom to beat single-shot here.
+Decomposition *hurt* recall by more than half. Root cause is the data: every LoCoMo
+multi-hop `gold_fact` is a **single evidence turn** (median 168 chars). These questions are
+multi-hop in *reasoning* (e.g. "home country" → *Sweden*), not in *retrieval* — there is one
+turn to find, the **full question** matches it best, and splitting the query floods the pool
+so second-level RRF outvotes the one gold turn (the superset fix keeps it in the *pool* but
+not the top-k). With a single-turn target, decomposition has no headroom to beat single-shot.
+(This also corrected the stale "multi-hop ≈ 0.19 anchor": on the clean subset lite multi-hop
+is **0.317**, not 0.19.)
 
-This also corrects the earlier "multi-hop ≈ 0.19 anchor" framing: on the clean subset
-(post-ranking-fixes, healthy vector arm) lite multi-hop is **0.317**, not 0.19. The
-`multihop` mode ships as a **correct, opt-in** retrieval mode (off by default, off the hot
-path) — it would help a benchmark whose recall requires assembling 2+ evidence turns;
-LoCoMo is not that. The real lever for 0.42 → 0.6 remains retrieval *content* (§23
-findings), not query form.
+**MuSiQue — positive** (200-question smoke of MuSiQue-Ans dev via BX-1's converter +
+multi-evidence metric; same providers). MuSiQue is non-shortcuttable and genuinely
+multi-evidence (2–4 supporting paragraphs per question):
 
-To measure any of this properly, **BX-1** adds a multi-evidence recall metric (`recall-frac`
-= fraction of the support set retrieved) and a **[MuSiQue](https://github.com/StonyBrookNLP/musique)**
-converter — a genuinely multi-evidence, non-shortcuttable benchmark that both gives `multihop`
-a fair re-trial and is the testbed for the retrieval-content levers (ROADMAP RQ-2). See
-[ops.md](ops.md) for the run steps.
+| Config | all-hops Recall@k | recall-frac | token-F1 |
+|---|---|---|---|
+| **lite (single-shot)** | 0.430 | 0.682 | 0.307 |
+| **multihop** | **0.595** | **0.777** | **0.376** |
+| Δ | **+0.165 (+38%)** | +0.095 (+14%) | +0.069 (+22%) |
+
+Decomposition lifts every metric, and the **strictest one moves most**: all-hops Recall@k
+(+0.165, ≈4–5 s.e. at n=200) is literally "did we gather the *complete* chain" — direct
+evidence the mechanism works as designed. `recall-frac` recovered ~30% of the missing-support
+gap (0.318 → 0.223). F1 tracked recall (recall-bounded). Cost is the expected trade:
+multihop p50 ≈ 4.2s vs lite ≈ 1.2s (~3.4×), off the hot path, opt-in.
+
+**Conclusion.** `mode="multihop"` is a **correct, opt-in** retrieval mode that **helps when
+recall requires assembling ≥2 evidence turns** (MuSiQue) and is neutral-to-harmful when the
+target is a single turn (LoCoMo) — use it accordingly. The original-query superset fix
+(#137) is what makes it safe: multihop = single-shot's hits **plus** the extra hops. The
+lever for LoCoMo's 0.42 → 0.6 remains retrieval *content* (ROADMAP RQ-2), now measurable on
+MuSiQue via BX-1's `recall-frac`. See [ops.md](ops.md) for run steps.
 
 ### Latency targets (corrected Rev 2 — split by path)
 - **Core retrieval** (DB ops only: vector + BM25 + graph + fusion + assembly): **p99 ≤ 200ms**

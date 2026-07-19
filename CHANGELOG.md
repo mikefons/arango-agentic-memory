@@ -26,7 +26,8 @@ it has not yet been tagged or published to a registry.
   so evidence corroborated across sub-questions ranks up — the path to multi-hop-category
   recall. A ≤1-lookup decomposition falls back to the exact single-shot path, so the mode
   cannot regress single-hop. Knobs: `DECOMPOSE_MAX_SUBQUERIES`, `DECOMPOSE_MAX_HOPS`.
-  (Measured negative on LoCoMo — its multi-hop evidence is single-turn; see DESIGN §23.)
+  (Benchmark-dependent: neutral/harmful on LoCoMo's single-turn evidence, but +0.165
+  all-hops recall on MuSiQue's genuine multi-evidence; see DESIGN §23.)
 - Benchmark expansion (BX-1): a **multi-evidence recall metric** (`recall-frac` = fraction
   of a question's support set retrieved, reported alongside all-hops `Recall@k`) and a
   **MuSiQue-Ans converter** (`eval.musique_convert`), so multi-hop *retrieval* can be
