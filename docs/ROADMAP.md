@@ -567,11 +567,25 @@ and building the wrong fix wastes effort:
 
 **Design — diagnostic-first** (the measure-before-building discipline that saved three tuning
 runs on RQ-1):
-- **RQ-2a — diagnostic (cheap, no new model).** Instrument the benchmark to record, for every
-  recall *miss*, the gold's best rank in the fused candidate pool (or "absent". Output: the
-  split of misses into ranking failures (in-pool) vs recall failures (out-of-pool). This one
-  number picks the lever. Files: `eval/locomo.py` (+ an opt-in `pool_rank` capture in
-  `retrieve`), a short report.
+- **RQ-2a — diagnostic (cheap, no new model). Scoped in detail; decisions locked.** For every
+  support item that *misses* (not in top-k), classify it against the **full fused candidate
+  pool** (BM25 ∪ vector ∪ graph, post-RRF, pre-MMR/truncation), gathered in **lite single-shot**
+  at the default **`candidate_pool=100`**:
+
+  ```
+  in top-k hits?            → HIT           (not a miss)
+  else in the fused pool?   → RANKING miss  (a reranker can recover it)
+  else (absent from pool)   → RECALL  miss  (first-stage retrieval must be fixed)
+  ```
+
+  The aggregate split (overall + per-category) is the whole deliverable — it picks RQ-2b's
+  lever. **Files:** `retrieve/search.py` — add `diagnose_pool(...)` returning the full ranked
+  fused pool via the existing `_gather_fused` (read-only, off the hot path, mirrors
+  `diagnose_vector`); `eval/pool_diag.py` (new) — per-question classify `support()` items via
+  the existing normalized-substring match, aggregate, CLI
+  `python -m arango_memory.eval.pool_diag DATASET.json [--k 10] [--pool 100]`; `test_pool_diag.py`;
+  ops.md run steps. No change to `retrieve()`'s hot path. **Acceptance:** produces the
+  ranking-vs-recall split reproducibly on the MuSiQue 200-Q set (real embeddings).
 - **RQ-2b — the lever (conditional on 2a):**
   - *ranking-dominated* → **cross-encoder reranker** stage between fusion and MMR (pool@100 →
     rerank → MMR/assemble). New `retrieve/rerank.py` + config, opt-in mode. Standard highest-ROI
