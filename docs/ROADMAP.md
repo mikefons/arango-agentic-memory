@@ -39,13 +39,18 @@ Sizes: S ≈ ≤1 day, M ≈ 2–3 days.
 | 7 | MA-7 | Per-agent key binding + insight-tier write protection | S | — |
 | 8 | MA-8 | Vector-index reliability + resume P1 benchmark | M | — |
 | 9 | RQ-1 | Multi-hop query decomposition / iterative retrieval | L | shipped (negative) |
+| 10 | BX-1 | Benchmark expansion: MuSiQue multi-evidence dataset + metric | M | — |
+| 11 | RQ-2 | Close the retrieval-content gap (diagnostic → reranker / expansion) | L | BX-1 |
 
 Recommended sequence: **MA-1 → MA-2 → MA-3 → MA-4 → MA-5 → MA-6**, with MA-7/MA-8
 schedulable any time (no dependencies on the others). MA-1…MA-8 are **shipped**. **RQ-1**
 (multi-hop retrieval) is also shipped as opt-in `mode="multihop"`, but a benchmark run
 found decomposition **does not help LoCoMo** — its multi-hop questions have single-turn
 gold evidence, so single-shot already wins (see the RQ-1 outcome note below and DESIGN §23).
-The next recall lever is a *retrieval-content* gap, not query form — no scheduled item yet.
+The next recall work is **BX-1 → RQ-2**: expand the benchmark to a multi-evidence dataset
+(MuSiQue) with a multi-evidence metric, then close the *retrieval-content* gap
+diagnostic-first (reranker vs query expansion, picked by measurement). BX-1 is the
+prerequisite — it also gives RQ-1 a fair re-trial on provably multi-hop data.
 
 **Companion:** [GUILD.md](GUILD.md) redesigns the `examples/dungeon` demo around this
 work — expendable heroes, a torch-as-context-window budget, and a Handoff Briefing
@@ -497,6 +502,88 @@ toward 0.6; latency documented; default-mode latency unchanged.
 worst case ≈ single-shot. (2) Latency multiplier — bounded by the cap, off the hot path.
 (3) Eval cost — a real-generator multihop run over 1531 Qs makes N× retrievals + a decompose
 call each; smoke on the multi-hop subset first and estimate cost before the full run.
+
+---
+
+## BX-1 — Benchmark expansion: MuSiQue multi-evidence dataset + metric
+
+*Scoped, not started. Prerequisite for a meaningful RQ-2 and a fair RQ-1 re-trial.*
+
+**Why.** RQ-1 could not be tested on LoCoMo because its multi-hop `gold_fact` is a **single
+evidence turn** — recall (`_recall_hit`: one substring in any hit) rewards finding that one
+turn, so decomposition has no headroom and its dilution only hurts (DESIGN §23). To measure
+*multi-hop retrieval* — or any retrieval-quality lever — honestly, the benchmark must pair
+**multi-evidence questions** with a **multi-evidence recall metric**. A better dataset alone
+does nothing without the metric change; the metric is the load-bearing part.
+
+**Dataset (chosen): [MuSiQue](https://direct.mit.edu/tacl/article/doi/10.1162/tacl_a_00475/110996) (MuSiQue-Ans).**
+24.8k 2–4-hop questions, **non-shortcuttable** by construction (Disconnection Filtering forces
+each hop to depend on the prior — a single-paragraph baseline drops from ~65 F1 on HotpotQA to
+~32 here), with **sub-question decomposition + paragraph-level support annotations**. It is the
+only option that ships decomposition labels, so it directly re-trials the RQ-1 hypothesis on
+data that is provably multi-hop. Alternative if a RAG-native, news-domain set is preferred:
+[MultiHop-RAG](https://arxiv.org/abs/2401.15391) (2,556 queries, evidence across 2–4 docs).
+Domain mismatch (documents vs conversation turns) is acceptable — our ingest is generic (a
+supporting paragraph is just a memory) and we are testing retrieval *mechanics*.
+
+**Design.**
+- **Converter** (`eval/musique_convert.py`) → our dataset schema, but `QA.gold_fact: str`
+  becomes `gold_facts: list[str]` (the support set). Ingest each supporting paragraph as a
+  memory; keep the single-`gold_fact` path working (wrap as a 1-element list) so LoCoMo runs
+  are unaffected.
+- **Metric** (`eval/locomo.py`) — `_recall_hit` gains a multi-evidence mode: **fraction of the
+  support set retrieved** (report both mean fraction and all-hops-present@k). This is what makes
+  the benchmark able to reward gathering a chain.
+- **Runner** — dataset-agnostic; a `--dataset-kind musique` flag or auto-detect on the schema.
+
+**Acceptance.** MuSiQue converts + runs end-to-end; the multi-evidence recall metric is unit-
+tested; LoCoMo numbers are unchanged (backward-compatible single-fact path). No retrieval-code
+change — this is eval infra.
+
+**Decisions to make at scope time.** all-hops-present vs fractional recall as the headline
+(recommend reporting both, fractional as primary); MuSiQue-Ans subset size for a smoke;
+paragraph-as-memory granularity (whole paragraph vs sentence).
+
+---
+
+## RQ-2 — Close the retrieval-content gap (diagnostic → reranker / expansion)
+
+*Scoped, not started. Depends on BX-1 for a dataset with headroom; diagnostic-first.*
+
+**Problem.** After the ranking fixes, the residual gap from Recall ≈ 0.42 → the 0.6 target is
+a **retrieval-content** gap: question↔evidence lexical overlap ≈ 0.27 (DESIGN §23), so BM25
+misses evidence that shares little vocabulary with the question, and the vector arm ranks by
+query-proximity rather than relevance. But "content gap" has **two opposite failure modes**,
+and building the wrong fix wastes effort:
+- **Ranking failure** — the gold *is* in the candidate pool but ranked outside top-k → a
+  **reranker** fixes it.
+- **First-stage recall failure** — the gold is *absent from the pool* → a reranker cannot
+  help; you need better first-stage recall (query expansion, stronger embeddings, richer
+  `prospective_queries`).
+
+**Design — diagnostic-first** (the measure-before-building discipline that saved three tuning
+runs on RQ-1):
+- **RQ-2a — diagnostic (cheap, no new model).** Instrument the benchmark to record, for every
+  recall *miss*, the gold's best rank in the fused candidate pool (or "absent". Output: the
+  split of misses into ranking failures (in-pool) vs recall failures (out-of-pool). This one
+  number picks the lever. Files: `eval/locomo.py` (+ an opt-in `pool_rank` capture in
+  `retrieve`), a short report.
+- **RQ-2b — the lever (conditional on 2a):**
+  - *ranking-dominated* → **cross-encoder reranker** stage between fusion and MMR (pool@100 →
+    rerank → MMR/assemble). New `retrieve/rerank.py` + config, opt-in mode. Standard highest-ROI
+    RAG lever; scores semantic relevance directly, so it attacks the paraphrase gap head-on.
+  - *pool-recall-dominated* → **query expansion + `prospective_queries`.** We already index
+    memories under predicted questions and the BM25 arm searches them (`enrich.py` full mode) —
+    strengthening that coverage is a cheap, mechanism-we-already-have fix for a question↔statement
+    gap; a stronger embedding model is the fallback.
+
+**Acceptance.** Measured on **MuSiQue** (BX-1): the chosen lever lifts recall materially over
+the fused baseline without regressing latency past the augmented budget; the diagnostic report
+is reproducible. Target set after 2a quantifies the headroom.
+
+**Decisions to make at scope time.** reranker model (small local cross-encoder vs LLM-as-
+reranker — cost/latency trade); where the rerank sits (pre- or post-MMR); pool size fed to it;
+whether it is its own mode or a full-mode addition. Deliberately gated behind the RQ-2a number.
 
 ---
 
