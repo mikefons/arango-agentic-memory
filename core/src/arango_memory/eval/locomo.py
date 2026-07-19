@@ -51,8 +51,16 @@ class Turn:
 class QA:
     question: str
     answer: str
-    gold_fact: str  # substring expected to appear in a retrieved memory
+    # Evidence retrieval must surface. `gold_fact` is the single-evidence form (LoCoMo);
+    # `gold_facts` is the multi-evidence support set (MuSiQue, BX-1). `support()` unifies
+    # them — recall is scored over that set, so single-fact runs are unchanged.
+    gold_fact: str = ""  # substring expected to appear in a retrieved memory
+    gold_facts: list[str] = field(default_factory=list)  # multi-evidence support set
     category: str | None = None  # e.g. single-hop | multi-hop | temporal (LoCoMo)
+
+    def support(self) -> list[str]:
+        """The evidence set retrieval is scored against (multi-evidence or single-fact)."""
+        return self.gold_facts or ([self.gold_fact] if self.gold_fact else [])
 
 
 @dataclass(frozen=True)
@@ -65,10 +73,11 @@ class Sample:
 @dataclass(frozen=True)
 class QuestionScore:
     question: str
-    recall_hit: bool
+    recall_hit: bool  # all-hops-present: the *entire* support set was retrieved
     f1: float
     category: str | None = None
     tokens_injected: int = 0
+    recall_fraction: float = 0.0  # fraction of the support set retrieved (BX-1)
 
 
 @dataclass
@@ -88,6 +97,13 @@ class EvalResult:
         if not self.questions:
             return 0.0
         return sum(q.f1 for q in self.questions) / len(self.questions)
+
+    @property
+    def mean_recall_fraction(self) -> float:
+        """Graded recall: mean fraction of each question's support set retrieved (BX-1)."""
+        if not self.questions:
+            return 0.0
+        return sum(q.recall_fraction for q in self.questions) / len(self.questions)
 
 
 def load_dataset(path: str | Path) -> list[Sample]:
@@ -126,6 +142,15 @@ def _token_f1(predicted: str, gold: str) -> float:
 def _recall_hit(hit_texts: Sequence[str], gold_fact: str) -> bool:
     needle = " ".join(_normalize(gold_fact))
     return any(needle in " ".join(_normalize(text)) for text in hit_texts)
+
+
+def _recall_fraction(hit_texts: Sequence[str], support: Sequence[str]) -> float:
+    """Fraction of the support set retrieved (BX-1). For a single-fact support this is
+    0.0/1.0 — identical to `_recall_hit` — so LoCoMo scoring is unchanged; for MuSiQue's
+    multi-evidence support it grades partial retrieval of the chain."""
+    if not support:
+        return 0.0
+    return sum(_recall_hit(hit_texts, fact) for fact in support) / len(support)
 
 
 def run_eval(
@@ -177,13 +202,17 @@ def run_eval(
             predicted = _answer(qa.question, retrieved.context, generator)
         else:
             predicted = hit_texts[0] if hit_texts else ""
+        support = qa.support()
+        fraction = _recall_fraction(hit_texts, support)
         result.questions.append(
             QuestionScore(
                 question=qa.question,
-                recall_hit=_recall_hit(hit_texts, qa.gold_fact),
+                # all-hops-present: for single-fact support this equals the old _recall_hit
+                recall_hit=bool(support) and fraction == 1.0,
                 f1=_token_f1(predicted, qa.answer),
                 category=qa.category,
                 tokens_injected=retrieved.tokens_injected,
+                recall_fraction=fraction,
             )
         )
     return result

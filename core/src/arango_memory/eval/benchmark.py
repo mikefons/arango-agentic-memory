@@ -41,9 +41,10 @@ LATENCY_P99_TARGETS_MS = {"retrieval.lite": 250.0, "retrieval.full": 1500.0}
 @dataclass
 class BenchmarkReport:
     n_questions: int
-    recall_at_k: float
+    recall_at_k: float  # all-hops-present@k (single-fact: identical to the classic recall)
     mean_f1: float
     mean_tokens: float
+    mean_recall_fraction: float = 0.0  # graded multi-evidence recall (BX-1)
     per_category: dict[str, dict[str, float]] = field(default_factory=dict)
     latency_ms: dict[str, dict[str, float]] = field(default_factory=dict)
     passed: bool = False
@@ -104,6 +105,7 @@ def run_benchmark(
             )
 
     recall = _aggregate(scores, "recall_hit")
+    recall_fraction = _aggregate(scores, "recall_fraction")
     mean_f1 = _aggregate(scores, "f1")
     mean_tokens = _aggregate(scores, "tokens_injected")
 
@@ -112,6 +114,7 @@ def run_benchmark(
         bucket = [s for s in scores if s.category == category]
         per_category[category] = {
             "recall_at_k": _aggregate(bucket, "recall_hit"),
+            "recall_fraction": _aggregate(bucket, "recall_fraction"),
             "mean_f1": _aggregate(bucket, "f1"),
             "n": float(len(bucket)),
         }
@@ -122,6 +125,7 @@ def run_benchmark(
         recall_at_k=recall,
         mean_f1=mean_f1,
         mean_tokens=mean_tokens,
+        mean_recall_fraction=recall_fraction,
         per_category=per_category,
         latency_ms=latency.snapshot(),
         passed=passed,
@@ -132,13 +136,15 @@ def run_benchmark(
 def _format(report: BenchmarkReport) -> str:
     lines = [
         f"questions:     {report.n_questions}",
-        f"Recall@k:      {report.recall_at_k:.3f}  (target ≥ {RECALL_MIN})",
+        f"Recall@k:      {report.recall_at_k:.3f}  (target ≥ {RECALL_MIN}, all-hops-present)",
+        f"recall-frac:   {report.mean_recall_fraction:.3f}  (graded: mean fraction of support)",
         f"token-F1:      {report.mean_f1:.3f}  (target ≥ {F1_MIN})",
         f"tokens/turn:   {report.mean_tokens:.0f}  (target ≤ {TOKENS_MAX})",
     ]
     for category, m in report.per_category.items():
         lines.append(
-            f"  [{category}] recall={m['recall_at_k']:.3f} f1={m['mean_f1']:.3f} n={m['n']:.0f}"
+            f"  [{category}] recall={m['recall_at_k']:.3f} frac={m['recall_fraction']:.3f} "
+            f"f1={m['mean_f1']:.3f} n={m['n']:.0f}"
         )
     if report.latency_ms:
         lines.append("latency (ms, informational):")
