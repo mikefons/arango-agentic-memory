@@ -1,7 +1,7 @@
 # ArangoDB Agentic Memory System — Design Specification
 
 > **Status:** ✅ **v1 build sequence complete (Steps 0–7).** v2: all §21 adapters shipped (MCP, LangChain/LangGraph, CrewAI) + full §19 entity API + **Step 3e heavy extraction tier done**, hardened into a deployable service. Authoritative reference.
-> **Last updated:** 2026-07-18 (rev 80 — RQ-1 multi-hop retrieve mode: query decomposition + second-level RRF, §9)
+> **Last updated:** 2026-07-19 (rev 81 — RQ-1 multi-hop measured negative on LoCoMo: single-turn gold evidence, decomposition hurts recall; §23)
 >
 > The **rev-by-rev build log** lives in [`HISTORY.md`](HISTORY.md); user-visible changes are in
 > [`CHANGELOG.md`](../CHANGELOG.md); the doc map is [`docs/README.md`](README.md). This file is
@@ -988,12 +988,39 @@ end-to-end number.
 - **F1 is recall-bounded** (≈ 0.5 × recall): you cannot answer what was never retrieved,
   so the lever for both is recall.
 
-**The plateau is category-bound, not tunable.** Single-hop ≈ 0.36 and temporal ≈ 0.33 are
-reachable by single-shot retrieval; **multi-hop ≈ 0.19** is the anchor. A multi-hop
-question needs evidence from *several* turns that aren't all near one query embedding, so
-single-shot top-k cannot gather the chain at any weighting. Closing 0.42 → the 0.6 target
-requires **multi-hop query decomposition / iterative retrieval** — a retrieval *mode*, not
-a knob (scoped in [ROADMAP.md](ROADMAP.md)).
+**The plateau is category-bound.** Single-hop ≈ 0.36 and temporal ≈ 0.33 are reachable by
+single-shot retrieval; the multi-hop category lagged in the full run, which motivated the
+RQ-1 multi-hop-decomposition experiment below. That experiment came back **negative** —
+see the next subsection — so the residual gap to 0.6 is a *retrieval-content* gap
+(question↔evidence lexical overlap ≈ 0.27), not one that query decomposition can close.
+
+### RQ-1 multi-hop decomposition — measured, negative (rev 80)
+
+RQ-1 hypothesized that decomposing a multi-hop question into sub-lookups would lift the
+multi-hop category (DESIGN §9, `mode="multihop"`). Measured on a **281-question multi-hop
+subset** (real `openai` embeddings, `anthropic` generator, same corpus):
+
+| Config | Recall@k | token-F1 |
+|---|---|---|
+| **lite (single-shot)** | **0.317** | 0.257 |
+| multihop (decomposition + original-query superset fix) | 0.132 | 0.164 |
+
+**Decomposition *hurt* recall by more than half — the hypothesis was wrong for this
+benchmark.** Root cause is in the data, not the implementation: every LoCoMo multi-hop
+`gold_fact` is a **single evidence turn** (median 168 chars). These questions are multi-hop
+in *reasoning* (e.g. "home country" → *Sweden*), not in *retrieval* — there is one turn to
+find, and the **full question** matches it best by direct lexical overlap. Splitting the
+query floods the candidate pool with sub-query hits; second-level RRF then outvotes the one
+gold turn (the superset fix keeps it in the *pool* but cannot keep it in the top-k). Since
+the target is single-turn, up-weighting the original query can at best asymptote *back* to
+0.317 — decomposition has no headroom to beat single-shot here.
+
+This also corrects the earlier "multi-hop ≈ 0.19 anchor" framing: on the clean subset
+(post-ranking-fixes, healthy vector arm) lite multi-hop is **0.317**, not 0.19. The
+`multihop` mode ships as a **correct, opt-in** retrieval mode (off by default, off the hot
+path) — it would help a benchmark whose recall requires assembling 2+ evidence turns;
+LoCoMo is not that. The real lever for 0.42 → 0.6 remains retrieval *content* (§23
+findings), not query form.
 
 ### Latency targets (corrected Rev 2 — split by path)
 - **Core retrieval** (DB ops only: vector + BM25 + graph + fusion + assembly): **p99 ≤ 200ms**
