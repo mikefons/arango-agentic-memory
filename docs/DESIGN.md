@@ -1022,6 +1022,12 @@ path) — it would help a benchmark whose recall requires assembling 2+ evidence
 LoCoMo is not that. The real lever for 0.42 → 0.6 remains retrieval *content* (§23
 findings), not query form.
 
+To measure any of this properly, **BX-1** adds a multi-evidence recall metric (`recall-frac`
+= fraction of the support set retrieved) and a **[MuSiQue](https://github.com/StonyBrookNLP/musique)**
+converter — a genuinely multi-evidence, non-shortcuttable benchmark that both gives `multihop`
+a fair re-trial and is the testbed for the retrieval-content levers (ROADMAP RQ-2). See
+[ops.md](ops.md) for the run steps.
+
 ### Latency targets (corrected Rev 2 — split by path)
 - **Core retrieval** (DB ops only: vector + BM25 + graph + fusion + assembly): **p99 ≤ 200ms**
 - **Augmented retrieval** (full mode, incl. adaptive gate + HyDE LLM calls, warm cache): **p99 ≤ 1.5s**

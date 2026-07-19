@@ -258,6 +258,23 @@ falls back to single-shot. Cost per question is one decompose call + up to
 `DECOMPOSE_MAX_SUBQUERIES`× the retrievals, so **smoke a subset first** (build a
 multi-hop-only `converted.json`) and estimate token spend before the full 1531-Q run.
 
+### Running the MuSiQue benchmark (BX-1, §23)
+
+LoCoMo's multi-hop `gold_fact` is a single turn, so it can't test multi-hop *retrieval*
+(DESIGN §23). [MuSiQue-Ans](https://github.com/StonyBrookNLP/musique) is genuinely
+multi-evidence — use it to exercise the multi-evidence recall metric. Bring-your-own
+(externally licensed, never committed).
+
+1. Convert (JSONL → runner schema; `--limit` for a smoke subset):
+   `python -m arango_memory.eval.musique_convert musique_ans_v1.0_dev.jsonl musique.json --limit 200`
+2. Run (real embeddings; add `MODE=multihop` to also re-trial RQ-1 on data with headroom):
+   `make benchmark DATASET=musique.json MODE=lite`
+
+Each question becomes its own tenant with its ~20 candidate paragraphs (supporting +
+distractors) as the corpus, faithful to MuSiQue's given-context setting. The report adds
+**`recall-frac`** (graded mean fraction of the support set retrieved) next to the all-hops
+`Recall@k`; read `recall-frac` as the primary multi-evidence signal.
+
 ---
 
 ## Observability (§18)
