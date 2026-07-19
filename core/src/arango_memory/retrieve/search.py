@@ -610,6 +610,49 @@ def _retrieve_impl(
     return RetrieveResult(context=context, hits=hits, tokens_injected=tokens)
 
 
+def diagnose_pool(
+    db: StandardDatabase,
+    *,
+    query: str,
+    tenant_id: str,
+    agent_id: str,
+    read_agent_ids: list[str] | None = None,
+    candidate_pool: int = 100,
+    n_lists: int | None = None,
+    graph_hops: int | None = None,
+    embedder: Embedder | None = None,
+) -> list[MemoryHit]:
+    """The full ranked fused candidate pool (BM25 ∪ vector ∪ graph → RRF → recency),
+    *before* MMR and token-budget truncation — the lite single-shot pool `retrieve` picks
+    its top-k from. Read-only, off the hot path; used by the RQ-2a miss diagnostic to tell
+    whether a gold that missed top-k is still in the pool (a ranking failure) or absent
+    entirely (a first-stage recall failure). Mirrors `diagnose_vector`.
+    """
+    emb = embedder or get_embedder()
+    now = utcnow_iso()
+    decay_binds = {"now": now, "neg_lam": -settings.decay_lambda}
+    agent_ids = read_agent_ids or [agent_id]
+    query_vec = _embed_query(emb, query, tenant_id=tenant_id)
+    fused = _gather_fused(
+        db,
+        query=query,
+        query_vec=query_vec,
+        agent_ids=agent_ids,
+        tenant_id=tenant_id,
+        candidate_pool=candidate_pool,
+        n_lists=n_lists,
+        graph_hops=graph_hops,
+        dimensions=emb.dimensions,
+        decay_binds=decay_binds,
+        now=now,
+    )
+    return [
+        MemoryHit(text=c.text, score=round(c.fused_score, 6),
+                  source="+".join(sorted(c.signals)), agent_id=c.agent_id, key=c.key)
+        for c in fused
+    ]
+
+
 def diagnose_vector(
     db: StandardDatabase,
     *,
