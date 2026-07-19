@@ -275,6 +275,20 @@ distractors) as the corpus, faithful to MuSiQue's given-context setting. The rep
 **`recall-frac`** (graded mean fraction of the support set retrieved) next to the all-hops
 `Recall@k`; read `recall-frac` as the primary multi-evidence signal.
 
+### Retrieval-miss diagnostic (RQ-2a)
+
+Splits recall misses into **ranking** (gold is in the fused pool but below top-k → a
+reranker helps) vs **recall** (gold absent from the pool → first-stage retrieval must
+improve). Read-only, no LLM calls; run it on the same converted dataset:
+
+```
+python -m arango_memory.eval.pool_diag musique.json --k 10 --pool 100
+```
+
+It prints the overall + per-category `ranking / recall` split of the misses and names the
+implied RQ-2b lever (reranker vs query expansion). Point it at MuSiQue (which has real
+retrieval headroom); on LoCoMo the split is less informative.
+
 ---
 
 ## Observability (§18)
