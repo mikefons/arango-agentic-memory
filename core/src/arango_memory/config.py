@@ -65,6 +65,17 @@ class Settings(BaseSettings):
     # full-mode enrichment (HyDE, adaptive gate). Default "fake" so dev/CI run keyless.
     generation_provider: Literal["anthropic", "fake"] = "fake"
 
+    # Reranker (RQ-2b): a cross-encoder re-scores the fused candidate pool by joint
+    # (query, passage) relevance before MMR — the diagnosed fix for in-pool-but-unranked
+    # golds (§9, §23). Opt-in and off the lite hot path; degrades to the fused order if the
+    # model is unavailable. "local" needs the `rerank` extra (sentence-transformers).
+    rerank_enabled: bool = False
+    reranker_provider: Literal["local", "fake"] = "fake"
+    reranker_model: str = "BAAI/bge-reranker-base"
+    # How many top fused candidates to re-score (cost scales with this); the rest keep their
+    # fused order below the reranked block.
+    rerank_top_n: int = Field(default=50, ge=1)
+
     # Core service
     core_host: str = "0.0.0.0"
     core_port: int = 8080
