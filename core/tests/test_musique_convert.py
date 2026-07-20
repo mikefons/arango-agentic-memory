@@ -35,6 +35,22 @@ _ITEMS: list[dict[str, Any]] = [
 ]
 
 
+def _two_answerable() -> list[dict[str, Any]]:
+    """Two answerable questions that share one paragraph (Bob) — for the pooled/dedup test."""
+    return [
+        _ITEMS[0],  # Alice + Bob + Weather
+        {
+            "id": "2hop__2",
+            "question": "Who did Bob meet?",
+            "answer": "Alice",
+            "paragraphs": [
+                {"title": "Bob", "paragraph_text": "Bob works at Acme.", "is_supporting": True},
+                {"title": "Carol", "paragraph_text": "Carol sails boats.", "is_supporting": True},
+            ],
+        },
+    ]
+
+
 def test_gold_facts_are_the_supporting_paragraphs_only() -> None:
     dataset, stats = convert(_ITEMS)
     assert stats == {"samples": 1, "questions": 1, "excluded_no_support": 1}
@@ -68,6 +84,31 @@ def test_load_items_reads_jsonl_and_array() -> None:
     jsonl = "\n".join(json.dumps(i) for i in _ITEMS)
     assert _load_items(jsonl) == _ITEMS
     assert _load_items(json.dumps(_ITEMS)) == _ITEMS
+
+
+def test_pooled_merges_into_one_deduped_corpus_keeping_all_questions() -> None:
+    dataset, stats = convert(_two_answerable(), pooled=True)
+    assert stats["samples"] == 1 and stats["questions"] == 2  # one tenant, both questions
+    sample = dataset["samples"][0]
+    assert sample["sample_id"] == "musique-pooled"
+    assert len(sample["qa"]) == 2  # every question retained, scored against the shared corpus
+    corpus = [t["text"] for t in sample["sessions"][0]]
+    # 5 raw paragraphs across the two questions, but "Bob works at Acme." appears in both →
+    # deduped to 4, and reported in stats.
+    assert corpus.count("Bob works at Acme.") == 1
+    assert stats["corpus_paragraphs"] == 4
+    assert set(corpus) == {
+        "Alice met Bob at the reunion.", "Bob works at Acme.",
+        "It rained all week.", "Carol sails boats.",
+    }
+
+
+def test_pooled_gold_facts_survive_and_round_trip() -> None:
+    dataset, _ = convert(_two_answerable(), pooled=True)
+    samples = load_dataset_from_dict(dataset)
+    supports = {tuple(qa.support()) for qa in samples[0].qa}
+    assert ("Alice met Bob at the reunion.", "Bob works at Acme.") in supports
+    assert ("Bob works at Acme.", "Carol sails boats.") in supports
 
 
 def load_dataset_from_dict(dataset: dict[str, Any]) -> Any:

@@ -281,6 +281,22 @@ distractors) as the corpus, faithful to MuSiQue's given-context setting. The rep
 **`recall-frac`** (graded mean fraction of the support set retrieved) next to the all-hops
 `Recall@k`; read `recall-frac` as the primary multi-evidence signal.
 
+**Pooled corpus (BX-2, open retrieval).** By default each MuSiQue question is its own
+~20-paragraph tenant (given-context — every gold is trivially in the pool). Add `--pooled`
+to the converter to merge all selected questions' **deduped** paragraphs into **one shared
+tenant**, so each query retrieves against the whole corpus (thousands of docs) — the
+open-retrieval stress test that can surface *first-stage-recall* misses:
+
+```
+python -m arango_memory.eval.musique_convert musique_ans_v1.0_dev.jsonl musique-pooled.json --limit 200 --pooled
+python -m arango_memory.eval.pool_diag musique-pooled.json --pool 100   # look for RECALL (out-of-pool) misses
+make benchmark DATASET=musique-pooled.json MODE=lite
+```
+
+Ingestion is heavier (one big corpus); the vector index trains once it crosses the
+threshold. Numbers here are **not** comparable to the per-question runs — it's a different
+(harder) regime.
+
 **Cross-encoder rerank (RQ-2b).** Add `RERANK=--rerank` to any run to re-rank the fused
 pool with a cross-encoder before MMR — the fix for the ranking-bound misses RQ-2a found.
 Needs the local reranker: install the extra and select it, then run:
