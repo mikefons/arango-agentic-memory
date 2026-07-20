@@ -64,10 +64,31 @@ def _convert_item(raw: dict[str, Any]) -> tuple[dict[str, Any] | None, bool]:
     return sample, False
 
 
+def _pool(samples: list[dict[str, Any]]) -> dict[str, Any]:
+    """Collapse per-question samples into one shared-corpus Sample (BX-2, open retrieval):
+    dedup every paragraph by (title, text) into a single tenant and keep every question, so
+    each query retrieves against the *whole* corpus, not just its own ~20 paragraphs."""
+    seen: set[tuple[str, str]] = set()
+    turns: list[dict[str, str]] = []
+    qa: list[dict[str, Any]] = []
+    for sample in samples:
+        for session in sample["sessions"]:
+            for turn in session:
+                key = (turn["speaker"], turn["text"])
+                if key in seen:
+                    continue
+                seen.add(key)
+                turns.append(turn)
+        qa.extend(sample["qa"])
+    return {"sample_id": "musique-pooled", "sessions": [turns], "qa": qa}
+
+
 def convert(
-    items: list[dict[str, Any]], *, limit: int | None = None
+    items: list[dict[str, Any]], *, limit: int | None = None, pooled: bool = False
 ) -> tuple[dict[str, Any], dict[str, int]]:
-    """Convert MuSiQue items → (dataset dict, conversion stats). `limit` caps a smoke run."""
+    """Convert MuSiQue items → (dataset dict, conversion stats). `limit` caps the questions;
+    `pooled` merges them into one open-retrieval corpus (BX-2) instead of per-question tenants.
+    """
     samples: list[dict[str, Any]] = []
     excluded = 0
     for raw in items:
@@ -79,9 +100,19 @@ def convert(
         samples.append(sample)
         if limit is not None and len(samples) >= limit:
             break
+    n_questions = len(samples)  # one question per MuSiQue item
+    if pooled and samples:
+        pooled_sample = _pool(samples)
+        stats = {
+            "samples": 1,
+            "questions": n_questions,
+            "corpus_paragraphs": len(pooled_sample["sessions"][0]),
+            "excluded_no_support": excluded,
+        }
+        return {"samples": [pooled_sample]}, stats
     stats = {
-        "samples": len(samples),
-        "questions": len(samples),  # one question per MuSiQue item
+        "samples": n_questions,
+        "questions": n_questions,
         "excluded_no_support": excluded,
     }
     return {"samples": samples}, stats
@@ -94,17 +125,23 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--limit", type=int, default=None, help="keep only the first N questions (smoke run)"
     )
+    parser.add_argument(
+        "--pooled", action="store_true",
+        help="pool all selected questions' deduped paragraphs into one open-retrieval corpus "
+             "(BX-2); default is one ~20-paragraph tenant per question",
+    )
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
     args = _build_parser().parse_args(argv)
     items = _load_items(Path(args.input).read_text())
-    dataset, stats = convert(items, limit=args.limit)
+    dataset, stats = convert(items, limit=args.limit, pooled=args.pooled)
     Path(args.output).write_text(json.dumps(dataset, indent=2))
+    corpus = f", {stats['corpus_paragraphs']} pooled paragraphs" if args.pooled else ""
     print(
-        f"converted {stats['samples']} multi-hop questions "
-        f"({stats['excluded_no_support']} without support excluded) → {args.output}"
+        f"converted {stats['questions']} multi-hop questions"
+        f"{corpus} ({stats['excluded_no_support']} without support excluded) → {args.output}"
     )
     return 0
 
