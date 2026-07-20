@@ -49,9 +49,10 @@ schedulable any time (no dependencies on the others). MA-1…MA-8 are **shipped*
 recall on MuSiQue** (genuinely multi-evidence; see the RQ-1 outcome note below and DESIGN §23).
 **BX-1 is shipped** (multi-evidence metric + MuSiQue converter), which enabled that re-trial.
 **RQ-2 is shipped:** the diagnostic found MuSiQue misses are 100% ranking-bound, and the
-cross-encoder reranker (`rerank=true`) it pointed to lifted all-hops recall **0.430 → 0.565
-(+0.135)** on MuSiQue (DESIGN §23). Rerank and multihop are composable, different levers;
-stacking them is the open question. No further scheduled item.
+cross-encoder reranker (`rerank=true`) it pointed to lifted all-hops recall **0.430 → 0.565**
+on MuSiQue. Rerank and multihop are different, composable levers and they **stack
+super-additively — `MODE=multihop RERANK=--rerank` reaches 0.810 all-hops / 0.905 recall-frac**
+(the recommended max-recall config; DESIGN §23). No further scheduled item.
 
 **Companion:** [GUILD.md](GUILD.md) redesigns the `examples/dungeon` demo around this
 work — expendable heroes, a torch-as-context-window budget, and a Handoff Briefing

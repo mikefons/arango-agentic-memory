@@ -1,7 +1,7 @@
 # ArangoDB Agentic Memory System — Design Specification
 
 > **Status:** ✅ **v1 build sequence complete (Steps 0–7).** v2: all §21 adapters shipped (MCP, LangChain/LangGraph, CrewAI) + full §19 entity API + **Step 3e heavy extraction tier done**, hardened into a deployable service. Authoritative reference.
-> **Last updated:** 2026-07-20 (rev 83 — RQ-2 reranker: MuSiQue misses are 100% ranking-bound; cross-encoder rerank +0.135 all-hops recall; §23)
+> **Last updated:** 2026-07-20 (rev 84 — multihop + rerank stack super-additively: 0.430 → 0.810 all-hops recall on MuSiQue; §23)
 >
 > The **rev-by-rev build log** lives in [`HISTORY.md`](HISTORY.md); user-visible changes are in
 > [`CHANGELOG.md`](../CHANGELOG.md); the doc map is [`docs/README.md`](README.md). This file is
@@ -1075,17 +1075,24 @@ predicted lift:
 | Config | all-hops Recall@k | recall-frac | token-F1 |
 |---|---|---|---|
 | lite (baseline) | 0.430 | 0.682 | 0.307 |
-| **lite + rerank** | **0.565** | **0.757** | **0.353** |
+| rerank | 0.565 | 0.757 | 0.353 |
 | multihop | 0.595 | 0.777 | 0.376 |
-| Δ rerank vs baseline | **+0.135 (+31%)** | +0.075 | +0.046 |
+| **multihop + rerank** | **0.810** | **0.905** | **0.443** |
 
-The reranker recovers a large fraction of the in-pool-but-unranked golds — the diagnosis →
-lever → measured-lift chain closed as designed. It does **not** reach the ~1.0 ceiling
-(`bge-reranker-base` is small; a larger reranker could close more), and it costs latency
-(CPU cross-encoder over `rerank_top_n`×k pairs), so it is opt-in and off the lite hot path.
-**Rerank (orders the pool) and multihop (gathers more into the pool) attack different
-failure modes and are composable** (`MODE=multihop RERANK=--rerank`); stacking them is the
-open question. See [ops.md](ops.md) for run steps.
+Each lever helps alone (rerank +0.135, multihop +0.165 all-hops), but **stacking them is
+super-additive:** the two gains sum to +0.300, yet the combined config lifts **+0.380** over
+baseline (0.430 → 0.810 all-hops; recall-frac 0.682 → 0.905 — ~90% of each evidence chain
+retrieved). The synergy is mechanistic: **multihop *fills* the pool** (decomposition
+retrieves the extra-hop evidence a single query misses) and **rerank *orders* the pool** (the
+cross-encoder promotes the most relevant candidates into top-k). Alone, rerank can only
+reorder the limited gold single-shot fused, and multihop's RRF doesn't rank its gathered gold
+optimally; together they are complementary stages of one funnel — multihop maximizes
+gold-in-pool, rerank cashes it into top-k.
+
+Both are opt-in and off the lite hot path; the reranker does not reach the ~1.0 ceiling
+(`bge-reranker-base` is small). The stacked config is the heaviest (decompose + N sub-query
+retrievals + cross-encoder, p50 ~9s/question) — the **recommended max-recall setting**
+(`MODE=multihop RERANK=--rerank`), traded against latency. See [ops.md](ops.md) for run steps.
 
 ### Latency targets (corrected Rev 2 — split by path)
 - **Core retrieval** (DB ops only: vector + BM25 + graph + fusion + assembly): **p99 ≤ 200ms**
