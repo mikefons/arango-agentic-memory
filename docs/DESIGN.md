@@ -440,8 +440,8 @@ Stage 4: Graph Expansion                   [CORE]
   │
   ▼
 Stage 5: Fusion + Reranking                [CORE]
-  RRF merge (vector + BM25) → recency/access boost → MMR diversity.
-  Hard cap k ≤ 10.
+  RRF merge (vector + BM25 + graph) → recency/access boost
+  → [cross-encoder rerank, opt-in — RQ-2b] → MMR diversity. Hard cap k ≤ 10.
   │
   ▼
 Stage 6: Context Assembly (token budget)   [CORE]
@@ -479,6 +479,25 @@ would have found on its own. Cost is N sub-queries = N
 retrievals + 1 decompose call, so it is an *augmented* path (like HyDE), off the lite
 hot path. It composes with neither the adaptive gate nor HyDE — decomposition is its
 only LLM step.
+
+### Cross-encoder rerank (RQ-2b)
+
+The RQ-2a diagnostic showed the residual recall gap is a **ranking** failure, not a
+first-stage one (100% of MuSiQue misses were in the fused pool, ranked below top-k, §23).
+The `rerank=true` flag inserts a **cross-encoder** between fusion and MMR: it scores each
+`(query, passage)` pair *jointly* — true relevance, not the lexical (BM25) / proximity
+(vector) / hop-distance (graph) signals the arms fuse — over the top `rerank_top_n` fused
+candidates, **replaces** each candidate's fused score with the rerank score, and reorders.
+MMR + assembly then run on that order.
+
+- **Composable, not a mode:** orthogonal to `lite`/`full`/`multihop`, so it stacks on any of
+  them. Off by default; off the lite hot path (it loads/runs a model).
+- **Superset-safe by scope:** only the top-N are reranked (candidates below the pool cutoff
+  can't reach top-k anyway); replace-scoring means MMR selects by pure relevance.
+- **Degrades** to the fused order if the reranker is unavailable or errors (§15) — memory
+  never breaks the turn.
+- **Provider:** a pluggable `Reranker` (keyless `FakeReranker` for tests; a local
+  sentence-transformers cross-encoder, default `bge-reranker-base`, via the `rerank` extra).
 
 ---
 

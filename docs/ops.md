@@ -81,7 +81,13 @@ turn does, making full mode HyDE-only with no gate call),
 `DECOMPOSE_MAX_SUBQUERIES` (4 — multihop mode (§9, RQ-1) only: cap on the sub-lookups a
 query is split into; each adds one retrieval, so this bounds the fan-out. Latency is ~N×
 a single retrieve plus one decompose LLM call — an augmented path, off the lite hot path),
-`DECOMPOSE_MAX_HOPS` (0 — reserved for the iterative read→retrieve→read variant; off);
+`DECOMPOSE_MAX_HOPS` (0 — reserved for the iterative read→retrieve→read variant; off),
+`RERANK_ENABLED` (`false` — cross-encoder rerank of the fused pool before MMR, RQ-2b; the
+diagnosed fix for in-pool-but-unranked golds, §9/§23), `RERANKER_PROVIDER` (`fake` keyless /
+`local` sentence-transformers — needs the `rerank` extra), `RERANKER_MODEL`
+(`BAAI/bge-reranker-base`), `RERANK_TOP_N` (50 — how many top fused candidates to re-score;
+cost scales with it. Off the lite hot path; degrades to the fused order if the model is
+unavailable);
 lifecycle: `DECAY_LAMBDA` (0.02),
 `DECAY_FLOOR` (0.1),
 `CONSOLIDATION_MENTION_THRESHOLD` (5), `DREAM_BREAKER_THRESHOLD` (0.5),
@@ -274,6 +280,20 @@ Each question becomes its own tenant with its ~20 candidate paragraphs (supporti
 distractors) as the corpus, faithful to MuSiQue's given-context setting. The report adds
 **`recall-frac`** (graded mean fraction of the support set retrieved) next to the all-hops
 `Recall@k`; read `recall-frac` as the primary multi-evidence signal.
+
+**Cross-encoder rerank (RQ-2b).** Add `RERANK=--rerank` to any run to re-rank the fused
+pool with a cross-encoder before MMR — the fix for the ranking-bound misses RQ-2a found.
+Needs the local reranker: install the extra and select it, then run:
+
+```
+uv pip install -e '.[rerank]'   # sentence-transformers + the model download on first use
+RERANKER_PROVIDER=local make benchmark DATASET=musique.json MODE=lite RERANK=--rerank
+```
+
+Compare `recall-frac` / all-hops `Recall@k` against the un-reranked baseline on the same
+dataset (the reranker is CPU-heavy — expect higher latency; it's off the lite hot path).
+With `RERANKER_PROVIDER=fake` the run uses the keyless token-overlap stand-in (CI/plumbing
+only, not a real quality signal).
 
 ### Retrieval-miss diagnostic (RQ-2a)
 

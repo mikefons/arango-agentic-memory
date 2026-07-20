@@ -33,6 +33,13 @@ it has not yet been tagged or published to a registry.
   **MuSiQue-Ans converter** (`eval.musique_convert`), so multi-hop *retrieval* can be
   measured on a genuinely multi-evidence benchmark. Backward-compatible: LoCoMo single-fact
   runs are unchanged.
+- Cross-encoder reranker (RQ-2b): an opt-in `rerank=true` flag inserts a pluggable
+  `Reranker` (keyless `FakeReranker`; a local sentence-transformers cross-encoder via the
+  `rerank` extra) between fusion and MMR, re-scoring the top `RERANK_TOP_N` candidates by
+  joint (query, passage) relevance — the diagnosed fix for in-pool-but-unranked evidence
+  (RQ-2a). Composable with lite/multihop; off the hot path; degrades to the fused order on
+  failure. A retrieval-miss diagnostic (`eval.pool_diag`) reports the ranking-vs-recall
+  split that motivates it.
 - Bitemporal validity, PII redaction at ingest, right-to-be-forgotten.
 - In-process lifecycle passes (keyless, no Pregel): PageRank salience, label-
   propagation community detection, Dream-State consolidation, Ebbinghaus lazy
