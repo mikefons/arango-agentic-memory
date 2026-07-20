@@ -55,6 +55,11 @@ langchain = [
 crewai = [
     "crewai>=0.80.0",
 ]
+# Optional cross-encoder reranker (RQ-2b, DESIGN.md §9). Install to enable
+# `reranker_provider="local"`; the core reranks with the keyless FakeReranker without it.
+rerank = [
+    "sentence-transformers>=3.0.0",
+]
 # Optional shared (cross-instance) layer for the rate limiter + embedding cache
 # (DESIGN.md §17/§16). Install to enable; the core stays per-instance without it.
 redis = [
