@@ -40,16 +40,18 @@ Sizes: S ≈ ≤1 day, M ≈ 2–3 days.
 | 8 | MA-8 | Vector-index reliability + resume P1 benchmark | M | — |
 | 9 | RQ-1 | Multi-hop query decomposition / iterative retrieval | L | shipped (helps on MuSiQue) |
 | 10 | BX-1 | Benchmark expansion: MuSiQue multi-evidence dataset + metric | M | — |
-| 11 | RQ-2 | Close the retrieval-content gap (diagnostic → reranker / expansion) | L | BX-1 |
+| 11 | RQ-2 | Close the retrieval-content gap (diagnostic → cross-encoder reranker) | L | shipped (+0.135 recall) |
 
 Recommended sequence: **MA-1 → MA-2 → MA-3 → MA-4 → MA-5 → MA-6**, with MA-7/MA-8
 schedulable any time (no dependencies on the others). MA-1…MA-8 are **shipped**. **RQ-1**
 (multi-hop retrieval) is also shipped as opt-in `mode="multihop"`; its value is
 **benchmark-dependent** — neutral/harmful on LoCoMo (single-turn gold) but **+0.165 all-hops
 recall on MuSiQue** (genuinely multi-evidence; see the RQ-1 outcome note below and DESIGN §23).
-**BX-1 is shipped** (multi-evidence metric + MuSiQue converter), which is what enabled that
-re-trial. The next recall work is **RQ-2**: close the *retrieval-content* gap diagnostic-first
-(reranker vs query expansion, picked by measurement), now measurable on MuSiQue via `recall-frac`.
+**BX-1 is shipped** (multi-evidence metric + MuSiQue converter), which enabled that re-trial.
+**RQ-2 is shipped:** the diagnostic found MuSiQue misses are 100% ranking-bound, and the
+cross-encoder reranker (`rerank=true`) it pointed to lifted all-hops recall **0.430 → 0.565
+(+0.135)** on MuSiQue (DESIGN §23). Rerank and multihop are composable, different levers;
+stacking them is the open question. No further scheduled item.
 
 **Companion:** [GUILD.md](GUILD.md) redesigns the `examples/dungeon` demo around this
 work — expendable heroes, a torch-as-context-window budget, and a Handoff Briefing
