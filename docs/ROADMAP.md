@@ -597,25 +597,31 @@ runs on RQ-1):
   > ranking **in the given-context setting** and validates the reranker, but does not test
   > first-stage recall on a large open corpus (that would need a pooled-corpus variant).
 
-- **RQ-2b — cross-encoder reranker (lever, decided by 2a).** Insert a reranker between fusion
-  and MMR: retrieve the fused pool (candidate_pool) → a cross-encoder scores each candidate
-  against the query → reorder → existing MMR + tiered assembly on the reranked order. A
-  cross-encoder scores query↔passage *relevance* directly (not lexical/proximity), so it
-  recovers the 97 in-pool-but-unranked golds. Opt-in (new `rerank=true` / a mode), off the
-  lite hot path. **Files:** `retrieve/rerank.py` (the scorer), a `_rerank` hook in
-  `search._retrieve_impl` after `_gather_fused`, `config.py` (`rerank_enabled`,
-  `rerank_top_n`, model id), `eval` wiring, docs, tests.
+- **RQ-2b — cross-encoder reranker (lever, decided by 2a). Scoped; decisions locked.** Insert
+  a reranker between fusion and MMR: fused pool (candidate_pool) → cross-encoder scores each
+  `(query, text)` jointly → reorder → existing MMR + tiered assembly on the reranked order. A
+  cross-encoder scores relevance directly (not lexical/proximity), so it recovers the 97
+  in-pool-but-unranked golds. One hook in `_retrieve_impl` after `_gather_fused`; MMR/assembly
+  unchanged (they consume `fused_score`).
+
+  **Locked decisions:**
+  - **Provider — local cross-encoder** (sentence-transformers, e.g. `bge-reranker-base` /
+    ms-marco MiniLM). Pluggable `Reranker` protocol + a **`FakeReranker`** (deterministic,
+    keyless) mirroring `Embedder`/`Generator`, so CI stays offline.
+  - **Surface — composable `rerank=true` flag** (config/opts, orthogonal to `mode`), so it
+    stacks on lite **or** multihop; not its own mode.
+  - **Scoring — replace:** `fused_score := rerank score` for the reranked top-N; MMR then
+    orders by pure cross-encoder relevance (cleanest measure of the lever's lift).
+  - **`rerank_top_n`** bounds cost (default e.g. 50). Off the lite hot path; **degrades** to
+    the fused order if the model is unavailable/errors (§15) — never breaks the turn.
+
+  **Files:** `retrieve/rerank.py` (protocol + Fake + local provider), a `_rerank` hook in
+  `search._retrieve_impl`, `config.py` (`rerank_enabled`, `rerank_top_n`, `reranker_provider`,
+  model id), `eval` wiring (a `--rerank` benchmark flag), docs, tests.
 
 **Acceptance.** Measured on **MuSiQue** (BX-1): the reranker lifts `recall-frac` / all-hops
 `Recall@k` materially over the fused baseline (0.682 / 0.430) toward the diagnostic ceiling
-(per-item recall 0.76 → ~1.0), without regressing latency past the augmented budget. The
-RQ-2a report is reproducible.
-
-**Decisions to make at RQ-2b scope time.** reranker model (small local cross-encoder e.g.
-bge-reranker / MiniLM vs LLM-as-reranker — cost/latency/dependency trade); where the rerank
-sits (before MMR, on the fused pool — recommended); `rerank_top_n` (how many pool candidates
-to score); its own mode vs a full-mode addition; graceful degradation if the model is
-unavailable (fall back to the fused order, like §15).
+(per-item recall 0.76 → ~1.0), without regressing lite-mode latency; degradation path tested.
 
 ---
 
