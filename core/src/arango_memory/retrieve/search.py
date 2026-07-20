@@ -36,6 +36,7 @@ from ..telemetry import metrics, span
 from ..telemetry.logging import logger
 from .decompose import decompose
 from .enrich import QueryCache, hyde, should_skip_retrieval
+from .rerank import Reranker, get_reranker
 
 # Lazy decay (§11): the Ebbinghaus multiplier strength·exp(-λ·Δdays) is folded into
 # the ranking SORT so freshness shapes *candidate selection* (pool membership), not
@@ -359,6 +360,8 @@ def retrieve(
     graph_hops: int | None = None,
     generator: Generator | None = None,
     cache: QueryCache | None = None,
+    rerank: bool | None = None,
+    reranker: Reranker | None = None,
 ) -> RetrieveResult:
     """Instrumented retrieval (DESIGN.md §18): span + metrics + §15 degradation.
 
@@ -385,6 +388,8 @@ def retrieve(
                 graph_hops=graph_hops,
                 generator=generator,
                 cache=cache,
+                rerank=rerank,
+                reranker=reranker,
             )
     except Exception as exc:  # noqa: BLE001 — §15: memory failures never break the turn
         metrics.emit("degraded", op="retrieve", reason=type(exc).__name__)
@@ -509,6 +514,36 @@ def _fuse_candidate_lists(lists: list[list[_Candidate]]) -> list[_Candidate]:
     return sorted(by_key.values(), key=lambda c: c.fused_score, reverse=True)
 
 
+def _rerank(
+    candidates: list[_Candidate], query: str, *, reranker: Reranker | None, top_n: int
+) -> list[_Candidate]:
+    """Cross-encoder rerank of the top-N fused candidates (RQ-2b). Replaces `fused_score`
+    with the reranker's joint (query, text) relevance and reorders, so MMR then selects by
+    relevance rather than fusion rank — the fix for in-pool-but-unranked golds (§23).
+
+    Only the top-N are considered (the rest ranked below the pool cutoff can't reach top-k
+    anyway); the recency-decayed fused score is intentionally *replaced* per the RQ-2b
+    decision. Any reranker error degrades to the fused order (§15) — memory never breaks.
+    """
+    head = candidates[:top_n]
+    if not head:
+        return candidates
+    try:
+        rk = reranker or get_reranker()
+        scores = rk.score(query, [c.text for c in head])
+        if len(scores) != len(head):
+            raise ValueError(f"reranker returned {len(scores)} scores for {len(head)} texts")
+    except Exception as exc:  # noqa: BLE001 — §15: a rerank fault falls back, never breaks
+        metrics.emit("degraded", op="rerank", reason=type(exc).__name__)
+        logger.warning("rerank failed; using fused order",
+                       extra={"reason": type(exc).__name__, "detail": str(exc)})
+        return candidates
+    for cand, score in zip(head, scores, strict=True):
+        cand.fused_score = float(score)
+    head.sort(key=lambda c: c.fused_score, reverse=True)
+    return head
+
+
 def _retrieve_impl(
     db: StandardDatabase,
     *,
@@ -525,8 +560,10 @@ def _retrieve_impl(
     graph_hops: int | None = None,
     generator: Generator | None = None,
     cache: QueryCache | None = None,
+    rerank: bool | None = None,
+    reranker: Reranker | None = None,
 ) -> RetrieveResult:
-    """BM25 (+ vector when trained) → RRF → MMR → tiered token-budget assembly.
+    """BM25 (+ vector when trained) → RRF → (rerank) → MMR → tiered token-budget assembly.
 
     Full mode adds the adaptive gate (may skip retrieval) and HyDE (embeds a
     hypothetical answer instead of the raw query) ahead of the core stages (§9).
@@ -594,6 +631,12 @@ def _retrieve_impl(
 
     if not fused:
         return RetrieveResult()
+
+    # Cross-encoder rerank (RQ-2b): re-score the top-N fused candidates by joint relevance
+    # before MMR. Opt-in via the `rerank` flag or `settings.rerank_enabled`; off the lite
+    # default. Degrades to the fused order on any reranker error (handled in `_rerank`).
+    if settings.rerank_enabled if rerank is None else rerank:
+        fused = _rerank(fused, query, reranker=reranker, top_n=settings.rerank_top_n)
 
     selected = _mmr(fused, k)
     selected.sort(key=lambda c: -c.fused_score)

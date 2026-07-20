@@ -17,6 +17,7 @@ UVRUN := uv run --no-sync
 DATASET ?= tests/data/locomo_smoke.json
 MODE    ?= lite
 K       ?= 10
+RERANK  ?=          # set RERANK=--rerank to cross-encoder rerank the fused pool (RQ-2b)
 
 sync:            ## Install/update deps into the relocated venv
 	uv sync --extra dev
@@ -39,7 +40,7 @@ type:            ## Mypy type-check
 ci: lint type test  ## Everything CI runs
 
 benchmark:       ## LoCoMo benchmark vs §23 (DATASET=… MODE=lite|full|multihop K=…)
-	$(UVRUN) python -m arango_memory.eval.benchmark $(DATASET) --mode $(MODE) --k $(K)
+	$(UVRUN) python -m arango_memory.eval.benchmark $(DATASET) --mode $(MODE) --k $(K) $(RERANK)
 
 HANDOFF_DATASET ?= tests/data/handoff_smoke.json
 handoff-eval:    ## Multi-agent handoff eval vs §23 (MA-5; HANDOFF_DATASET=…)
