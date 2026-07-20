@@ -1,7 +1,7 @@
 # ArangoDB Agentic Memory System — Design Specification
 
 > **Status:** ✅ **v1 build sequence complete (Steps 0–7).** v2: all §21 adapters shipped (MCP, LangChain/LangGraph, CrewAI) + full §19 entity API + **Step 3e heavy extraction tier done**, hardened into a deployable service. Authoritative reference.
-> **Last updated:** 2026-07-19 (rev 82 — RQ-1 multi-hop is benchmark-dependent: negative on LoCoMo, +0.165 all-hops recall on MuSiQue (BX-1); §23)
+> **Last updated:** 2026-07-20 (rev 83 — RQ-2 reranker: MuSiQue misses are 100% ranking-bound; cross-encoder rerank +0.135 all-hops recall; §23)
 >
 > The **rev-by-rev build log** lives in [`HISTORY.md`](HISTORY.md); user-visible changes are in
 > [`CHANGELOG.md`](../CHANGELOG.md); the doc map is [`docs/README.md`](README.md). This file is
@@ -1059,6 +1059,33 @@ target is a single turn (LoCoMo) — use it accordingly. The original-query supe
 (#137) is what makes it safe: multihop = single-shot's hits **plus** the extra hops. The
 lever for LoCoMo's 0.42 → 0.6 remains retrieval *content* (ROADMAP RQ-2), now measurable on
 MuSiQue via BX-1's `recall-frac`. See [ops.md](ops.md) for run steps.
+
+### RQ-2 retrieval-content gap: diagnostic + reranker (rev 83)
+
+RQ-2a's miss diagnostic (`eval.pool_diag`) on the MuSiQue 200-Q set found **100% of recall
+misses are *ranking* failures** — the gold evidence is in the fused pool but ranked below
+top-k (97/97 misses in-pool, 0 absent). So the lever is a reranker, not query expansion.
+*(Caveat: MuSiQue's per-question ~20-paragraph tenants make `pool@100` ⊇ the whole corpus,
+so this proves the failure is ranking in the given-context setting; it does not test
+first-stage recall on a large open corpus.)*
+
+RQ-2b's cross-encoder reranker (`rerank=true`, local `bge-reranker-base`) delivered the
+predicted lift:
+
+| Config | all-hops Recall@k | recall-frac | token-F1 |
+|---|---|---|---|
+| lite (baseline) | 0.430 | 0.682 | 0.307 |
+| **lite + rerank** | **0.565** | **0.757** | **0.353** |
+| multihop | 0.595 | 0.777 | 0.376 |
+| Δ rerank vs baseline | **+0.135 (+31%)** | +0.075 | +0.046 |
+
+The reranker recovers a large fraction of the in-pool-but-unranked golds — the diagnosis →
+lever → measured-lift chain closed as designed. It does **not** reach the ~1.0 ceiling
+(`bge-reranker-base` is small; a larger reranker could close more), and it costs latency
+(CPU cross-encoder over `rerank_top_n`×k pairs), so it is opt-in and off the lite hot path.
+**Rerank (orders the pool) and multihop (gathers more into the pool) attack different
+failure modes and are composable** (`MODE=multihop RERANK=--rerank`); stacking them is the
+open question. See [ops.md](ops.md) for run steps.
 
 ### Latency targets (corrected Rev 2 — split by path)
 - **Core retrieval** (DB ops only: vector + BM25 + graph + fusion + assembly): **p99 ≤ 200ms**
