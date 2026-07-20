@@ -79,6 +79,12 @@ def diagnose(
     by_category: dict[str, MissBreakdown] = {}
     total = len(samples)
     for i, sample in enumerate(samples, 1):
+        # Ingestion is silent and can be long on a pooled corpus (thousands of paragraphs,
+        # one embedding call each), so report before and periodically during it.
+        n_turns = sum(len(session) for session in sample.sessions)
+        if progress:
+            print(f"[{i}/{total}] {sample.sample_id}: ingesting {n_turns} paragraphs…",
+                  file=sys.stderr, flush=True)
         turn_index = 0
         for session in sample.sessions:
             for turn in session:
@@ -90,11 +96,16 @@ def diagnose(
                     turn_index=turn_index,
                 )
                 turn_index += 1
+                if progress and turn_index % 500 == 0:
+                    print(f"    …ingested {turn_index}/{n_turns}", file=sys.stderr, flush=True)
         _await_consistency(db, sample, agent_id, attempts=30, delay=0.25)
+        n_qa = len(sample.qa)
         if progress:
-            print(f"[{i}/{total}] {sample.sample_id}: diagnosing {len(sample.qa)} questions…",
+            print(f"[{i}/{total}] {sample.sample_id}: scoring {n_qa} questions…",
                   file=sys.stderr, flush=True)
-        for qa in sample.qa:
+        for q_idx, qa in enumerate(sample.qa, 1):
+            if progress and q_idx % 50 == 0:
+                print(f"    …scored {q_idx}/{n_qa}", file=sys.stderr, flush=True)
             top = retrieve(db, query=qa.question, tenant_id=sample.sample_id,
                            agent_id=agent_id, k=k)
             pool_hits = diagnose_pool(db, query=qa.question, tenant_id=sample.sample_id,
