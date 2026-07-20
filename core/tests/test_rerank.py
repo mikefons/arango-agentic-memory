@@ -40,6 +40,13 @@ def test_get_reranker_defaults_to_fake() -> None:
     assert isinstance(r, Reranker)  # satisfies the runtime-checkable protocol
 
 
+def test_get_reranker_caches_by_provider_and_model() -> None:
+    # Built once and reused — the benchmark reranks 200 questions without reloading the model.
+    a = get_reranker(Settings(reranker_provider="fake"))
+    b = get_reranker(Settings(reranker_provider="fake"))
+    assert a is b
+
+
 def test_get_reranker_local_without_extra_is_a_clear_error() -> None:
     # sentence-transformers isn't a hard dep; selecting 'local' without it must fail loudly
     # with actionable guidance, not silently fall back to fake.
