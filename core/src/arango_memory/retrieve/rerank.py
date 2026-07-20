@@ -18,6 +18,7 @@ Two implementations:
 from __future__ import annotations
 
 from collections.abc import Sequence
+from functools import lru_cache
 from typing import Protocol, runtime_checkable
 
 from ..config import Settings, settings
@@ -69,15 +70,25 @@ class LocalCrossEncoderReranker:
         return [float(s) for s in self._encoder.predict(pairs)]
 
 
-def get_reranker(config: Settings | None = None) -> Reranker:
-    """Build the configured reranker. Selecting 'local' without the extra is an error."""
-    cfg = config or settings
-    if cfg.reranker_provider == "fake":
+@lru_cache(maxsize=4)
+def _build_reranker(provider: str, model: str) -> Reranker:
+    """Construct a reranker, cached by (provider, model). The local cross-encoder loads a
+    ~1GB model, so callers that rerank many queries (e.g. the benchmark) build it once and
+    reuse it instead of reloading per call. Exceptions are not cached — a failed build
+    retries next time."""
+    if provider == "fake":
         return FakeReranker()
     try:
-        return LocalCrossEncoderReranker(model=cfg.reranker_model)
+        return LocalCrossEncoderReranker(model=model)
     except ImportError as exc:  # optional 'rerank' extra not installed
         raise RuntimeError(
             "reranker_provider='local' needs the 'rerank' extra (sentence-transformers); "
             "install `arango-memory[rerank]` or use reranker_provider='fake'."
         ) from exc
+
+
+def get_reranker(config: Settings | None = None) -> Reranker:
+    """The configured reranker (cached per provider+model). Selecting 'local' without the
+    extra is an error."""
+    cfg = config or settings
+    return _build_reranker(cfg.reranker_provider, cfg.reranker_model)
