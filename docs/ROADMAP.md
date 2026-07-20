@@ -586,22 +586,36 @@ runs on RQ-1):
   `python -m arango_memory.eval.pool_diag DATASET.json [--k 10] [--pool 100]`; `test_pool_diag.py`;
   ops.md run steps. No change to `retrieve()`'s hot path. **Acceptance:** produces the
   ranking-vs-recall split reproducibly on the MuSiQue 200-Q set (real embeddings).
-- **RQ-2b — the lever (conditional on 2a):**
-  - *ranking-dominated* → **cross-encoder reranker** stage between fusion and MMR (pool@100 →
-    rerank → MMR/assemble). New `retrieve/rerank.py` + config, opt-in mode. Standard highest-ROI
-    RAG lever; scores semantic relevance directly, so it attacks the paraphrase gap head-on.
-  - *pool-recall-dominated* → **query expansion + `prospective_queries`.** We already index
-    memories under predicted questions and the BM25 arm searches them (`enrich.py` full mode) —
-    strengthening that coverage is a cheap, mechanism-we-already-have fix for a question↔statement
-    gap; a stronger embedding model is the fallback.
 
-**Acceptance.** Measured on **MuSiQue** (BX-1): the chosen lever lifts recall materially over
-the fused baseline without regressing latency past the augmented budget; the diagnostic report
-is reproducible. Target set after 2a quantifies the headroom.
+  > **RQ-2a result (2026-07-20, MuSiQue 200-Q, #144):** of 400 support items, **303 hit /
+  > 97 miss**, and the misses split **100% ranking (in-pool) / 0% recall (absent)**. Every
+  > missed gold paragraph is already in the fused pool — the first stage finds all the
+  > evidence; the failure is **purely ranking**. → **RQ-2b = cross-encoder reranker** (query
+  > expansion has no gap to close). Headroom: 97/400 items (24%) recoverable by reordering.
+  > *Caveat:* each MuSiQue question is its own ~20-paragraph tenant, so `pool=100` ⊇ the whole
+  > corpus and a recall-miss is structurally near-impossible here — this proves the failure is
+  > ranking **in the given-context setting** and validates the reranker, but does not test
+  > first-stage recall on a large open corpus (that would need a pooled-corpus variant).
 
-**Decisions to make at scope time.** reranker model (small local cross-encoder vs LLM-as-
-reranker — cost/latency trade); where the rerank sits (pre- or post-MMR); pool size fed to it;
-whether it is its own mode or a full-mode addition. Deliberately gated behind the RQ-2a number.
+- **RQ-2b — cross-encoder reranker (lever, decided by 2a).** Insert a reranker between fusion
+  and MMR: retrieve the fused pool (candidate_pool) → a cross-encoder scores each candidate
+  against the query → reorder → existing MMR + tiered assembly on the reranked order. A
+  cross-encoder scores query↔passage *relevance* directly (not lexical/proximity), so it
+  recovers the 97 in-pool-but-unranked golds. Opt-in (new `rerank=true` / a mode), off the
+  lite hot path. **Files:** `retrieve/rerank.py` (the scorer), a `_rerank` hook in
+  `search._retrieve_impl` after `_gather_fused`, `config.py` (`rerank_enabled`,
+  `rerank_top_n`, model id), `eval` wiring, docs, tests.
+
+**Acceptance.** Measured on **MuSiQue** (BX-1): the reranker lifts `recall-frac` / all-hops
+`Recall@k` materially over the fused baseline (0.682 / 0.430) toward the diagnostic ceiling
+(per-item recall 0.76 → ~1.0), without regressing latency past the augmented budget. The
+RQ-2a report is reproducible.
+
+**Decisions to make at RQ-2b scope time.** reranker model (small local cross-encoder e.g.
+bge-reranker / MiniLM vs LLM-as-reranker — cost/latency/dependency trade); where the rerank
+sits (before MMR, on the fused pool — recommended); `rerank_top_n` (how many pool candidates
+to score); its own mode vs a full-mode addition; graceful degradation if the model is
+unavailable (fall back to the fused order, like §15).
 
 ---
 
