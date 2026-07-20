@@ -41,6 +41,7 @@ Sizes: S ≈ ≤1 day, M ≈ 2–3 days.
 | 9 | RQ-1 | Multi-hop query decomposition / iterative retrieval | L | shipped (helps on MuSiQue) |
 | 10 | BX-1 | Benchmark expansion: MuSiQue multi-evidence dataset + metric | M | — |
 | 11 | RQ-2 | Close the retrieval-content gap (diagnostic → cross-encoder reranker) | L | shipped (+0.135 recall) |
+| 12 | BX-2 | Pooled-corpus MuSiQue (open-retrieval variant, tests first-stage recall) | S | BX-1 |
 
 Recommended sequence: **MA-1 → MA-2 → MA-3 → MA-4 → MA-5 → MA-6**, with MA-7/MA-8
 schedulable any time (no dependencies on the others). MA-1…MA-8 are **shipped**. **RQ-1**
@@ -625,6 +626,48 @@ runs on RQ-1):
 **Acceptance.** Measured on **MuSiQue** (BX-1): the reranker lifts `recall-frac` / all-hops
 `Recall@k` materially over the fused baseline (0.682 / 0.430) toward the diagnostic ceiling
 (per-item recall 0.76 → ~1.0), without regressing lite-mode latency; degradation path tested.
+
+---
+
+## BX-2 — pooled-corpus MuSiQue (open-retrieval variant)
+
+*Scoped, not started. Decisions locked. Eval infra only — no retrieval-code change.*
+
+**Why.** Every MuSiQue result so far (lite/rerank/multihop/stacked) is in the **given-context**
+regime: the converter makes each question its own **~20-paragraph tenant**, so `pool@100` ⊇
+the whole corpus and the gold is *always* in the pool. That's why RQ-2a measured **0%
+first-stage-recall misses** — an *artifact*, not a finding. We have never tested whether
+BM25+vector+graph can **find** the gold among real distractors. BX-2 pools all questions'
+paragraphs into **one shared corpus (one tenant)** so retrieval is genuinely open (thousands
+of candidates), answering two open questions: (1) is first-stage recall a real gap on open
+corpora (do out-of-pool misses finally appear in `pool_diag`)? (2) do the rerank/multihop/
+stacked gains survive the harder regime?
+
+**Design (locked).**
+- `musique_convert.py` gains a **`--pooled`** flag (`convert(..., pooled=True)`): emit **one
+  Sample** whose `sessions` hold every paragraph across the selected questions, and whose `qa`
+  is **all** those questions (each keeping its `gold_facts`). Single `sample_id` = one tenant
+  = one open corpus.
+- **`--limit N` selects the questions**, and only *those* questions' paragraphs are pooled;
+  the **same N questions are scored** — self-contained, so every gold is guaranteed present
+  in the corpus and a miss is a *true* first-stage-recall failure (not a missing document).
+- **Dedup** paragraphs by `(title, paragraph_text)` — MuSiQue reuses Wikipedia paras across
+  questions; without dedup the corpus balloons and double-counts.
+- Output is the standard schema, so `benchmark`, `pool_diag`, `--rerank`, `MODE=multihop` all
+  run on the pooled file unchanged.
+
+**Files.** `eval/musique_convert.py` (the `--pooled` branch + dedup), `test_musique_convert.py`
+(pooled mapping: shared corpus, dedup, all questions retained), ops.md (build + run steps;
+"open-retrieval stress test").
+
+**Acceptance.** A pooled `musique-pooled.json` converts (one sample, N questions, deduped
+corpus); `pool_diag` on it yields a **non-trivial out-of-pool (recall) miss fraction** — i.e.
+it can surface the first-stage-recall failures the per-question setup structurally couldn't.
+Then lite/rerank/multihop can be re-measured in the open-corpus regime.
+
+**Decisions to make at build time.** dedup key exactness (title+text vs normalized); whether
+to cap corpus size independently of `--limit` if ingestion is too slow; whether `pool_diag`'s
+`--pool` should widen for the larger corpus.
 
 ---
 
