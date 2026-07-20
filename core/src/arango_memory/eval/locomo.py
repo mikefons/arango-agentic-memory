@@ -161,6 +161,7 @@ def run_eval(
     mode: str = "lite",
     k: int = 10,
     max_memory_tokens: int = 1500,
+    rerank: bool = False,
     consistency_attempts: int = 30,
     consistency_delay: float = 0.25,
 ) -> EvalResult:
@@ -196,6 +197,7 @@ def run_eval(
             mode=mode,
             k=k,
             max_memory_tokens=max_memory_tokens,
+            rerank=rerank,
         )
         hit_texts = [h.text for h in retrieved.hits]
         if answer_from_generation:

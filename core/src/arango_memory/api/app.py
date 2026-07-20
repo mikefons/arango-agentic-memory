@@ -145,6 +145,7 @@ class RetrieveOptions(BaseModel):
     max_memory_tokens: int = settings.max_memory_tokens
     n_probe: int = settings.n_probe
     k: int = settings.k
+    rerank: bool = settings.rerank_enabled  # cross-encoder rerank of the fused pool (RQ-2b)
 
 
 # ── /v1/store ─────────────────────────────────────────────
@@ -715,6 +716,7 @@ async def retrieve_endpoint(
         mode=req.opts.mode,
         generator=generator,
         cache=cache,
+        rerank=req.opts.rerank,
     )
     return RetrieveResponse(
         context=result.context,

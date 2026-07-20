@@ -77,6 +77,7 @@ def run_benchmark(
     *,
     mode: str = "lite",
     k: int = 10,
+    rerank: bool = False,
     progress: bool = False,
 ) -> BenchmarkReport:
     """Run every sample, aggregate to overall + per-category metrics vs §23 targets.
@@ -95,7 +96,7 @@ def run_benchmark(
                 f"scoring {len(sample.qa)} questions…",
                 file=sys.stderr, flush=True,
             )
-        result = run_eval(db, sample, mode=mode, k=k)
+        result = run_eval(db, sample, mode=mode, k=k, rerank=rerank)
         scores.extend(result.questions)
         if progress:
             print(
@@ -166,6 +167,9 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("dataset", help="path to a LoCoMo-style dataset JSON")
     parser.add_argument("--mode", choices=["lite", "full", "multihop"], default="lite")
     parser.add_argument("--k", type=int, default=10)
+    parser.add_argument("--rerank", action="store_true",
+                        help="cross-encoder rerank the fused pool (RQ-2b; needs a reranker "
+                             "provider — set RERANKER_PROVIDER=local + the 'rerank' extra)")
     return parser
 
 
@@ -176,7 +180,9 @@ def main(argv: list[str] | None = None) -> int:
     args = _build_parser().parse_args(argv)
     db = ArangoMemoryClient().connect()
     ensure_schema(db)
-    report = run_benchmark(db, load_dataset(args.dataset), mode=args.mode, k=args.k, progress=True)
+    report = run_benchmark(
+        db, load_dataset(args.dataset), mode=args.mode, k=args.k, rerank=args.rerank, progress=True
+    )
     print(_format(report))
     return 0 if report.passed else 1
 
