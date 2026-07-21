@@ -134,6 +134,10 @@ class Settings(BaseSettings):
     max_memory_tokens: int = Field(default=1500, ge=0)
     n_probe: int = Field(default=10, ge=1)
     k: int = Field(default=10, ge=1)
+    # How many candidates each arm pools before fusion/rerank/MMR. On an open/large-tenant
+    # corpus, widening this (+ rerank) recovers the tail-reachable golds BX-3 found (§23) —
+    # at more per-query DB work. Default 100 keeps the common (given-context) path cheap.
+    candidate_pool: int = Field(default=100, ge=1)
     # MMR relevance↔diversity balance for the final top-k re-rank (§9). 1.0 = pure
     # relevance (fusion order); lower trades relevance for diversity in the returned set.
     # Defaults to pure relevance: diversity is a *context-window* concern (don't feed the

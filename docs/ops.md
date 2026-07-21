@@ -68,7 +68,10 @@ need no API keys.
 | `MEMORY_MODE` | `lite` | `full` (adds HyDE + adaptive gate + prospective indexing) |
 
 **Behavior knobs** — retrieval: `MAX_MEMORY_TOKENS` (1500), `K` (10), `GRAPH_HOPS`
-(2), `VECTOR_N_LISTS` (64), `VECTOR_TRAIN_FACTOR` (40 — index trains at
+(2), `CANDIDATE_POOL` (100 — per-arm candidates before fusion/rerank/MMR; on an open/large
+corpus, raise it (e.g. 500) **with rerank** to recover the tail-reachable golds BX-3 found
+(§23), at more per-query DB work; also settable per request via `opts.candidate_pool`),
+`VECTOR_N_LISTS` (64), `VECTOR_TRAIN_FACTOR` (40 — index trains at
 `n_lists × factor` docs),
 `ENTITY_VECTOR_N_LISTS` (32) / `ENTITY_VECTOR_TRAIN_FACTOR` (40) / `ENTITY_RESOLUTION_TOP_K`
 (10 — SC-1b: once a tenant accrues `n_lists × factor` entities, write-time resolution matches
