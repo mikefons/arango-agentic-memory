@@ -1112,10 +1112,11 @@ on retrieval** (`ReadTimeout` at 60 s). Two limits the 20-doc tenants had masked
 Neither is a *retrieval-quality* result — they are engineering limits of a single large-corpus
 tenant. **BX-3** (ROADMAP) gets the first-stage-recall number anyway by routing around both
 (ingest with `extract=False`, probe with `graph_hops=0` — first-stage recall needs neither
-entities nor the graph arm). The underlying scalability limits are **SC-1** (ROADMAP): the
-**O(N²) ingestion is fixed by SC-1b** — ANN entity resolution (a Faiss IVF index on
+entities nor the graph arm). Both underlying limits are now fixed (**SC-1**, ROADMAP): the
+**O(N²) ingestion** by **SC-1b** — ANN entity resolution (a Faiss IVF index on
 `entities.embedding` → top-k nearest instead of the full tenant scan, §7); the **graph-arm
-retrieval fan-out (SC-1c) remains** to bound.
+retrieval fan-out** by **SC-1c** — `GRAPH_MAX_NEIGHBORS` caps the `relates_to` expansion
+before the memory join so a dense single-tenant graph can't explode the traversal.
 
 ### Open-corpus first-stage recall — real gap (BX-3 result)
 

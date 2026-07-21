@@ -105,6 +105,10 @@ FOR start IN @seed_ids
     FOR related, redge, p IN 0..@hops ANY entity relates_to
       OPTIONS { bfs: true, uniqueVertices: "global" }
       FILTER related.invalid_at == null
+      // SC-1c: bound the relates_to fan-out (BFS order) before the memory expansion, so a
+      // dense single-tenant graph can't explode the traversal (§23). Global cap across
+      // seeds; the top seeds are the highest-ranked hits, so their neighbourhoods win.
+      LIMIT @max_neighbors
       FOR mem IN 1..1 INBOUND related mentions
         FILTER mem.tenant_id == @tenant_id
            AND mem.agent_id IN @agent_ids
@@ -461,6 +465,7 @@ def _gather_fused(
                 "tenant_id": tenant_id,
                 "agent_ids": agent_ids,
                 "hops": graph_hops if graph_hops is not None else settings.graph_hops,
+                "max_neighbors": settings.graph_max_neighbors,
                 "pool": candidate_pool,
                 **decay_binds,
             },
