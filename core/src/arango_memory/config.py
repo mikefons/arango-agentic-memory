@@ -163,6 +163,14 @@ class Settings(BaseSettings):
     # one point per centroid — badly under-trained (MA-8). Below the tier, retrieval
     # stays BM25-only (§7, §15).
     vector_train_factor: int = Field(default=40, ge=1)
+    # Entity resolution (SC-1b, DESIGN §7): once a tenant accrues many entities, matching a
+    # new entity against *all* of them per write is O(N) → O(N²) ingestion. A Faiss IVF index
+    # on `entities.embedding` lets resolution query the top-k nearest instead. Deferred until
+    # the collection warms (n_lists × train_factor), below which it full-scans (fine at small N).
+    entity_vector_n_lists: int = Field(default=32, ge=1)
+    entity_vector_train_factor: int = Field(default=40, ge=1)
+    # How many nearest existing entities to consider as merge/flag candidates (the ANN pool).
+    entity_resolution_top_k: int = Field(default=10, ge=1)
     # Graph expansion (DESIGN.md §9 stage 4): relates_to hops from seed entities (3 max).
     graph_hops: int = Field(default=2, ge=0, le=3)
     # Multi-hop retrieval (RQ-1, DESIGN.md §9): mode="multihop" decomposes the query into
