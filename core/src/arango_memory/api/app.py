@@ -146,6 +146,7 @@ class RetrieveOptions(BaseModel):
     n_probe: int = settings.n_probe
     k: int = settings.k
     rerank: bool = settings.rerank_enabled  # cross-encoder rerank of the fused pool (RQ-2b)
+    candidate_pool: int = settings.candidate_pool  # per-arm pool before fusion (RT-1)
 
 
 # ── /v1/store ─────────────────────────────────────────────
@@ -717,6 +718,7 @@ async def retrieve_endpoint(
         generator=generator,
         cache=cache,
         rerank=req.opts.rerank,
+        candidate_pool=req.opts.candidate_pool,
     )
     return RetrieveResponse(
         context=result.context,

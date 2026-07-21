@@ -359,7 +359,7 @@ def retrieve(
     max_memory_tokens: int = 1500,
     embedder: Embedder | None = None,
     mode: str = "lite",
-    candidate_pool: int = 100,
+    candidate_pool: int | None = None,
     n_lists: int | None = None,
     graph_hops: int | None = None,
     generator: Generator | None = None,
@@ -371,9 +371,10 @@ def retrieve(
 
     `read_agent_ids` (MA-2) widens the read across multiple agents in one fused pass
     (e.g. own + shared crew tiers); `None` reads just `agent_id`. Writes are unaffected.
-    Any failure degrades to an empty (memory-less) result and a `degraded` event,
-    so a memory fault never breaks the agent turn.
+    `candidate_pool=None` uses `settings.candidate_pool` (RT-1). Any failure degrades to an
+    empty (memory-less) result and a `degraded` event, so a memory fault never breaks the turn.
     """
+    pool = candidate_pool if candidate_pool is not None else settings.candidate_pool
     started = time.perf_counter()
     try:
         with span("memory.retrieve", mode=mode):
@@ -387,7 +388,7 @@ def retrieve(
                 max_memory_tokens=max_memory_tokens,
                 embedder=embedder,
                 mode=mode,
-                candidate_pool=candidate_pool,
+                candidate_pool=pool,
                 n_lists=n_lists,
                 graph_hops=graph_hops,
                 generator=generator,
