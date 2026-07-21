@@ -328,6 +328,23 @@ It prints the overall + per-category `ranking / recall` split of the misses and 
 implied RQ-2b lever (reranker vs query expansion). Point it at MuSiQue (which has real
 retrieval headroom); on LoCoMo the split is less informative.
 
+### Scaling profiler (SC-1a)
+
+Measures how `store()` and `retrieve()` latency grow as **one tenant** fills, to confirm the
+O(N²) ingestion curve (entity resolution full-scans the tenant's entities per write — no
+vector index on `entities`) and baseline the SC-1b fix:
+
+```
+python -m arango_memory.eval.scaling_profile --max 3000 --step 500 --probes 20
+```
+
+Prints a `size / store_p50 / store_p99 / retrieve_p50 / retrieve_p99` table plus the
+store-latency growth factor. **It is slow by design** — it's measuring the very slowdown, so
+per-`store()` climbs as the tenant grows. Run it against a DB whose vector-index dimension
+matches your embedder (the persisted index is built at first ingest: 1536 for `openai`, 256
+for `fake` — mixing them errors); `docker compose down -v && up` for a clean run. After SC-1b
+the `store_p50` column should stay roughly flat instead of climbing.
+
 ---
 
 ## Observability (§18)
