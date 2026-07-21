@@ -83,3 +83,30 @@ def test_conflict_distinct_creates_new(db: StandardDatabase) -> None:
     rows = {r["name"]: r for r in _entities(db, "t_n")}
     assert set(rows) == {"Alice", "Zoe"}
     assert rows["Zoe"]["needs_review"] is False
+
+
+def test_resolution_uses_ann_index_once_warm_and_still_merges(
+    db: StandardDatabase, monkeypatch: Any
+) -> None:
+    # SC-1b: once the entities collection warms, resolution switches from full-scan to the
+    # ANN index. Lower the training threshold so it builds after a few entities; the merge
+    # decision must be unchanged (top-k covers the whole small tenant → exact).
+    from arango_memory.config import settings as s
+    from arango_memory.schema.collections import has_vector_index
+
+    monkeypatch.setattr(s, "entity_vector_n_lists", 2)
+    monkeypatch.setattr(s, "entity_vector_train_factor", 2)  # index builds at 4 entities
+    emb = StubEmbedder({
+        "Alice": [1.0, 0.0, 0.0], "Bravo": [0.0, 1.0, 0.0], "Cara": [0.0, 0.0, 1.0],
+        "Delta": [-1.0, 0.0, 0.0], "Echo": [0.0, -1.0, 0.0], "Foxtrot": [0.0, 0.0, -1.0],
+        "Alicia": [0.97, 0.24, 0.0],  # cos ≈ 0.97 with Alice → merges
+    })
+    ctx = {"tenant_id": "t_ann", "agent_id": "a"}
+    for i, name in enumerate(["Alice", "Bravo", "Cara", "Delta", "Echo", "Foxtrot"]):
+        store(db, content=name, **ctx, turn_index=i, embedder=emb)
+    assert has_vector_index(db, "entities")  # built once the collection warmed
+
+    store(db, content="Alicia", **ctx, turn_index=6, embedder=emb)
+    rows = {r["name"]: r for r in _entities(db, "t_ann")}
+    assert "Alicia" not in rows                     # merged via the ANN path, not created
+    assert rows["Alice"]["mention_count"] == 2

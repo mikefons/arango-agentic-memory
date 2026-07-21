@@ -10,8 +10,11 @@ so `mention_count` stays stable). For each extracted entity:
 Then write `mentions` (memory→entity), `produced_by` (entity→episode), and
 `relates_to` (entity↔entity co-occurrence) edges, all idempotently.
 
-Conflict detection is brute-force over the tenant's entities (O(n) per turn); an
-entity vector index is a later optimization.
+Candidate generation for that cosine check is by **ANN** once the tenant warms: a Faiss IVF
+index on `entities.embedding` (SC-1b) lets each new entity query only its top-k nearest
+existing entities, instead of full-scanning the tenant's entities every write (which made
+ingestion O(N²) as a tenant filled). Below the index's training threshold it falls back to the
+full scan (fine at small N). The merge/flag decision itself is unchanged.
 """
 
 from __future__ import annotations
@@ -26,7 +29,9 @@ from ..config import settings
 from ..embedding import Embedder
 from ..embedding_cache import embed_batch_cached
 from ..models import utcnow_iso
+from ..schema.collections import ensure_vector_index
 from ..telemetry import metrics
+from ..telemetry.logging import logger
 from .extract import ExtractedEntity, Extractor, cooccurring_pairs
 from .temporal import parse_explicit_time
 
@@ -48,6 +53,18 @@ RETURN NEW._key
 _FETCH_EXISTING = """
 FOR e IN entities
   FILTER e.tenant_id == @tenant_id
+  RETURN { key: e._key, name: e.name, label: e.label, embedding: e.embedding }
+"""
+
+# SC-1b: top-k nearest existing entities to a query vector, via the Faiss IVF index —
+# O(k) candidate generation instead of the O(N) full tenant scan above. Same shape as
+# `_FETCH_EXISTING` so `_best_match` consumes either.
+_NEAREST_ENTITIES = """
+FOR e IN entities
+  FILTER e.tenant_id == @tenant_id
+  LET score = APPROX_NEAR_COSINE(e.embedding, @qvec)
+  SORT score DESC
+  LIMIT @topk
   RETURN { key: e._key, name: e.name, label: e.label, embedding: e.embedding }
 """
 
@@ -182,8 +199,35 @@ def write_entities(
     if not extracted:
         return []
 
-    cursor = cast(Cursor, db.aql.execute(_FETCH_EXISTING, bind_vars={"tenant_id": tenant_id}))
-    existing = list(cursor)
+    # SC-1b: use the ANN index (top-k nearest) once the `entities` collection is warm enough
+    # to train it; below that, scan the tenant's entities once (cached, lazy) as before.
+    use_ann = ensure_vector_index(
+        db,
+        dimensions=embedder.dimensions,
+        n_lists=settings.entity_vector_n_lists,
+        train_factor=settings.entity_vector_train_factor,
+        collection="entities",
+    )
+    scan_cache: list[dict[str, Any]] | None = None
+
+    def _candidates(qvec: list[float]) -> list[dict[str, Any]]:
+        nonlocal scan_cache
+        if use_ann and qvec:
+            try:
+                ann_bind: dict[str, Any] = {
+                    "tenant_id": tenant_id, "qvec": qvec,
+                    "topk": settings.entity_resolution_top_k,
+                }
+                cur = cast(Cursor, db.aql.execute(_NEAREST_ENTITIES, bind_vars=ann_bind))
+                return list(cur)
+            except Exception as exc:  # noqa: BLE001 — ANN fault → fall back to the scan, never break ingest
+                logger.warning("entity ANN resolution failed; scanning",
+                               extra={"reason": type(exc).__name__, "detail": str(exc)})
+        if scan_cache is None:
+            cur = cast(Cursor, db.aql.execute(_FETCH_EXISTING, bind_vars={"tenant_id": tenant_id}))
+            scan_cache = list(cur)
+        return scan_cache
+
     now = utcnow_iso()
     base = settings.corroboration_base
     rel = source_reliability
@@ -200,7 +244,7 @@ def write_entities(
 
     for ent in extracted:
         vec = vec_by_name[ent.name]
-        match, sim = _best_match(vec, existing, exclude=(ent.name, ent.label))
+        match, sim = _best_match(vec, _candidates(vec), exclude=(ent.name, ent.label))
 
         if match is not None and sim >= settings.entity_merge_threshold:
             # Semantic duplicate of a differently-named entity → merge into it.

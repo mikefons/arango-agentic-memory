@@ -1112,8 +1112,10 @@ on retrieval** (`ReadTimeout` at 60 s). Two limits the 20-doc tenants had masked
 Neither is a *retrieval-quality* result — they are engineering limits of a single large-corpus
 tenant. **BX-3** (ROADMAP) gets the first-stage-recall number anyway by routing around both
 (ingest with `extract=False`, probe with `graph_hops=0` — first-stage recall needs neither
-entities nor the graph arm). The underlying O(n²) ingestion / graph fan-out is a **separate,
-unscheduled scalability investigation**.
+entities nor the graph arm). The underlying scalability limits are **SC-1** (ROADMAP): the
+**O(N²) ingestion is fixed by SC-1b** — ANN entity resolution (a Faiss IVF index on
+`entities.embedding` → top-k nearest instead of the full tenant scan, §7); the **graph-arm
+retrieval fan-out (SC-1c) remains** to bound.
 
 ### Open-corpus first-stage recall — real gap (BX-3 result)
 
@@ -1212,7 +1214,7 @@ Pluggable extraction + entity/edge graph + write-time conflict detection. Delive
 - **Pluggable extractor** (`extract.py`): sync `Extractor` Protocol; deterministic `FakeExtractor` (capitalized-span heuristic, keyless — tests/sim) and `SpacyExtractor` (behind the `extraction` extra). `get_extractor()` factory. **GLiNER/GLiREL + Haiku fallback deferred to 3d** (avoids torch in CI).
 - **Schema:** `mentions`/`relates_to`/`produced_by` edge collections, the `memory_graph` named graph, and a unique entity natural-key index `(tenant_id, name, label)`.
 - **Entity writes** (`entities.py`): AQL UPSERT (exact dedup + `mention_count`), entity embeddings, idempotent `mentions` (memory→entity) / `produced_by` (entity→episode) / `relates_to` (entity↔entity co-occurrence) edges.
-- **Write-time conflict detection** (§8 Stage 3): cosine vs the tenant's entities → ≥ `entity_merge_threshold` (0.9) merge / ≥ `entity_flag_threshold` (0.6) create + flag `needs_review` for Dream State (§13) / else create. Brute-force per turn for now (entity vector index is a later optimization).
+- **Write-time conflict detection** (§8 Stage 3): cosine vs the tenant's entities → ≥ `entity_merge_threshold` (0.9) merge / ≥ `entity_flag_threshold` (0.6) create + flag `needs_review` for Dream State (§13) / else create. Candidate generation is by **ANN** once the tenant warms: a Faiss IVF index on `entities.embedding` (SC-1b) returns the top-k nearest existing entities per write instead of full-scanning the tenant's entities — the fix for the O(N²) ingestion the pooled-corpus run exposed (§23). Below the index's training threshold it falls back to the full scan (fine at small N). The merge/flag decision is unchanged; ANN candidate generation is *approximate* (top-k recall), a deliberate accuracy-for-scale trade, and degrades to the scan on any ANN error.
 - **Idempotency:** extraction runs only on the first store of a turn, so replays don't double-count mentions.
 - **Verified:** 45 tests green (4 extract + 7 entities + the prior 34); conflict thresholds tested deterministically via a stub embedder. CI stays torch-free.
 

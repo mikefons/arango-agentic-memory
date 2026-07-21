@@ -69,7 +69,13 @@ need no API keys.
 
 **Behavior knobs** — retrieval: `MAX_MEMORY_TOKENS` (1500), `K` (10), `GRAPH_HOPS`
 (2), `VECTOR_N_LISTS` (64), `VECTOR_TRAIN_FACTOR` (40 — index trains at
-`n_lists × factor` docs), `MMR_LAMBDA` (1.0 — final re-rank relevance↔diversity;
+`n_lists × factor` docs),
+`ENTITY_VECTOR_N_LISTS` (32) / `ENTITY_VECTOR_TRAIN_FACTOR` (40) / `ENTITY_RESOLUTION_TOP_K`
+(10 — SC-1b: once a tenant accrues `n_lists × factor` entities, write-time resolution matches
+a new entity against the **top-k nearest** via a Faiss index on `entities` instead of
+full-scanning the tenant — keeps ingestion from going O(N²) as a long-lived tenant fills;
+below the threshold it full-scans, which is fine at small N),
+`MMR_LAMBDA` (1.0 — final re-rank relevance↔diversity;
 1.0 = pure relevance/fusion order, lower trades recall for a more varied result set),
 `RRF_GRAPH_WEIGHT` (0.1 — the graph arm expands recall but ranks by hop distance, not
 query relevance, so it stays down-weighted), `RRF_VECTOR_WEIGHT` (1.0 — lower it if the

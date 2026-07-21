@@ -147,9 +147,12 @@ def _ensure_scope_indexes(db: StandardDatabase) -> None:
         )
 
 
-def has_vector_index(db: StandardDatabase) -> bool:
-    """True if the Faiss IVF index on `memories.embedding` exists (DESIGN.md §7)."""
-    indexes = cast("list[dict[str, Any]]", db.collection("memories").indexes())
+def has_vector_index(db: StandardDatabase, collection: str = "memories") -> bool:
+    """True if a Faiss IVF index on `<collection>.embedding` exists (DESIGN.md §7).
+
+    Defaults to `memories` (the retrieval vector arm); `entities` uses the same machinery
+    for ANN entity resolution (SC-1b)."""
+    indexes = cast("list[dict[str, Any]]", db.collection(collection).indexes())
     return any(idx.get("type") == "vector" for idx in indexes)
 
 
@@ -182,25 +185,26 @@ def vector_training_threshold(n_lists: int, train_factor: int) -> int:
 
 
 def ensure_vector_index(
-    db: StandardDatabase, *, dimensions: int, n_lists: int, train_factor: int = 1
+    db: StandardDatabase, *, dimensions: int, n_lists: int, train_factor: int = 1,
+    collection: str = "memories",
 ) -> bool:
-    """Create the Faiss IVF index on `memories.embedding` if warm enough.
+    """Create the Faiss IVF index on `<collection>.embedding` if warm enough.
 
-    Deferred until the corpus reaches `vector_training_threshold(n_lists, train_factor)`
+    Deferred until the collection reaches `vector_training_threshold(n_lists, train_factor)`
     documents, so the IVF centroids train on enough points (DESIGN.md §7, MA-8). Returns
     True if the index exists (or was just created), False if creation was deferred — in
-    which case retrieval falls back to BM25 (DESIGN.md §7, §15).
+    which case the caller falls back (retrieval → BM25; entity resolution → full scan, SC-1b).
     """
-    if has_vector_index(db):
+    if has_vector_index(db, collection):
         return True
     # Only attempt creation once warm enough to train; below the threshold the build is
     # either rejected (ERR 1555) or badly under-trained. The shared index trains on the
     # aggregate corpus across tenants (§7), so count is total.
-    corpus = cast(int, db.collection("memories").count())
+    corpus = cast(int, db.collection(collection).count())
     if corpus < vector_training_threshold(n_lists, train_factor):
         return False
     try:
-        db.collection("memories").add_index(
+        db.collection(collection).add_index(
             {
                 "type": "vector",
                 "name": VECTOR_INDEX_NAME,
