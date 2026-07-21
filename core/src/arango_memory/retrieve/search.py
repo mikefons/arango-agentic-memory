@@ -114,6 +114,11 @@ FOR start IN @seed_ids
            AND mem.agent_id IN @agent_ids
            AND mem.invalid_at == null
            AND mem._key NOT IN @seed_keys
+        // SC-1d: bound the memories expanded per related entity. Without this, a hub entity's
+        // INBOUND fan-out grows as the tenant fills, so retrieval kept scaling even with the
+        // neighbour cap above (§23). A memory that matters is usually reachable via several
+        // entities or the BM25/vector arms, so a per-entity cap costs little recall.
+        LIMIT @max_memories_per_entity
         // mean EWA weight of the bridging relates_to edges (§12); 0 for the 0-hop self.
         LET path_w = LENGTH(p.edges) == 0 ? 0 : AVERAGE(p.edges[*].weight)
         // Aggregate only the scalar ranking fields — NOT the memory doc. All rows for a
@@ -467,6 +472,7 @@ def _gather_fused(
                 "agent_ids": agent_ids,
                 "hops": graph_hops if graph_hops is not None else settings.graph_hops,
                 "max_neighbors": settings.graph_max_neighbors,
+                "max_memories_per_entity": settings.graph_max_memories_per_entity,
                 "pool": candidate_pool,
                 **decay_binds,
             },

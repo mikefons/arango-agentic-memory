@@ -1,12 +1,12 @@
 """SC-1a scaling profiler: per-`store()` and per-`retrieve()` latency vs single-tenant size.
 
-Confirms the two BX-2/BX-3 bottlenecks and baselines the SC-1b fix:
-  - **Ingestion O(N²).** Entity resolution (`ingest/entities.py` `_FETCH_EXISTING`) fetches
-    *every* entity in the tenant — with its embedding — on every write and matches in Python;
-    there is no vector index on `entities`. So per-`store()` cost grows linearly with the
-    tenant's entity count → the curve below should climb roughly linearly in size.
-  - **Retrieval fan-out.** The graph arm traverses a `relates_to` graph that densifies as the
-    tenant fills.
+Baselines the two BX-2/BX-3 bottlenecks and their fixes (the summary line reports whether each
+metric PLATEAUS — bounded — or is still rising in the tail):
+  - **Ingestion (fixed by SC-1b).** Entity resolution once full-scanned every tenant entity per
+    write; ANN top-k resolution bounds it → `store` p50 should climb then plateau.
+  - **Retrieval fan-out (bounded by SC-1c + SC-1d).** The graph arm traverses a `relates_to`
+    graph that densifies as the tenant fills; the neighbour cap (SC-1c) and per-entity memory
+    cap (SC-1d) bound the work → `retrieve` p50 should plateau rather than keep rising.
 
 Ingests synthetic, entity-rich memories into one tenant (keyless: the `fake` extractor turns
 capitalized spans into entities) and reports windowed `store` latency + a `retrieve` sample at
@@ -108,12 +108,30 @@ def _format(rows: list[ProfileRow]) -> str:
     for r in rows:
         lines.append(f"{r.size:<6}  {r.store_p50:>8.0f}  {r.store_p99:>8.0f}  "
                      f"{r.retrieve_p50:>7.0f}  {r.retrieve_p99:>7.0f}")
-    if len(rows) >= 2 and rows[0].store_p50 > 0:
-        growth = rows[-1].store_p50 / rows[0].store_p50
-        lines.append(
-            f"\nstore p50 grew {growth:.1f}× from size {rows[0].size} → {rows[-1].size} "
-            f"(≈linear in size ⇒ O(N²) ingestion; flat after SC-1b)"
-        )
+    if len(rows) >= 3 and rows[0].store_p50 > 0 and rows[0].retrieve_p50 > 0:
+        # Shape matters more than the first/last ratio: a plateau (climb then flat) is the
+        # bounded-cost signature, whereas a curve that keeps rising into the tail is unbounded.
+        # Compare the second-half slope to the first-half slope for each metric.
+        lines.append("")
+        mid = len(rows) // 2
+        metrics: list[tuple[str, list[float]]] = [
+            ("store", [r.store_p50 for r in rows]),
+            ("retrieve", [r.retrieve_p50 for r in rows]),
+        ]
+        for label, vals in metrics:
+            head_slope = (vals[mid] - vals[0]) / max(rows[mid].size - rows[0].size, 1)
+            tail_slope = (vals[-1] - vals[mid]) / max(rows[-1].size - rows[mid].size, 1)
+            total = vals[-1] / vals[0]
+            shape = (
+                "PLATEAUS (bounded)"
+                if tail_slope <= 0.5 * head_slope
+                else "still rising (unbounded)"
+            )
+            lines.append(
+                f"{label} p50: {vals[0]:.0f}→{vals[-1]:.0f}ms ({total:.1f}× over "
+                f"{rows[0].size}→{rows[-1].size}) — tail slope {tail_slope:.2f} vs "
+                f"head {head_slope:.2f} ms/doc ⇒ {shape}"
+            )
     return "\n".join(lines)
 
 

@@ -181,6 +181,12 @@ class Settings(BaseSettings):
     # single-tenant graph can't explode the traversal (the BX-2 retrieval timeout, §23). The
     # graph arm is a down-weighted recall expander, so a bounded neighbourhood costs little.
     graph_max_neighbors: int = Field(default=200, ge=1)
+    # SC-1d: cap the memories expanded per related entity. `LIMIT @max_neighbors` bounds the
+    # breadth of the relates_to fan-out, but each entity's `INBOUND mentions` grows as the
+    # tenant fills (a hub accrues more mentions), which drove residual retrieval scaling (§23).
+    # Total graph work is then bounded to max_neighbors × this. Default 50 leaves real corpora
+    # (entities mentioned by a handful of memories) untouched; only pathological hubs are capped.
+    graph_max_memories_per_entity: int = Field(default=50, ge=1)
     # Multi-hop retrieval (RQ-1, DESIGN.md §9): mode="multihop" decomposes the query into
     # independent sub-lookups, retrieves each, and re-fuses. The cap bounds the fan-out
     # (N sub-queries = N retrievals + 1 decompose call); 1 disables decomposition entirely.

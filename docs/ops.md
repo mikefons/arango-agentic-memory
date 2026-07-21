@@ -73,7 +73,10 @@ corpus, raise it (e.g. 500) **with rerank** to recover the tail-reachable golds 
 (§23), at more per-query DB work; also settable per request via `opts.candidate_pool`),
 `GRAPH_MAX_NEIGHBORS` (200 — SC-1c: caps the graph arm's `relates_to` fan-out so a dense
 single-tenant graph can't blow up retrieval; the arm is a down-weighted expander so a bounded
-neighbourhood costs little), `VECTOR_N_LISTS` (64), `VECTOR_TRAIN_FACTOR` (40 — index trains at
+neighbourhood costs little), `GRAPH_MAX_MEMORIES_PER_ENTITY` (50 — SC-1d: caps the memories
+expanded per related entity, so a hub whose mentions grow as the tenant fills can't drive
+retrieval latency unbounded; 50 leaves real corpora untouched and only caps pathological hubs),
+`VECTOR_N_LISTS` (64), `VECTOR_TRAIN_FACTOR` (40 — index trains at
 `n_lists × factor` docs),
 `ENTITY_VECTOR_N_LISTS` (32) / `ENTITY_VECTOR_TRAIN_FACTOR` (40) / `ENTITY_RESOLUTION_TOP_K`
 (10 — SC-1b: once a tenant accrues `n_lists × factor` entities, write-time resolution matches

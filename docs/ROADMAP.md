@@ -738,10 +738,16 @@ end-state is a large single tenant, and BX-2/BX-3 proved the system stalls there
   entity — per-write O(N) → ~O(k). **Behaviour-preserving:** same `entity_merge_threshold`,
   only faster candidate generation; fall back to the scan while the index is cold/untrained
   (as the memory arm does, §7). Re-run SC-1a to prove the curve flattened.
-- **SC-1c — bounded graph fan-out (retrieval fix, conditional on SC-1a).** Cap the traversal
+- **SC-1c — bounded graph fan-out (retrieval fix, conditional on SC-1a).** ✅ Cap the traversal
   (neighbours per entity / seed count / degree) so retrieval stays bounded on a dense tenant.
   The graph arm is already down-weighted (`RRF_GRAPH_WEIGHT=0.1`), so a cap costs little
-  quality. Sized after SC-1a quantifies it.
+  quality. Shipped as `GRAPH_MAX_NEIGHBORS` (200) — a `LIMIT` on the `relates_to` breadth.
+- **SC-1d — bounded per-entity memory fan-out (SC-1a follow-up).** ✅ The SC-1a profiler showed
+  SC-1b flattened ingestion (store p50 plateaus ~1.4 s) but **retrieve still grew** (798 →
+  5,080 ms over 500 → 3,000): SC-1c capped the *neighbour* breadth but not each entity's
+  `INBOUND mentions`, which grows as hub entities accrue mentions. `GRAPH_MAX_MEMORIES_PER_ENTITY`
+  (50) caps that join ⇒ total graph work `MAX_NEIGHBORS × MAX_MEMORIES_PER_ENTITY`,
+  tenant-size-independent. Default leaves real corpora untouched; only pathological hubs cap.
 
 **Files.** `schema/collections.py` (entities vector index), `ingest/entities.py` (ANN
 resolution + cold-start fallback), `retrieve/search.py` (`_GRAPH_QUERY` fan-out caps),
