@@ -51,12 +51,19 @@ def store(
     message_type: str | None = None,
     source_reliability: float = 1.0,
     memory_type: str = "episodic",
+    extract: bool = True,
 ) -> StoreResult:
     """Instrumented write (DESIGN.md §18): `memory.write` span + `write` metric.
 
     `message_type` (optional) tags the episode with the originating chat role
     (e.g. "human"/"ai") for adapters that reconstruct a transcript; it never
     affects redaction, hashing, or the embedded text.
+
+    `extract=False` skips entity/edge extraction (`write_entities`) — the memory is still
+    stored with its embedding and BM25 text, so lexical + vector retrieval work, but no
+    entities/relations (and thus no graph arm) are built. Used for bulk/large-corpus ingest
+    where entity resolution's per-write cost (which grows with tenant size) is the bottleneck
+    (BX-3, DESIGN §23).
 
     Exceptions propagate to the durable worker (retry/dead-letter, §15).
     """
@@ -76,6 +83,7 @@ def store(
             message_type=message_type,
             source_reliability=source_reliability,
             memory_type=memory_type,
+            extract=extract,
         )
     metrics.emit("write", duration_ms=(time.perf_counter() - started) * 1000.0)
     return result
@@ -197,6 +205,7 @@ def _store_impl(
     message_type: str | None = None,
     source_reliability: float = 1.0,
     memory_type: str = "episodic",
+    extract: bool = True,
 ) -> StoreResult:
     """Persist one turn as an episode + episodic memory, with extracted entities.
 
@@ -288,8 +297,10 @@ def _store_impl(
         _enforce_working_capacity(db, tenant_id=tenant_id, agent_id=agent_id, session_id=session_id)
 
     entity_ids: list[str] = []
-    # Working memory is ephemeral scratch — it never mints durable semantic entities.
-    if is_new and not is_working:
+    # Working memory is ephemeral scratch — it never mints durable semantic entities;
+    # `extract=False` (BX-3) skips extraction for bulk ingest where per-write entity
+    # resolution is the bottleneck.
+    if is_new and not is_working and extract:
         entity_ids = write_entities(
             db,
             memory_key=mem_key,

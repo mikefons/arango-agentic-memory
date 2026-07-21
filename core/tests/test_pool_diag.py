@@ -64,3 +64,36 @@ def test_diagnose_end_to_end_classifies_support(
     assert overall.items == 3
     assert overall.recall >= 1  # the fabricated fact is absent from the pool
     assert "multi-hop" in result
+
+
+def test_store_extract_false_skips_entity_extraction(db: StandardDatabase) -> None:
+    # BX-3: extract=False stores the memory (embedding + BM25 text) but mints no entities,
+    # avoiding the per-write entity resolution that doesn't scale to a big single tenant.
+    ctx = {"tenant_id": "t_extract", "agent_id": "a"}
+    default = store(db, content="Alice joined Acme", turn_index=0, **ctx)
+    lightweight = store(db, content="Bob joined Globex", turn_index=1, extract=False, **ctx)
+    assert default.entity_ids  # default path extracts entities
+    assert lightweight.entity_ids == []  # extract=False skips extraction
+    assert lightweight.memory_ids  # …but the memory itself is still stored
+
+
+def test_diagnose_lightweight_runs_and_classifies(
+    db: StandardDatabase,
+    wait_for_searchable: Callable[..., RetrieveResult],
+) -> None:
+    # The lightweight path (extract=False ingest + graph-off probe) must still produce a
+    # valid first-stage-recall split.
+    sample = Sample(
+        sample_id="t_lw",
+        sessions=[[
+            Turn(speaker="Alice", text="Alice visited Portland in spring"),
+            Turn(speaker="Bob", text="Bob presented the coral reef keynote"),
+        ]],
+        qa=[QA(question="What happened on the trip and at the talk?", answer="various",
+               gold_facts=["Alice visited Portland", "coral reef keynote", "never stored fact"],
+               category="multi-hop")],
+    )
+    result = diagnose(db, [sample], lightweight=True)
+    overall = result["__all__"]
+    assert overall.items == 3
+    assert overall.recall >= 1  # the fabricated fact is absent from the pool
