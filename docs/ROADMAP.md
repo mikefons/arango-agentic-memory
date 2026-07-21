@@ -42,6 +42,7 @@ Sizes: S ≈ ≤1 day, M ≈ 2–3 days.
 | 10 | BX-1 | Benchmark expansion: MuSiQue multi-evidence dataset + metric | M | — |
 | 11 | RQ-2 | Close the retrieval-content gap (diagnostic → cross-encoder reranker) | L | shipped (+0.135 recall) |
 | 12 | BX-2 | Pooled-corpus MuSiQue (open-retrieval variant, tests first-stage recall) | S | BX-1 |
+| 13 | BX-3 | Lightweight pooled diagnostic (extract-skip + graph-off; routes around O(n²) wall) | S | BX-2 |
 
 Recommended sequence: **MA-1 → MA-2 → MA-3 → MA-4 → MA-5 → MA-6**, with MA-7/MA-8
 schedulable any time (no dependencies on the others). MA-1…MA-8 are **shipped**. **RQ-1**
@@ -668,6 +669,45 @@ Then lite/rerank/multihop can be re-measured in the open-corpus regime.
 **Decisions to make at build time.** dedup key exactness (title+text vs normalized); whether
 to cap corpus size independently of `--limit` if ingestion is too slow; whether `pool_diag`'s
 `--pool` should widen for the larger corpus.
+
+> **BX-2 run outcome (scalability wall).** The first real pooled run (3,075 paragraphs, one
+> tenant) took **~12 h to ingest** and then **timed out on retrieval** (`ReadTimeout` at 60 s),
+> so it produced no usable recall split. Two bottlenecks the per-question 20-doc tenants had
+> masked: (1) ingestion is **~O(n²)** — every `store()` resolves extracted entities against all
+> existing entities in the tenant, which grows with corpus size; (2) the **graph arm fans out**
+> on a dense single-tenant `relates_to` graph, blowing the retrieval timeout. → motivates BX-3
+> (a lightweight probe that routes around both) and a separate scalability investigation
+> (unscheduled).
+
+---
+
+## BX-3 — lightweight pooled diagnostic (routes around the BX-2 scalability wall)
+
+*Scoped, not started. Decisions locked. First-stage-recall probe only — no scalability fix.*
+
+**Why.** BX-2's pooled run hit a wall (O(n²) ingestion + graph-arm retrieval timeout, above).
+But first-stage recall — "do BM25 + vector surface the gold among distractors" — needs
+*neither* entity extraction nor the graph arm. BX-3 measures exactly that by skipping both, so
+the open-corpus recall question is answerable in **minutes, not hours**.
+
+**Design (locked).**
+- **`store(..., extract=True)` param** (core): gate the existing `write_entities` block
+  (`if is_new and not is_working and extract`). Default `True` = unchanged; `False` skips
+  entity/edge extraction → no O(n²) resolution, no graph built. Minimal, generally reusable.
+- **`pool_diag --lightweight` flag**: ingest with `extract=False` and probe with
+  `graph_hops=0` (both the top-k `retrieve` and `diagnose_pool`). Measures first-stage recall
+  (BM25 + vector) cleanly.
+- **Record the scalability finding** in DESIGN §23 (the BX-2 outcome above); the O(n²)
+  ingestion / graph fan-out **fix is a separate, unscheduled investigation** — BX-3
+  deliberately routes around it, does not fix it.
+
+**Files.** `ingest/store.py` (`extract` param), `eval/pool_diag.py` (`--lightweight` →
+extract-skip ingest + `graph_hops=0`), tests (extract=False writes no entities; lightweight
+path), ops.md, DESIGN §23.
+
+**Acceptance.** A `--lightweight` pooled run over ~200 questions completes in minutes with no
+retrieve timeouts and yields a real ranking-vs-recall split for first-stage recall on the open
+corpus — the number BX-2 set out to get.
 
 ---
 

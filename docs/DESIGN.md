@@ -1,7 +1,7 @@
 # ArangoDB Agentic Memory System — Design Specification
 
 > **Status:** ✅ **v1 build sequence complete (Steps 0–7).** v2: all §21 adapters shipped (MCP, LangChain/LangGraph, CrewAI) + full §19 entity API + **Step 3e heavy extraction tier done**, hardened into a deployable service. Authoritative reference.
-> **Last updated:** 2026-07-20 (rev 84 — multihop + rerank stack super-additively: 0.430 → 0.810 all-hops recall on MuSiQue; §23)
+> **Last updated:** 2026-07-21 (rev 85 — BX-2 pooled run hit a scalability wall (O(n²) ingest + graph fan-out); BX-3 lightweight probe scoped; §23)
 >
 > The **rev-by-rev build log** lives in [`HISTORY.md`](HISTORY.md); user-visible changes are in
 > [`CHANGELOG.md`](../CHANGELOG.md); the doc map is [`docs/README.md`](README.md). This file is
@@ -1093,6 +1093,27 @@ Both are opt-in and off the lite hot path; the reranker does not reach the ~1.0 
 (`bge-reranker-base` is small). The stacked config is the heaviest (decompose + N sub-query
 retrievals + cross-encoder, p50 ~9s/question) — the **recommended max-recall setting**
 (`MODE=multihop RERANK=--rerank`), traded against latency. See [ops.md](ops.md) for run steps.
+
+### Open-corpus scalability finding (BX-2 pooled run)
+
+All results above are on **given-context** MuSiQue (per-question ~20-paragraph tenants). The
+first attempt to test *open-corpus* first-stage recall — BX-2's `--pooled` converter, which
+puts all questions' paragraphs in **one tenant** — surfaced a **scalability wall** instead of
+a recall number: a 3,075-paragraph pooled corpus took **~12 h to ingest** and then **timed out
+on retrieval** (`ReadTimeout` at 60 s). Two limits the 20-doc tenants had masked:
+
+1. **Ingestion ~O(n²):** every `store()` resolves extracted entities against *all existing*
+   entities in the tenant (merge/dedup), which grows with corpus size — so per-write cost
+   climbs as the tenant fills.
+2. **Graph-arm retrieval fan-out:** the `relates_to` traversal over a dense single-tenant
+   entity graph blows the 60 s query timeout (the same fan-out tamed at 200 docs, unbounded
+   at 3,000).
+
+Neither is a *retrieval-quality* result — they are engineering limits of a single large-corpus
+tenant. **BX-3** (ROADMAP) gets the first-stage-recall number anyway by routing around both
+(ingest with `extract=False`, probe with `graph_hops=0` — first-stage recall needs neither
+entities nor the graph arm). The underlying O(n²) ingestion / graph fan-out is a **separate,
+unscheduled scalability investigation**.
 
 ### Latency targets (corrected Rev 2 — split by path)
 - **Core retrieval** (DB ops only: vector + BM25 + graph + fusion + assembly): **p99 ≤ 200ms**
