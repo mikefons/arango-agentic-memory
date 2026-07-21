@@ -173,6 +173,10 @@ class Settings(BaseSettings):
     entity_resolution_top_k: int = Field(default=10, ge=1)
     # Graph expansion (DESIGN.md §9 stage 4): relates_to hops from seed entities (3 max).
     graph_hops: int = Field(default=2, ge=0, le=3)
+    # SC-1c: cap on the `relates_to` neighbours the graph arm expands, so a hub in a dense
+    # single-tenant graph can't explode the traversal (the BX-2 retrieval timeout, §23). The
+    # graph arm is a down-weighted recall expander, so a bounded neighbourhood costs little.
+    graph_max_neighbors: int = Field(default=200, ge=1)
     # Multi-hop retrieval (RQ-1, DESIGN.md §9): mode="multihop" decomposes the query into
     # independent sub-lookups, retrieves each, and re-fuses. The cap bounds the fan-out
     # (N sub-queries = N retrievals + 1 decompose call); 1 disables decomposition entirely.
