@@ -1,7 +1,7 @@
 # ArangoDB Agentic Memory System — Design Specification
 
 > **Status:** ✅ **v1 build sequence complete (Steps 0–7).** v2: all §21 adapters shipped (MCP, LangChain/LangGraph, CrewAI) + full §19 entity API + **Step 3e heavy extraction tier done**, hardened into a deployable service. Authoritative reference.
-> **Last updated:** 2026-07-21 (rev 86 — BX-3 open-corpus probe: first-stage recall is a real gap (33% of misses out-of-pool), reranker still the top lever; §23)
+> **Last updated:** 2026-07-21 (rev 86 — BX-3 open-corpus probe: ~15% of the recall gap is tail-reachable (pool knob), ~8.5%-of-support residual first-stage gap; reranker still top lever; §23)
 >
 > The **rev-by-rev build log** lives in [`HISTORY.md`](HISTORY.md); user-visible changes are in
 > [`CHANGELOG.md`](../CHANGELOG.md); the doc map is [`docs/README.md`](README.md). This file is
@@ -1129,11 +1129,24 @@ given-context runs structurally could not:
 **First-stage recall *is* a real gap on an open corpus.** With ~3,000 distractors instead of
 ~20, BM25 + vector fail to surface the gold into the top-100 pool for **33% of misses** —
 invisible in the given-context setup (where the pool *was* the whole corpus, so RQ-2a's "0%
-out-of-pool" was an artifact). Two consequences: (1) the **reranker still holds up as the
-biggest single lever** (67% of misses are in-pool-but-unranked); (2) there is now a
-**quantified first-stage gap (33%) a reranker cannot touch**, which empirically motivates the
-branch set aside at RQ-2a — query expansion / stronger embeddings / `prospective_queries` —
-for open corpora. (hit@10 also fell 76% → 53%: open retrieval is simply much harder.)
+out-of-pool" was an artifact). (hit@10 also fell 76% → 53%: open retrieval is simply harder.)
+
+**Widening the pool characterizes that 33% — mostly a knob, small residual project.** Re-running
+at `--pool 500` reclassifies ~half of the recall-misses as in-pool:
+
+| pool | ranking (in-pool) | recall (out-of-pool) |
+|---|---|---|
+| 100 | 67% | 33% |
+| **500** | **82%** | **18%** |
+
+So ~15% of misses were **tail-reachable** (gold at ranks 100–500, just below the cutoff → a
+bigger candidate pool + rerank recovers them, cheap), but **~18% of misses (~8.5% of all
+support) stay out-of-pool even at 500** — a genuine, irreducible first-stage gap no pool size
+or reranker can touch. Takeaways: (1) for open corpora, **widen `candidate_pool` and rerank** —
+that captures the bulk; (2) the reranker remains the dominant lever (82% of misses in-pool at
+pool@500); (3) a **modest residual first-stage gap (~8.5% of support)** genuinely needs better
+first-stage retrieval (query expansion / stronger embeddings / `prospective_queries`) — real
+but small ROI, recorded as a future investigation, not scheduled.
 
 ### Latency targets (corrected Rev 2 — split by path)
 - **Core retrieval** (DB ops only: vector + BM25 + graph + fusion + assembly): **p99 ≤ 200ms**
