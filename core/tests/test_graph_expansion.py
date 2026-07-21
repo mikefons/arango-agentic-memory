@@ -3,11 +3,19 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from typing import Any
 
 from arango.database import StandardDatabase
 
 from arango_memory.ingest.store import store
 from arango_memory.retrieve.search import _GRAPH_QUERY, RetrieveResult, retrieve
+
+
+def test_graph_query_bounds_fan_out() -> None:
+    # SC-1c: the traversal caps the relates_to fan-out before the memory expansion.
+    assert "LIMIT @max_neighbors" in _GRAPH_QUERY
+    # the cap is applied before the per-neighbour memory expansion.
+    assert _GRAPH_QUERY.index("LIMIT @max_neighbors") < _GRAPH_QUERY.index("INBOUND related")
 
 
 def test_graph_query_does_not_buffer_embeddings_through_collect() -> None:
@@ -52,6 +60,22 @@ def test_graph_expansion_is_tenant_scoped(
     texts = [h.text for h in result.hits]
     assert any("widgets" in t for t in texts)
     assert not any("gadgets" in t for t in texts)
+
+
+def test_low_neighbor_cap_still_retrieves(
+    db: StandardDatabase,
+    wait_for_searchable: Callable[..., RetrieveResult],
+    monkeypatch: Any,
+) -> None:
+    # SC-1c: a tiny `graph_max_neighbors` bounds the traversal but must not break retrieval —
+    # the LIMIT is valid AQL and the arms still return.
+    from arango_memory.config import settings as s
+    monkeypatch.setattr(s, "graph_max_neighbors", 1)
+    ctx = {"tenant_id": "t_cap", "agent_id": "a"}
+    store(db, content="Alice joined Acme", turn_index=0, **ctx)
+    store(db, content="Acme shipped widgets", turn_index=1, **ctx)
+    result = wait_for_searchable(db, query="Alice joined", **ctx)
+    assert result.hits  # capped traversal doesn't error; BM25 (+ bounded graph) still returns
 
 
 def test_retrieve_without_entities_still_works(
