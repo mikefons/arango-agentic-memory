@@ -71,10 +71,19 @@ def diagnose(
     agent_id: str = "assistant",
     k: int = 10,
     pool: int = 100,
+    lightweight: bool = False,
     progress: bool = False,
 ) -> dict[str, MissBreakdown]:
     """Ingest each sample, then classify every question's support items. Returns the
-    breakdown keyed by category, plus `"__all__"` for the overall totals."""
+    breakdown keyed by category, plus `"__all__"` for the overall totals.
+
+    `lightweight` (BX-3) tests *first-stage recall* on a large open corpus without the parts
+    that don't scale to one big tenant: ingest with `extract=False` (skips the ~O(n²) entity
+    resolution) and probe with `graph_hops=0` (skips the graph arm's fan-out). First-stage
+    recall is BM25 + vector, so neither is needed — and both are what timed out the pooled run.
+    """
+    # graph_hops=0 disables the graph arm on both the top-k retrieve and the pool probe.
+    graph_hops = 0 if lightweight else None
     overall = MissBreakdown()
     by_category: dict[str, MissBreakdown] = {}
     total = len(samples)
@@ -83,7 +92,8 @@ def diagnose(
         # one embedding call each), so report before and periodically during it.
         n_turns = sum(len(session) for session in sample.sessions)
         if progress:
-            print(f"[{i}/{total}] {sample.sample_id}: ingesting {n_turns} paragraphs…",
+            print(f"[{i}/{total}] {sample.sample_id}: ingesting {n_turns} paragraphs"
+                  f"{' (lightweight: no extraction)' if lightweight else ''}…",
                   file=sys.stderr, flush=True)
         turn_index = 0
         for session in sample.sessions:
@@ -94,6 +104,7 @@ def diagnose(
                     tenant_id=sample.sample_id,
                     agent_id=agent_id,
                     turn_index=turn_index,
+                    extract=not lightweight,
                 )
                 turn_index += 1
                 if progress and turn_index % 500 == 0:
@@ -107,9 +118,10 @@ def diagnose(
             if progress and q_idx % 50 == 0:
                 print(f"    …scored {q_idx}/{n_qa}", file=sys.stderr, flush=True)
             top = retrieve(db, query=qa.question, tenant_id=sample.sample_id,
-                           agent_id=agent_id, k=k)
+                           agent_id=agent_id, k=k, graph_hops=graph_hops)
             pool_hits = diagnose_pool(db, query=qa.question, tenant_id=sample.sample_id,
-                                      agent_id=agent_id, candidate_pool=pool)
+                                      agent_id=agent_id, candidate_pool=pool,
+                                      graph_hops=graph_hops)
             top_texts = [h.text for h in top.hits]
             pool_texts = [h.text for h in pool_hits]
             bucket = by_category.setdefault(qa.category or "uncategorized", MissBreakdown())
@@ -148,6 +160,12 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("dataset", help="path to a converted dataset JSON (e.g. musique.json)")
     parser.add_argument("--k", type=int, default=10, help="top-k the real retrieve returns")
     parser.add_argument("--pool", type=int, default=100, help="fused candidate pool size")
+    parser.add_argument(
+        "--lightweight", action="store_true",
+        help="first-stage-recall probe for large pooled corpora (BX-3): ingest without entity "
+             "extraction and retrieve with the graph arm off — routes around the O(n²) ingest "
+             "+ graph-fan-out that stall a big single-tenant run",
+    )
     return parser
 
 
@@ -156,7 +174,8 @@ def main(argv: list[str] | None = None) -> int:
     args = _build_parser().parse_args(argv)
     db = ArangoMemoryClient().connect()
     ensure_schema(db)
-    result = diagnose(db, load_dataset(args.dataset), k=args.k, pool=args.pool, progress=True)
+    result = diagnose(db, load_dataset(args.dataset), k=args.k, pool=args.pool,
+                      lightweight=args.lightweight, progress=True)
     print(_format(result))
     return 0
 

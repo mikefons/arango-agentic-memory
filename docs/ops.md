@@ -289,13 +289,16 @@ open-retrieval stress test that can surface *first-stage-recall* misses:
 
 ```
 python -m arango_memory.eval.musique_convert musique_ans_v1.0_dev.jsonl musique-pooled.json --limit 200 --pooled
-python -m arango_memory.eval.pool_diag musique-pooled.json --pool 100   # look for RECALL (out-of-pool) misses
-make benchmark DATASET=musique-pooled.json MODE=lite
+python -m arango_memory.eval.pool_diag musique-pooled.json --pool 100 --lightweight   # look for RECALL (out-of-pool) misses
 ```
 
-Ingestion is heavier (one big corpus); the vector index trains once it crosses the
-threshold. Numbers here are **not** comparable to the per-question runs — it's a different
-(harder) regime.
+**Use `--lightweight` for a pooled `pool_diag` run (BX-3).** A full pooled corpus stalls
+otherwise: per-`store()` entity resolution is ~O(n²) as the single tenant fills (a ~3k-doc
+corpus took ~12 h to ingest), and the graph arm fans out and times out retrieval. First-stage
+recall only needs BM25 + vector, so `--lightweight` ingests with **no entity extraction** and
+probes with the **graph arm off** — completing in minutes. It routes *around* the scalability
+limit, it does not fix it (DESIGN §23). Numbers here are **not** comparable to the per-question
+runs — a different (harder) regime.
 
 **Cross-encoder rerank (RQ-2b).** Add `RERANK=--rerank` to any run to re-rank the fused
 pool with a cross-encoder before MMR — the fix for the ranking-bound misses RQ-2a found.
