@@ -43,6 +43,8 @@ Sizes: S ≈ ≤1 day, M ≈ 2–3 days.
 | 11 | RQ-2 | Close the retrieval-content gap (diagnostic → cross-encoder reranker) | L | shipped (+0.135 recall) |
 | 12 | BX-2 | Pooled-corpus MuSiQue (open-retrieval variant, tests first-stage recall) | S | BX-1 |
 | 13 | BX-3 | Lightweight pooled diagnostic (extract-skip + graph-off; routes around O(n²) wall) | S | shipped (33% first-stage gap) |
+| 14 | SC-1 | Single-large-tenant scalability: ANN entity resolution + bounded graph fan-out | L | — |
+| 15 | RT-1 | Expose `candidate_pool` as a config + API knob (open-corpus tuning) | S | — |
 
 Recommended sequence: **MA-1 → MA-2 → MA-3 → MA-4 → MA-5 → MA-6**, with MA-7/MA-8
 schedulable any time (no dependencies on the others). MA-1…MA-8 are **shipped**. **RQ-1**
@@ -708,6 +710,75 @@ path), ops.md, DESIGN §23.
 **Acceptance.** A `--lightweight` pooled run over ~200 questions completes in minutes with no
 retrieve timeouts and yields a real ranking-vs-recall split for first-stage recall on the open
 corpus — the number BX-2 set out to get.
+
+---
+
+## SC-1 — single-large-tenant scalability (ANN entity resolution + bounded graph fan-out)
+
+*Scoped, diagnostic-first. The highest-leverage open item: a long-lived agent's normal
+end-state is a large single tenant, and BX-2/BX-3 proved the system stalls there
+(~12 h to ingest 3k memories; retrieval times out).*
+
+**Mechanism — confirmed by code, not just hypothesis.**
+- **Ingestion is O(N²).** `entities._FETCH_EXISTING` (in `ingest/entities.py`) fetches **every
+  entity in the tenant, *with its embedding*,** on every `store()`, then matches in Python by
+  cosine. There is **no vector index on `entities`**. So per-write cost is O(N) transfer +
+  O(N) compares and grows as the tenant fills → O(N²) overall.
+- **Retrieval fans out.** The graph arm's `relates_to` traversal over a dense single-tenant
+  entity graph blows the 60 s query timeout (the fan-out tamed at 200 docs, unbounded at 3k).
+
+**Design — diagnostic-first, then two fixes.**
+- **SC-1a — profiling harness (diagnostic, no core change).** Ingest into one tenant at growing
+  sizes (e.g. 500 → 3,000) and record per-`store()` and per-`retrieve()` p50/p99 vs size, to
+  (1) confirm the O(N²) ingestion curve + the retrieval blow-up and (2) set the baseline the
+  fixes are verified against.
+- **SC-1b — ANN entity resolution (the ingestion fix).** Add a **vector index to `entities`**
+  (reuse the MA-8 IVF / `APPROX_NEAR_COSINE` machinery the `memories` arm already has) and
+  replace the `_FETCH_EXISTING` full-scan with a **top-k nearest-entity** query per extracted
+  entity — per-write O(N) → ~O(k). **Behaviour-preserving:** same `entity_merge_threshold`,
+  only faster candidate generation; fall back to the scan while the index is cold/untrained
+  (as the memory arm does, §7). Re-run SC-1a to prove the curve flattened.
+- **SC-1c — bounded graph fan-out (retrieval fix, conditional on SC-1a).** Cap the traversal
+  (neighbours per entity / seed count / degree) so retrieval stays bounded on a dense tenant.
+  The graph arm is already down-weighted (`RRF_GRAPH_WEIGHT=0.1`), so a cap costs little
+  quality. Sized after SC-1a quantifies it.
+
+**Files.** `schema/collections.py` (entities vector index), `ingest/entities.py` (ANN
+resolution + cold-start fallback), `retrieve/search.py` (`_GRAPH_QUERY` fan-out caps),
+`config.py` (entity-index + fan-out knobs), a profiling script under `eval/` or `ops`, tests,
+docs.
+
+**Acceptance.** On the profiling harness, per-`store()` latency is ~flat (not linear) in tenant
+size after SC-1b, and a pooled-corpus ingest + retrieve that previously stalled completes in a
+reasonable time with no timeouts. Retrieval quality on the given-context benchmarks is
+unchanged (behaviour-preserving resolution + down-weighted graph).
+
+**Decisions locked (recommended).** candidate generation = **ANN vector index on `entities`**
+(reuses MA-8; not blocking/LSH); **cold-start fallback to scan** while the entity index is
+untrained; graph fix = **cap fan-out** (don't remove the arm). Open at build time: entity
+`n_lists`/`train_factor`; the top-k and fan-out caps (tune on the harness).
+
+---
+
+## RT-1 — expose `candidate_pool` as a config + API knob (open-corpus tuning)
+
+*Scoped. The cheap, direct payoff of the BX-3 finding.*
+
+**Why.** BX-3 showed ~15% of open-corpus recall misses are *tail-reachable* by widening the
+candidate pool past 100 (then rerank promotes them). But `candidate_pool` is a hardcoded
+`retrieve()` arg default — no `CANDIDATE_POOL` env var, not in the API — so a large-tenant
+deployment can't act on the finding (`rerank_enabled` already is tunable; the pool isn't).
+
+**Design.** `config.py`: `candidate_pool: int = Field(default=100, ge=1)`. `retrieve()`:
+`candidate_pool: int | None = None` → `settings.candidate_pool` (the `None → settings` pattern
+`graph_hops`/`n_lists` use). API `RetrieveOptions`: add `candidate_pool`, threaded to
+`retrieve`. Docs: an "open-corpus / large-tenant tuning" note (raise `CANDIDATE_POOL` + enable
+rerank; trade is per-query latency). Tests: default, settings-default honoured, API thread.
+**Keep the global default at 100** — widening it for everyone taxes the common given-context
+path; the finding is open-corpus-specific, so make it *tunable*, not *bigger-by-default*.
+
+**Acceptance.** `CANDIDATE_POOL` settable via env + `/v1/retrieve` opts; default runs are
+byte-identical to today; docs explain the tuning. Size S.
 
 ---
 
