@@ -33,6 +33,20 @@ def test_format_flags_plateau_vs_rising() -> None:
     assert "O(N²)" not in out  # the misleading first/last verdict is gone
 
 
+def test_format_flat_or_declining_reads_bounded() -> None:
+    # Regression: a warm run whose latency declines early then holds flat must read
+    # bounded, not "rising" — the SC-1d proof run (retrieve 807→685ms) tripped the old
+    # head-vs-tail-slope heuristic into a false "unbounded".
+    rows = [
+        ProfileRow(500, 274.0, 4698.0, 807.0, 4334.0),
+        ProfileRow(1500, 263.0, 2629.0, 683.0, 845.0),
+        ProfileRow(3000, 268.0, 4976.0, 685.0, 1161.0),
+    ]
+    out = _format(rows)
+    assert "still rising" not in out
+    assert out.count("PLATEAUS (bounded)") == 2  # both store and retrieve
+
+
 def test_profile_runs_and_samples(db: StandardDatabase) -> None:
     rows = profile(db, max_n=20, step=10, probes=3, tenant_id="t_scale")
     assert len(rows) == 2  # checkpoints at 10 and 20

@@ -109,9 +109,10 @@ def _format(rows: list[ProfileRow]) -> str:
         lines.append(f"{r.size:<6}  {r.store_p50:>8.0f}  {r.store_p99:>8.0f}  "
                      f"{r.retrieve_p50:>7.0f}  {r.retrieve_p99:>7.0f}")
     if len(rows) >= 3 and rows[0].store_p50 > 0 and rows[0].retrieve_p50 > 0:
-        # Shape matters more than the first/last ratio: a plateau (climb then flat) is the
-        # bounded-cost signature, whereas a curve that keeps rising into the tail is unbounded.
-        # Compare the second-half slope to the first-half slope for each metric.
+        # Shape matters more than the first/last ratio: a bounded metric flattens, an
+        # unbounded one keeps climbing. Key off the *fractional* growth across the tail half
+        # (independent of the head's direction — a warm run can decline early then flatten),
+        # so a flat or falling curve reads as bounded, not "rising".
         lines.append("")
         mid = len(rows) // 2
         metrics: list[tuple[str, list[float]]] = [
@@ -119,18 +120,13 @@ def _format(rows: list[ProfileRow]) -> str:
             ("retrieve", [r.retrieve_p50 for r in rows]),
         ]
         for label, vals in metrics:
-            head_slope = (vals[mid] - vals[0]) / max(rows[mid].size - rows[0].size, 1)
-            tail_slope = (vals[-1] - vals[mid]) / max(rows[-1].size - rows[mid].size, 1)
+            tail_frac = (vals[-1] - vals[mid]) / vals[mid]  # growth over the second half
             total = vals[-1] / vals[0]
-            shape = (
-                "PLATEAUS (bounded)"
-                if tail_slope <= 0.5 * head_slope
-                else "still rising (unbounded)"
-            )
+            shape = "PLATEAUS (bounded)" if tail_frac <= 0.15 else "still rising (unbounded)"
             lines.append(
                 f"{label} p50: {vals[0]:.0f}→{vals[-1]:.0f}ms ({total:.1f}× over "
-                f"{rows[0].size}→{rows[-1].size}) — tail slope {tail_slope:.2f} vs "
-                f"head {head_slope:.2f} ms/doc ⇒ {shape}"
+                f"{rows[0].size}→{rows[-1].size}) — tail grew {tail_frac * 100:+.0f}% "
+                f"over the second half ⇒ {shape}"
             )
     return "\n".join(lines)
 
