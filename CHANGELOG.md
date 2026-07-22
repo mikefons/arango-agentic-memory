@@ -40,6 +40,21 @@ it has not yet been tagged or published to a registry.
   (RQ-2a). Composable with lite/multihop; off the hot path; degrades to the fused order on
   failure. A retrieval-miss diagnostic (`eval.pool_diag`) reports the ranking-vs-recall
   split that motivates it.
+- Per-request candidate pool (RT-1): `CANDIDATE_POOL` (default 100) is the per-arm candidate
+  count before fusion/rerank/MMR, also overridable per call via `opts.candidate_pool`. Raise it
+  (e.g. 500) **with rerank** on an open/large corpus to recover tail-reachable evidence, at more
+  per-query DB work (BX-3, DESIGN §23).
+- Single-large-tenant scalability (SC-1) — keeps store/retrieve latency flat as one tenant grows
+  to thousands of memories, the wall the pooled-corpus run hit:
+  - **ANN entity resolution** (SC-1b): write-time entity dedup matches a new entity against the
+    **top-k nearest** via a Faiss index on `entities` instead of full-scanning the tenant — fixes
+    O(N²) ingestion. Falls back to the scan below the index's training threshold. Knobs:
+    `ENTITY_VECTOR_N_LISTS`, `ENTITY_VECTOR_TRAIN_FACTOR`, `ENTITY_RESOLUTION_TOP_K`.
+  - **Bounded graph fan-out** (SC-1c/SC-1d): the graph arm caps both the `relates_to` neighbours
+    (`GRAPH_MAX_NEIGHBORS`, 200) and the memories expanded per entity
+    (`GRAPH_MAX_MEMORIES_PER_ENTITY`, 50), so a dense tenant can't explode retrieval. Defaults
+    leave real corpora untouched. Profiler proof (`eval.scaling_profile`, SC-1a): store p50 flat
+    ~270 ms and retrieve p50 flat ~685 ms across 500 → 3,000 memories (DESIGN §23).
 - Bitemporal validity, PII redaction at ingest, right-to-be-forgotten.
 - In-process lifecycle passes (keyless, no Pregel): PageRank salience, label-
   propagation community detection, Dream-State consolidation, Ebbinghaus lazy
