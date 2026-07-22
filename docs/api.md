@@ -227,10 +227,20 @@ Hybrid retrieval (BM25 + vector + graph → RRF → MMR → tiered token budget,
                                              //   one fused pass; omit → just agent_id
   },
   "opts": {                         // all optional
-    "mode": "lite",                 // "lite" | "full" (full adds HyDE + adaptive gate)
+    "mode": "lite",                 // "lite" | "full" | "multihop"
+                                    //   lite     — BM25 + vector + graph, no hot-path LLM call
+                                    //   full     — adds HyDE + adaptive gate
+                                    //   multihop — decompose the query into sub-lookups (one LLM
+                                    //              call), retrieve each, RRF-fuse again (RQ-1)
     "max_memory_tokens": 1500,
     "k": 10,
-    "n_probe": 10
+    "n_probe": 10,
+    "rerank": false,                // cross-encoder rerank of the fused pool before MMR (RQ-2b).
+                                    //   Needs RERANKER_PROVIDER configured (`local` → `rerank`
+                                    //   extra); default false. Composable with any mode.
+    "candidate_pool": 100           // per-arm candidates before fusion/rerank/MMR (RT-1). Raise
+                                    //   (e.g. 500) with rerank on an open/large corpus to recover
+                                    //   tail-reachable evidence, at more per-query DB work.
   }
 }
 // response
@@ -244,6 +254,12 @@ Hybrid retrieval (BM25 + vector + graph → RRF → MMR → tiered token budget,
 `source` ∈ `bm25 | vector | graph`. `read_agent_ids` widens reads only (writes always
 use `agent_id`) and stays tenant-scoped — a cross-tenant id returns nothing. On any
 fault the response is empty (`context: ""`, `hits: []`) — never an error.
+
+Every `opts` field defaults from server config (`MODE`, `K`, `RERANK_ENABLED`,
+`CANDIDATE_POOL`, …); a request value overrides it per call. `mode`/`rerank`/`candidate_pool`
+are retrieval-quality knobs — see [ops.md](ops.md#configuration-environment) for defaults, cost,
+and when to raise them, and [DESIGN.md §23](DESIGN.md) for the benchmark results that motivate
+each.
 
 #### `POST /v1/prime` · *read* · task briefing (MA-3)
 The **handoff** verb: given a task, return one budgeted briefing — retrieved history +
@@ -422,7 +438,8 @@ get_steps(db, tenant_id="t", agent_id="a", tool_name=None, limit=20)
 # Retrieve
 from arango_memory.retrieve.search import retrieve
 retrieve(db, query="…", tenant_id="t", agent_id="a",
-         k=10, max_memory_tokens=1500, mode="lite")        # → RetrieveResult(context, hits, tokens_injected)
+         k=10, max_memory_tokens=1500, mode="lite",        # mode: "lite" | "full" | "multihop"
+         rerank=False, candidate_pool=100)                 # → RetrieveResult(context, hits, tokens_injected)
 
 # Semantic memory
 from arango_memory.entity_api import get_entity, list_entities, seed
