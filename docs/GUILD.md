@@ -89,11 +89,14 @@ M ≈ 2–3 days.
 | 3 | E-3 | Hero personas + guild-aware NPCs | S | E-1 |
 | 4 | E-4 | Traitor arc + accusation endgame | M | E-1 |
 | 5 | E-5 | Meta-progression + onboarding + polish | S | E-1..E-4 |
-| 6 | E-6 | Autonomous multi-agent expeditions (Vercel Workflows) | L | E-1..E-4 |
+| 6 | E-6 | Autonomous multi-agent expeditions (durable-agent runtime) | L | E-1..E-4 |
+| 7 | E-7 | Vercel OIDC auth for the dungeon→core hop | S | JWT-1/2/3 (core, landed) |
 
 Recommended sequence: **E-1 now** (no core dependencies), then **E-3/E-4** in either
 order, with **E-2** slotting in whenever MA-1..3 land. E-5 last. **E-6 is a post-1.0
 showcase track** — build it only once E-1..E-5 land and the human-driven loop is solid.
+**E-7 is independent** (integration hardening) — land it anytime the deployed demo needs
+to drop the shared static key.
 
 ---
 
@@ -426,6 +429,46 @@ Fluid Compute (done). New: a durable-agent runtime — `@vercel/workflow` (or th
 Workflows SDK) **or** `eve` (beta; pin the version) — plus a campaign store (can be the
 memory core itself — a `campaigns` tenant — keeping "no separate state" intact; do not let
 eve's own agent-state stand in for the guild ledger).
+
+---
+
+### E-7 — Vercel OIDC auth for the dungeon→core hop *(integration hardening, not a game feature)*
+
+**Problem.** The dungeon authenticates to the core with a **static shared secret** —
+`CORE_API_KEY` sent as `Authorization: Bearer` (`lib/core.ts`). The same long-lived key
+lives in both the Vercel project env and the core env; rotating it means editing two places,
+and a leak grants standing access. The core already speaks OIDC (JWT-1/2/3 landed) — the
+dungeon just isn't using it.
+
+**Design.** Replace the static key with **short-lived, per-request Vercel OIDC tokens**,
+verified by the core's existing OIDC path. Nothing new on the core *code* side — it's config
++ a client-side swap:
+- **Dungeon side.** In `coreFetch` (`lib/core.ts`), mint a token per request with
+  `getVercelOidcToken()` from `@vercel/functions` and send it as the bearer, replacing the
+  `CORE_API_KEY` header. Falls back to the static key when the OIDC token is absent (local
+  `next dev` without the Vercel OIDC env) so local play still works.
+- **Core side.** Set `OIDC_ISSUER` to Vercel's issuer (`https://oidc.vercel.com/<team>`) and
+  the expected `aud`; the core verifies the JWT against the issuer's JWKS (`security/auth.py`,
+  JWT-1) and maps claims → tenant/scope (JWT-2). Confirm Vercel's token claim shape maps to a
+  sensible `tenant_id`/`access_level` — may need a small claims-mapping tweak, the one piece
+  that could touch core code.
+- **Keep the static key as the local/dev + CI credential** (the core stays keyless by default
+  for tests); OIDC is the production dungeon→core credential only.
+
+**Why it's worth it.** Removes the shared long-lived secret from two envs; tokens are
+short-TTL and rotate automatically; identity is per-deployment. It's the one place Vercel and
+the FastAPI core genuinely meet — using machinery **both sides already have** — as opposed to
+hosting the core on Vercel, which its durable write worker + in-process Faiss index make a
+non-starter (the core stays a long-lived container; see the dungeon README).
+
+**Acceptance.** With `OIDC_ISSUER` set on the core, the deployed dungeon reaches the core
+with **no `CORE_API_KEY`** present; requests carry a Vercel-minted JWT; an expired/forged
+token is rejected (401). Local `next dev` still works via the static-key fallback. **Gating:**
+production-only; the keyless local/CI path is unchanged.
+
+**Dependencies.** Core JWT-1/2/3 (landed). New: `@vercel/functions` (already a dep via Fluid
+Compute's `waitUntil` usage, if adopted) + Vercel OIDC enabled on the project. Independent of
+E-1..E-6.
 
 ---
 
