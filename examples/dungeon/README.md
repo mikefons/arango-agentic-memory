@@ -45,6 +45,11 @@ Next.js (this app, on Vercel)  ──HTTP──▶  Python core (FastAPI)  ─�
 The core is long-lived (durable write worker), so it runs as a container, not on
 serverless. The Next.js ↔ core boundary is the existing `/v1` HTTP contract.
 
+**Fluid Compute** is enabled (`"fluid": true` in `vercel.json`) — the `/api/chat` route
+streams the turn, then commits memory to the core *after* the response is sent, which is
+exactly Fluid's post-response + warm-instance model. It's a hosting optimization; the game
+plays identically with it off.
+
 ## Run it locally
 
 ```bash

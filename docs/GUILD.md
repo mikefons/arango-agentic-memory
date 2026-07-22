@@ -89,9 +89,11 @@ M ≈ 2–3 days.
 | 3 | E-3 | Hero personas + guild-aware NPCs | S | E-1 |
 | 4 | E-4 | Traitor arc + accusation endgame | M | E-1 |
 | 5 | E-5 | Meta-progression + onboarding + polish | S | E-1..E-4 |
+| 6 | E-6 | Autonomous multi-agent expeditions (Vercel Workflows) | L | E-1..E-4 |
 
 Recommended sequence: **E-1 now** (no core dependencies), then **E-3/E-4** in either
-order, with **E-2** slotting in whenever MA-1..3 land. E-5 last.
+order, with **E-2** slotting in whenever MA-1..3 land. E-5 last. **E-6 is a post-1.0
+showcase track** — build it only once E-1..E-5 land and the human-driven loop is solid.
 
 ---
 
@@ -336,10 +338,76 @@ to be re-recorded — CI's offline link-check needs the target to resolve.
 
 ---
 
+### E-6 — Autonomous multi-agent expeditions (Vercel Workflows) *(post-1.0 showcase)*
+
+**Problem.** E-1..E-5 make the handoff *legible* by keeping a human in the loop — the
+Guildmaster clicks each turn, chronicles, and shapes the briefing. That's the right call
+for teaching the idea, but it means the multi-agent story is still *narrated by a person*.
+The strongest version of the thesis is an agent handing off to another agent **with no
+human between them**: expeditions that run themselves, so the only thing connecting Hero N
+to Hero N+1 is the guild's memory. This deliberately revisits the "one hero at a time"
+scope call below — as a separate, opt-in showcase, not a change to the core demo.
+
+**Why Vercel Workflows earns its place here (and nowhere else).** The human-driven loop
+does *not* need a workflow engine — the memory core's durable queue + `flush` barrier are
+already the coordination substrate, and adding a second durable layer would only blur that.
+Autonomy is the one case that flips: when nobody is
+clicking, *something* server-side must durably drive `descend → explore(N turns) →
+chronicle → prime → descend` across minutes/hours, survive restarts, retry a failed hero,
+and fan out to bounded-parallel expeditions. That is exactly durable step-workflow
+territory. The memory core stays the source of truth; the Workflow is only the *scheduler*
+that decides when to spawn the next agent and calls the same `/v1` verbs a human would.
+
+**Design.**
+- **`workflows/expedition.ts` (Vercel Workflow).** A durable run per campaign. Steps:
+  `spawnHero(n)` → `runExpedition(heroId)` (loops the agent's own `generateText` +
+  tools for its torch budget, writing under `agent_id: hero-<n>` + `guild::query`) →
+  `chronicle(heroId)` (`POST /v1/flush`, MA-1) → `brief(nextHeroId)` (`POST /v1/prime`,
+  MA-3, auto-kept — no human pin/drop) → `spawnHero(n+1)`. Each step is a durable
+  checkpoint: a crash resumes mid-campaign without re-running committed work.
+- **Autonomous hero = a real agent loop, not scripted.** The hero runs the same tool set
+  as the human game (`look/move/talk/confront/accuse`) under `maxSteps`; its *reasoning*
+  is captured (MA-4) so the next hero inherits conclusions, not just facts. Win condition
+  unchanged: the campaign ends when the guild has exposed the traitor across expeditions.
+- **Bounded parallelism (optional).** Fan out K heroes into different wings of the keep
+  concurrently, then a `converge()` step primes a "chronicler" hero from all K agents'
+  writes (`read_agent_ids: [hero-a, hero-b, …, guild::query]`, MA-2) — the multi-writer
+  → single-reader fusion made visible. Keep K small (2–3) so the graph stays legible.
+- **UI: a spectator mode.** The existing screens become read-only live views — the map,
+  dossier, and case-board update as autonomous heroes act; the Handoff Briefing renders
+  each auto-prime as it happens. The human watches memory compound instead of driving it.
+- **Fluid Compute is the substrate.** The per-hero agent loop is a long-running,
+  post-response, instance-reused function — precisely Fluid's sweet spot (already enabled
+  in `vercel.json`). Workflows orchestrates; Fluid runs the steps.
+
+**Roadmap features, in-game (extends the E-table above).**
+
+| Capability | Shown as |
+|---|---|
+| Vercel Workflows (durable steps) | The campaign that runs itself — resumes after a crash mid-expedition |
+| MA-3 `prime` (auto-kept) | Agent-to-agent handoff with **no human curating the budget** |
+| MA-2 `read_agent_ids` fan-in | The `converge()` chronicler reading K parallel heroes at once |
+| Fluid Compute | Each autonomous hero's turn loop, running warm after the response |
+
+**Acceptance.** A campaign started with one API call plays ≥3 expeditions to a win with
+no human input; killing the deployment mid-expedition and redeploying resumes the same
+campaign (durable-step proof); the spectator UI shows the map/dossier filling across
+heroes. **Gating:** opt-in (`GUILD_AUTONOMOUS=true`); the human-driven loop (E-1..E-5)
+remains the default demo. **Risk to manage:** cost/runaway loops — cap total expeditions
+and torch per campaign; every LLM call is a metered agent turn.
+
+**Dependencies.** E-1..E-4 (the whole lifecycle + win condition), MA-1/2/3/4 (all landed),
+Fluid Compute (done). New: `@vercel/workflow` (or the current Workflows SDK) + a campaign
+store (can be the memory core itself — a `campaigns` tenant — keeping "no separate state"
+intact).
+
+---
+
 ## Explicitly out of scope (decided)
 
 - **Multiplayer / multiple concurrent heroes** — one hero at a time keeps the handoff
-  legible; concurrent agents are the *eval's* job (MA-5), not the demo's.
+  legible; concurrent agents are the *eval's* job (MA-5), not the demo's. (E-6 revisits
+  this as an opt-in, autonomous post-1.0 showcase, with bounded parallelism only.)
 - **Procedural dungeon generation** — authored content is what makes the traitor arc
   provable (E-4's content test); generation would trade the demo's point for replay
   value it doesn't need.
