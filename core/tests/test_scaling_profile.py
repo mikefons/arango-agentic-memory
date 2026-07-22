@@ -20,11 +20,31 @@ def test_content_is_entity_rich() -> None:
     assert "Ent7" in c and "Ent8" in c and "Hub" in c and "Topic" in c
 
 
-def test_format_reports_growth() -> None:
-    rows = [ProfileRow(10, 5.0, 6.0, 1.0, 2.0), ProfileRow(20, 15.0, 20.0, 2.0, 3.0)]
+def test_format_flags_plateau_vs_rising() -> None:
+    # store plateaus (climb then flat) ⇒ bounded; retrieve keeps rising ⇒ unbounded.
+    rows = [
+        ProfileRow(500, 900.0, 6000.0, 800.0, 1100.0),
+        ProfileRow(1500, 1400.0, 5000.0, 2200.0, 3600.0),
+        ProfileRow(3000, 1420.0, 3500.0, 5100.0, 9600.0),
+    ]
     out = _format(rows)
-    assert "3.0×" in out  # 15/5
-    assert "O(N²)" in out
+    assert "store p50" in out and "PLATEAUS (bounded)" in out
+    assert "retrieve p50" in out and "still rising (unbounded)" in out
+    assert "O(N²)" not in out  # the misleading first/last verdict is gone
+
+
+def test_format_flat_or_declining_reads_bounded() -> None:
+    # Regression: a warm run whose latency declines early then holds flat must read
+    # bounded, not "rising" — the SC-1d proof run (retrieve 807→685ms) tripped the old
+    # head-vs-tail-slope heuristic into a false "unbounded".
+    rows = [
+        ProfileRow(500, 274.0, 4698.0, 807.0, 4334.0),
+        ProfileRow(1500, 263.0, 2629.0, 683.0, 845.0),
+        ProfileRow(3000, 268.0, 4976.0, 685.0, 1161.0),
+    ]
+    out = _format(rows)
+    assert "still rising" not in out
+    assert out.count("PLATEAUS (bounded)") == 2  # both store and retrieve
 
 
 def test_profile_runs_and_samples(db: StandardDatabase) -> None:

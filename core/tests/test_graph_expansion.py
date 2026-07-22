@@ -18,6 +18,18 @@ def test_graph_query_bounds_fan_out() -> None:
     assert _GRAPH_QUERY.index("LIMIT @max_neighbors") < _GRAPH_QUERY.index("INBOUND related")
 
 
+def test_graph_query_bounds_memories_per_entity() -> None:
+    # SC-1d: each related entity's INBOUND memory expansion is capped, so a hub whose
+    # mentions grow as the tenant fills can't drive retrieval latency unbounded.
+    assert "LIMIT @max_memories_per_entity" in _GRAPH_QUERY
+    # the per-entity cap sits inside the memory loop, before the ranking COLLECT.
+    assert (
+        _GRAPH_QUERY.index("INBOUND related")
+        < _GRAPH_QUERY.index("LIMIT @max_memories_per_entity")
+        < _GRAPH_QUERY.index("COLLECT")
+    )
+
+
 def test_graph_query_does_not_buffer_embeddings_through_collect() -> None:
     # Regression (MA-8): the graph arm must aggregate scalar ranking fields only and
     # fetch the heavy doc (text/embedding) via a point lookup *after* LIMIT — never
@@ -76,6 +88,23 @@ def test_low_neighbor_cap_still_retrieves(
     store(db, content="Acme shipped widgets", turn_index=1, **ctx)
     result = wait_for_searchable(db, query="Alice joined", **ctx)
     assert result.hits  # capped traversal doesn't error; BM25 (+ bounded graph) still returns
+
+
+def test_low_memories_per_entity_cap_still_retrieves(
+    db: StandardDatabase,
+    wait_for_searchable: Callable[..., RetrieveResult],
+    monkeypatch: Any,
+) -> None:
+    # SC-1d: a tiny per-entity memory cap bounds the INBOUND fan-out but must not break
+    # retrieval — the LIMIT is valid AQL and the arms still return.
+    from arango_memory.config import settings as s
+    monkeypatch.setattr(s, "graph_max_memories_per_entity", 1)
+    ctx = {"tenant_id": "t_mcap", "agent_id": "a"}
+    store(db, content="Alice joined Acme", turn_index=0, **ctx)
+    store(db, content="Acme shipped widgets", turn_index=1, **ctx)
+    store(db, content="Acme hired Bob", turn_index=2, **ctx)
+    result = wait_for_searchable(db, query="Alice joined", **ctx)
+    assert result.hits
 
 
 def test_retrieve_without_entities_still_works(

@@ -1,7 +1,7 @@
 # ArangoDB Agentic Memory System — Design Specification
 
 > **Status:** ✅ **v1 build sequence complete (Steps 0–7).** v2: all §21 adapters shipped (MCP, LangChain/LangGraph, CrewAI) + full §19 entity API + **Step 3e heavy extraction tier done**, hardened into a deployable service. Authoritative reference.
-> **Last updated:** 2026-07-21 (rev 86 — BX-3 open-corpus probe: ~15% of the recall gap is tail-reachable (pool knob), ~8.5%-of-support residual first-stage gap; reranker still top lever; §23)
+> **Last updated:** 2026-07-21 (rev 87 — SC-1d proven: profiler re-run shows retrieve p50 flat ~685ms across 500→3000 (was 798→5080ms); both arms bounded, single-large-tenant wall closed; §23)
 >
 > The **rev-by-rev build log** lives in [`HISTORY.md`](HISTORY.md); user-visible changes are in
 > [`CHANGELOG.md`](../CHANGELOG.md); the doc map is [`docs/README.md`](README.md). This file is
@@ -1116,7 +1116,28 @@ entities nor the graph arm). Both underlying limits are now fixed (**SC-1**, ROA
 **O(N²) ingestion** by **SC-1b** — ANN entity resolution (a Faiss IVF index on
 `entities.embedding` → top-k nearest instead of the full tenant scan, §7); the **graph-arm
 retrieval fan-out** by **SC-1c** — `GRAPH_MAX_NEIGHBORS` caps the `relates_to` expansion
-before the memory join so a dense single-tenant graph can't explode the traversal.
+before the memory join — and **SC-1d** — `GRAPH_MAX_MEMORIES_PER_ENTITY` caps each related
+entity's `INBOUND mentions` join, so a dense single-tenant graph can't explode the traversal.
+
+The **SC-1a profiler** (`eval/scaling_profile`, one tenant, 500 → 3,000 entity-rich memories)
+gives the before/after empirical proof — **retrieve p50 vs tenant size**, pre- and post-SC-1d:
+
+| tenant size | store p50 (ms) | retrieve p50 — pre-SC-1d | retrieve p50 — post-SC-1d |
+|---|---|---|---|
+| 500 | ~270 | 798 | 807 |
+| 1,500 | ~265 | 2,209 | 683 |
+| 3,000 | ~270 | **5,080** | **685** |
+
+**Ingestion is bounded (SC-1b confirmed):** store p50 is flat (~270 ms) across the range — not
+the O(N²) climb the pre-fix pooled run showed (~12 h for 3,075). **Retrieval was the residual:**
+before SC-1d it climbed 798 → 5,080 ms (6.4×) — SC-1c bounded the *neighbour* breadth (killing
+the 60 s timeout) but not the *per-entity* memory fan-out, since a hub entity's mentions grow as
+the tenant fills, so `INBOUND mentions` kept scaling. **SC-1d flattens it: retrieve p50 holds at
+~685 ms across 500 → 3,000** (total graph work ⇒ `MAX_NEIGHBORS × MAX_MEMORIES_PER_ENTITY`,
+tenant-size-independent). Both arms are now flat — the single-large-tenant scalability wall is
+closed. Note the profiler's synthetic corpus is *pathologically* dense (50 hub entities shared
+across 3,000 memories); real corpora (entities mentioned by a handful of memories) sit far below
+the default caps and are untouched by either bound.
 
 ### Open-corpus first-stage recall — real gap (BX-3 result)
 
