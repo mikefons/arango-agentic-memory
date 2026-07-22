@@ -338,7 +338,7 @@ to be re-recorded — CI's offline link-check needs the target to resolve.
 
 ---
 
-### E-6 — Autonomous multi-agent expeditions (Vercel Workflows) *(post-1.0 showcase)*
+### E-6 — Autonomous multi-agent expeditions (durable-agent runtime) *(post-1.0 showcase)*
 
 **Problem.** E-1..E-5 make the handoff *legible* by keeping a human in the loop — the
 Guildmaster clicks each turn, chronicles, and shapes the briefing. That's the right call
@@ -348,23 +348,48 @@ human between them**: expeditions that run themselves, so the only thing connect
 to Hero N+1 is the guild's memory. This deliberately revisits the "one hero at a time"
 scope call below — as a separate, opt-in showcase, not a change to the core demo.
 
-**Why Vercel Workflows earns its place here (and nowhere else).** The human-driven loop
-does *not* need a workflow engine — the memory core's durable queue + `flush` barrier are
-already the coordination substrate, and adding a second durable layer would only blur that.
-Autonomy is the one case that flips: when nobody is
-clicking, *something* server-side must durably drive `descend → explore(N turns) →
-chronicle → prime → descend` across minutes/hours, survive restarts, retry a failed hero,
-and fan out to bounded-parallel expeditions. That is exactly durable step-workflow
-territory. The memory core stays the source of truth; the Workflow is only the *scheduler*
-that decides when to spawn the next agent and calls the same `/v1` verbs a human would.
+**Why a durable-agent runtime earns its place here (and nowhere else).** The human-driven
+loop does *not* need one — the memory core's durable queue + `flush` barrier are already the
+coordination substrate, and adding a second durable layer would only blur that. Autonomy is
+the one case that flips: when nobody is clicking, *something* server-side must durably drive
+`descend → explore(N turns) → chronicle → prime → descend` across minutes/hours, survive
+restarts, retry a failed hero, and fan out to bounded-parallel expeditions. That is exactly
+durable-orchestration territory.
 
-**Design.**
-- **`workflows/expedition.ts` (Vercel Workflow).** A durable run per campaign. Steps:
+**The one hard rule, whichever runtime.** The memory core stays the source of truth; the
+runtime is only the *scheduler + agent host* — it decides when to spawn the next hero and
+calls the same `/v1` verbs a human would. It must **not** own memory. This matters most for
+`eve` (below), which ships its own agent-state/persistence: for the guild ledger you
+deliberately bypass it and write to the core, or the whole "context dies, memory outlives it"
+thesis dissolves into the framework's own store.
+
+**Runtime candidates (evaluate at build time — don't default).**
+- **Vercel Workflows** — durable step functions. Lowest-level, most explicit: you author
+  `spawnHero → runExpedition → chronicle → prime → spawnHero` as durable steps, and nothing
+  competes with the memory core for "what is the agent's state." Best when you want the
+  orchestration visible and the dependency surface minimal.
+- **`eve` (Vercel's durable-agent framework, [github.com/vercel/eve](https://github.com/vercel/eve))** —
+  higher-level and arguably the more natural fit: a "hero" becomes an eve agent directory
+  (`instructions.md` = the persona/DM prompt, `tools/` = thin wrappers over the `/v1` verbs +
+  the game tools, `skills/` = interrogate/confront routines, `schedules/` = kick a campaign),
+  and eve's runtime handles the durable loop. Trade-off: it's **beta** (APIs may change) and
+  it brings its own agent-state opinions — acceptable on an experimental showcase branch,
+  with the memory-ownership rule above enforced, but not something to bet the canonical demo
+  on. Strongest pick if E-6 is also meant to show the app running *natively on Vercel's agent
+  stack*.
+
+Either way the `tools/` (or Workflow steps) call `store`/`flush`/`prime`/`retrieve`; the core
+is the shared mind, the runtime is just the heroes' bodies.
+
+**Design.** (Shown with Vercel Workflows; the `eve` variant maps the same steps onto an
+agent directory + its runtime — see candidates above.)
+- **`workflows/expedition.ts` (durable run per campaign).** Steps:
   `spawnHero(n)` → `runExpedition(heroId)` (loops the agent's own `generateText` +
   tools for its torch budget, writing under `agent_id: hero-<n>` + `guild::query`) →
   `chronicle(heroId)` (`POST /v1/flush`, MA-1) → `brief(nextHeroId)` (`POST /v1/prime`,
   MA-3, auto-kept — no human pin/drop) → `spawnHero(n+1)`. Each step is a durable
-  checkpoint: a crash resumes mid-campaign without re-running committed work.
+  checkpoint: a crash resumes mid-campaign without re-running committed work. (Under `eve`,
+  each step is an agent tool/skill; the durable loop is the runtime's.)
 - **Autonomous hero = a real agent loop, not scripted.** The hero runs the same tool set
   as the human game (`look/move/talk/confront/accuse`) under `maxSteps`; its *reasoning*
   is captured (MA-4) so the next hero inherits conclusions, not just facts. Win condition
@@ -384,7 +409,7 @@ that decides when to spawn the next agent and calls the same `/v1` verbs a human
 
 | Capability | Shown as |
 |---|---|
-| Vercel Workflows (durable steps) | The campaign that runs itself — resumes after a crash mid-expedition |
+| Durable-agent runtime (Vercel Workflows **or** eve) | The campaign that runs itself — resumes after a crash mid-expedition |
 | MA-3 `prime` (auto-kept) | Agent-to-agent handoff with **no human curating the budget** |
 | MA-2 `read_agent_ids` fan-in | The `converge()` chronicler reading K parallel heroes at once |
 | Fluid Compute | Each autonomous hero's turn loop, running warm after the response |
@@ -397,9 +422,10 @@ remains the default demo. **Risk to manage:** cost/runaway loops — cap total e
 and torch per campaign; every LLM call is a metered agent turn.
 
 **Dependencies.** E-1..E-4 (the whole lifecycle + win condition), MA-1/2/3/4 (all landed),
-Fluid Compute (done). New: `@vercel/workflow` (or the current Workflows SDK) + a campaign
-store (can be the memory core itself — a `campaigns` tenant — keeping "no separate state"
-intact).
+Fluid Compute (done). New: a durable-agent runtime — `@vercel/workflow` (or the current
+Workflows SDK) **or** `eve` (beta; pin the version) — plus a campaign store (can be the
+memory core itself — a `campaigns` tenant — keeping "no separate state" intact; do not let
+eve's own agent-state stand in for the guild ledger).
 
 ---
 
