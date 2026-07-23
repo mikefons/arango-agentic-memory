@@ -11,7 +11,7 @@
  */
 
 import type { Claim, Ctx, FlushResult, RetrieveResult, StoreResult } from "./types";
-import { SHARED_AGENT } from "./types";
+import { SHARED_AGENT, SPECIALIST_AGENTS } from "./types";
 import { claimText } from "./claims";
 
 // Default to 127.0.0.1 (not "localhost"): server-side fetch can resolve "localhost"
@@ -92,6 +92,7 @@ export function retrieve(
   query: string,
   agentId: string,
   readAgentIds?: string[],
+  k = 10,
 ): Promise<RetrieveResult> {
   const ctx: Ctx = {
     tenant_id: roomTenant(roomId),
@@ -101,8 +102,16 @@ export function retrieve(
   };
   return coreFetch<RetrieveResult>("/v1/retrieve", {
     method: "POST",
-    body: JSON.stringify({ query, ctx, opts: { mode: "lite" } }),
+    body: JSON.stringify({ query, ctx, opts: { mode: "lite", k } }),
   });
+}
+
+/**
+ * Gather the claims all specialists have written for the Room — the red-team's input.
+ * Reads across every specialist's agent_id plus the shared tier (MA-2), pulling a wide pool.
+ */
+export function gatherClaims(roomId: string, query: string, k = 60): Promise<RetrieveResult> {
+  return retrieve(roomId, query, "redteam", [...SPECIALIST_AGENTS, SHARED_AGENT], k);
 }
 
 /** Read-your-writes barrier for the Room (MA-1): block until queued writes land. */
