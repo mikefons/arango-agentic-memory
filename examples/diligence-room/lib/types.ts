@@ -20,6 +20,9 @@ export type SpecialistId =
 /** The shared read namespace every agent can see (mirrors the CrewAI/guild convention). */
 export const SHARED_AGENT = "diligence::shared";
 
+/** The four data-room specialists whose claims the red-team cross-examines (MA-2). */
+export const SPECIALIST_AGENTS: SpecialistId[] = ["financial", "legal", "technical", "market"];
+
 /** A claim written to memory: subject/predicate/value plus provenance + as-of time. */
 export interface Claim {
   subject: string;
