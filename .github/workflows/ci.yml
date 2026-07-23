@@ -83,6 +83,29 @@ jobs:
           npm run typecheck
           npm test
 
+  diligence:
+    name: Diligence (typecheck, build)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: examples/diligence-room/package-lock.json
+
+      # The Due-Diligence Room is a standalone app (no @arango-memory/vercel dependency);
+      # it talks to the core over plain HTTP. Kept separate from the dungeon so neither
+      # can break the other (docs/DILIGENCE.md — parallel development & isolation).
+      - name: Install, build, type-check, test (diligence-room)
+        working-directory: examples/diligence-room
+        run: |
+          npm ci
+          npm run build
+          npm run typecheck
+          npm test
+
   image:
     name: Core image (build smoke)
     runs-on: ubuntu-latest
