@@ -43,7 +43,7 @@ async function layout(view: GraphView): Promise<Record<string, { x: number; y: n
   return pos;
 }
 
-function Inner({ roomId, canned }: { roomId?: string; canned: boolean }) {
+function Inner({ roomId, canned, refreshKey }: { roomId?: string; canned: boolean; refreshKey?: string | number }) {
   const [nodes, setNodes, onNodesChange] = useNodesState<EvidenceFlowNode>([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([]);
   const [view, setView] = useState<GraphView | null>(null);
@@ -65,7 +65,7 @@ function Inner({ roomId, canned }: { roomId?: string; canned: boolean }) {
 
   useEffect(() => {
     void load();
-  }, [load]);
+  }, [load, refreshKey]);
 
   useEffect(() => {
     if (!view) return;
@@ -117,7 +117,15 @@ function Inner({ roomId, canned }: { roomId?: string; canned: boolean }) {
   );
 }
 
-export function EvidenceGraph({ roomId, canned = true }: { roomId?: string; canned?: boolean }) {
+export function EvidenceGraph({
+  roomId,
+  canned = true,
+  refreshKey,
+}: {
+  roomId?: string;
+  canned?: boolean;
+  refreshKey?: string | number;
+}) {
   const legend = useMemo(
     () => [
       { k: "size", label: "size = salience (centrality)" },
@@ -129,7 +137,7 @@ export function EvidenceGraph({ roomId, canned = true }: { roomId?: string; cann
   return (
     <div className="ev-graph">
       <ReactFlowProvider>
-        <Inner roomId={roomId} canned={canned} />
+        <Inner roomId={roomId} canned={canned} refreshKey={refreshKey} />
       </ReactFlowProvider>
       <div className="ev-legend">
         {legend.map((l) => (
