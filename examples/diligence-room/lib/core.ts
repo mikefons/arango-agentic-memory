@@ -10,8 +10,8 @@
  * the verbs DR-1 needs (`storeClaim`, `retrieve`, `prime`, `flush`, `memoryGraph`).
  */
 
-import type { Claim, Ctx, FlushResult, RetrieveResult, StoreResult } from "./types";
-import { SHARED_AGENT, SPECIALIST_AGENTS } from "./types";
+import type { Claim, Ctx, FlushResult, PrimeResult, RetrieveResult, StoreResult } from "./types";
+import { SHARED_AGENT, SPECIALIST_AGENTS, TEAM_AGENTS } from "./types";
 import { claimText } from "./claims";
 
 // Default to 127.0.0.1 (not "localhost"): server-side fetch can resolve "localhost"
@@ -121,6 +121,27 @@ export function flush(roomId: string, agentId: string, timeoutMs = 8000): Promis
     body: JSON.stringify({
       ctx: { tenant_id: roomTenant(roomId), agent_id: agentId },
       timeout_ms: timeoutMs,
+    }),
+  });
+}
+
+/**
+ * Assemble a handoff briefing for the synthesis agent (MA-3): the whole team's findings —
+ * specialists + the red-team's disputes + the shared tier — packed under a token budget.
+ * This is the reasoning the memo is written from.
+ */
+export function prime(roomId: string, task: string): Promise<PrimeResult> {
+  return coreFetch<PrimeResult>("/v1/prime", {
+    method: "POST",
+    body: JSON.stringify({
+      task,
+      ctx: {
+        tenant_id: roomTenant(roomId),
+        agent_id: "synthesis",
+        read_agent_ids: ["synthesis", ...TEAM_AGENTS],
+        access_level: "read",
+      },
+      opts: { mode: "lite", k: 40, max_memory_tokens: 3000 },
     }),
   });
 }

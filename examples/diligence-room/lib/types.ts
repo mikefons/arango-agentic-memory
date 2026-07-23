@@ -23,6 +23,9 @@ export const SHARED_AGENT = "diligence::shared";
 /** The four data-room specialists whose claims the red-team cross-examines (MA-2). */
 export const SPECIALIST_AGENTS: SpecialistId[] = ["financial", "legal", "technical", "market"];
 
+/** Everyone the synthesis agent primes across: specialists + the red-team + the shared tier. */
+export const TEAM_AGENTS: string[] = [...SPECIALIST_AGENTS, "redteam", SHARED_AGENT];
+
 /** A claim written to memory: subject/predicate/value plus provenance + as-of time. */
 export interface Claim {
   subject: string;
@@ -57,4 +60,11 @@ export interface RetrieveResult {
 export interface FlushResult {
   status: string;
   pending: number;
+}
+
+export interface PrimeResult {
+  /** The assembled, token-budgeted briefing across the team's memory. */
+  context: string;
+  entities: { name?: string; label?: string; belief?: number }[];
+  tokens_injected: number;
 }
