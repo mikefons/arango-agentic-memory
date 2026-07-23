@@ -38,6 +38,8 @@ export interface CampaignDeps {
   runRedTeam: () => Promise<{ disputes: unknown[] }>;
   /** Prime the team briefing and write the memo. */
   runSynthesis: () => Promise<Memo>;
+  /** Optional: called as each step completes — the War Room streams these live (DR-3). */
+  onStep?: (step: CampaignStep) => void;
 }
 
 /** Wrap a phase so any throw becomes a recorded error step instead of aborting the campaign. */
@@ -45,15 +47,21 @@ async function phase(
   steps: CampaignStep[],
   name: string,
   fn: () => Promise<string | void>,
+  emit?: (step: CampaignStep) => void,
 ): Promise<boolean> {
+  let step: CampaignStep;
+  let ok: boolean;
   try {
     const detail = await fn();
-    steps.push({ name, status: "ok", detail: detail ?? undefined });
-    return true;
+    step = { name, status: "ok", detail: detail ?? undefined };
+    ok = true;
   } catch (err) {
-    steps.push({ name, status: "error", detail: err instanceof Error ? err.message : String(err) });
-    return false;
+    step = { name, status: "error", detail: err instanceof Error ? err.message : String(err) };
+    ok = false;
   }
+  steps.push(step);
+  emit?.(step);
+  return ok;
 }
 
 export async function runCampaign(
@@ -62,28 +70,30 @@ export async function runCampaign(
 ): Promise<CampaignResult> {
   const steps: CampaignStep[] = [];
 
+  const emit = deps.onStep;
+
   // 1. Dispatch specialists (each an independent checkpoint).
   for (const s of config.specialists) {
     await phase(steps, `specialist:${s.id}`, async () => {
       const { claimsWritten } = await deps.runSpecialist(s);
       return `${claimsWritten} claim(s)`;
-    });
+    }, emit);
   }
 
   // 2. Barrier — make all specialist writes visible before anyone reads them.
-  await phase(steps, "flush:specialists", async () => void (await deps.flush()));
+  await phase(steps, "flush:specialists", async () => void (await deps.flush()), emit);
 
   // 3. Consolidate — rank + cluster + reconcile the accumulated memory.
-  await phase(steps, "consolidate", async () => void (await deps.consolidate()));
+  await phase(steps, "consolidate", async () => void (await deps.consolidate()), emit);
 
   // 4. Red-team — cross-examine the shared picture for disputes.
   const redOk = await phase(steps, "redteam", async () => {
     const { disputes } = await deps.runRedTeam();
     return `${disputes.length} dispute(s)`;
-  });
+  }, emit);
 
   // 5. Barrier — make the red-team's findings visible to synthesis.
-  await phase(steps, "flush:redteam", async () => void (await deps.flush()));
+  await phase(steps, "flush:redteam", async () => void (await deps.flush()), emit);
 
   // 6. Synthesis — prime the team and write the memo (only if we got this far).
   let memo: Memo | undefined;
@@ -91,9 +101,11 @@ export async function runCampaign(
     await phase(steps, "synthesis", async () => {
       memo = await deps.runSynthesis();
       return `${memo.findings.length} finding(s) → ${memo.recommendation}`;
-    });
+    }, emit);
   } else {
-    steps.push({ name: "synthesis", status: "skipped", detail: "red-team failed" });
+    const skip: CampaignStep = { name: "synthesis", status: "skipped", detail: "red-team failed" };
+    steps.push(skip);
+    emit?.(skip);
   }
 
   return { room: config.roomId, steps, memo };
