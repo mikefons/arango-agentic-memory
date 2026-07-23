@@ -23,6 +23,11 @@ export function chooseProvider(env: {
   return "gateway";
 }
 
+/** True when a provider key is configured — so the War Room knows whether it can run live. */
+export function hasProviderKey(): boolean {
+  return Boolean(process.env.AI_GATEWAY_API_KEY || process.env.ANTHROPIC_API_KEY);
+}
+
 /** The configured language model. Throws only when actually invoked without a key. */
 export function getModel(): LanguageModel {
   const provider = chooseProvider({
