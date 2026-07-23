@@ -103,6 +103,51 @@ body {
   background: var(--down);
 }
 
+/* ── Verdict pill (opens the memo) ── */
+.wr-verdict {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  padding: 0.32rem 0.7rem;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: var(--panel);
+  color: var(--fg);
+  font: inherit;
+  font-size: 0.78rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+.wr-verdict-dot {
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 999px;
+  background: var(--faint);
+}
+.wr-verdict-more {
+  font-weight: 400;
+  color: var(--muted);
+  font-size: 0.72rem;
+}
+.wr-verdict-ok {
+  border-color: color-mix(in srgb, var(--ok) 55%, var(--line));
+}
+.wr-verdict-ok .wr-verdict-dot {
+  background: var(--ok);
+}
+.wr-verdict-warn {
+  border-color: color-mix(in srgb, var(--down) 55%, var(--line));
+}
+.wr-verdict-warn .wr-verdict-dot {
+  background: var(--down);
+}
+.wr-verdict-down {
+  border-color: color-mix(in srgb, #e5675f 55%, var(--line));
+}
+.wr-verdict-down .wr-verdict-dot {
+  background: #e5675f;
+}
+
 /* ── Run button ── */
 .wr-run {
   padding: 0.35rem 0.85rem;
@@ -475,4 +520,196 @@ body {
 .disp-mark {
   display: inline-block;
   width: 0.9rem;
+}
+
+/* ── Memo slide-over (DR-3e) ── */
+.memo-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  display: flex;
+  justify-content: flex-end;
+}
+.memo-scrim {
+  position: absolute;
+  inset: 0;
+  border: 0;
+  padding: 0;
+  background: rgba(4, 7, 12, 0.6);
+  backdrop-filter: blur(2px);
+  cursor: pointer;
+  animation: fade 0.2s ease;
+}
+.memo {
+  position: relative;
+  width: min(560px, 92vw);
+  height: 100%;
+  overflow-y: auto;
+  background: var(--panel);
+  border-left: 1px solid var(--line);
+  box-shadow: -20px 0 60px rgba(0, 0, 0, 0.45);
+  padding: 1.3rem 1.4rem 2.4rem;
+  animation: slide-in 0.28s cubic-bezier(0.22, 1, 0.36, 1);
+}
+@keyframes fade {
+  from { opacity: 0; }
+}
+@keyframes slide-in {
+  from { transform: translateX(24px); opacity: 0.4; }
+}
+.memo-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+}
+.memo-kicker {
+  font-family: ui-monospace, Menlo, monospace;
+  font-size: 0.66rem;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--faint);
+}
+.memo-target {
+  margin: 0.15rem 0 0;
+  font-size: 1.3rem;
+  font-weight: 600;
+}
+.memo-x {
+  border: 1px solid var(--line);
+  background: var(--panel-2);
+  color: var(--muted);
+  border-radius: 6px;
+  width: 1.8rem;
+  height: 1.8rem;
+  cursor: pointer;
+  font-size: 0.8rem;
+  flex: none;
+}
+.memo-verdict {
+  display: flex;
+  align-items: center;
+  gap: 0.7rem;
+  margin-top: 0.9rem;
+}
+.memo-rec {
+  padding: 0.3rem 0.75rem;
+  border-radius: 6px;
+  font-size: 0.82rem;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+}
+.memo-rec-ok {
+  color: var(--ok);
+  background: color-mix(in srgb, var(--ok) 16%, transparent);
+  border: 1px solid color-mix(in srgb, var(--ok) 45%, var(--line));
+}
+.memo-rec-warn {
+  color: var(--down);
+  background: color-mix(in srgb, var(--down) 16%, transparent);
+  border: 1px solid color-mix(in srgb, var(--down) 45%, var(--line));
+}
+.memo-rec-down {
+  color: #e5675f;
+  background: color-mix(in srgb, #e5675f 16%, transparent);
+  border: 1px solid color-mix(in srgb, #e5675f 45%, var(--line));
+}
+.memo-tally {
+  font-family: ui-monospace, Menlo, monospace;
+  font-size: 0.74rem;
+  color: var(--muted);
+}
+.memo-thesis {
+  margin: 0.9rem 0 0;
+  font-size: 0.92rem;
+  line-height: 1.55;
+  color: var(--fg);
+}
+.memo-actions {
+  display: flex;
+  gap: 0.5rem;
+  margin: 1rem 0 0.4rem;
+}
+.memo-btn {
+  padding: 0.4rem 0.8rem;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--panel-2);
+  color: var(--fg);
+  font: inherit;
+  font-size: 0.8rem;
+  cursor: pointer;
+}
+.memo-btn:hover {
+  border-color: var(--accent);
+}
+.memo-section {
+  margin-top: 1.4rem;
+}
+.memo-section-title {
+  font-size: 0.72rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  font-family: ui-monospace, Menlo, monospace;
+  margin: 0 0 0.6rem;
+}
+.memo-section-title.memo-risk {
+  color: #e5675f;
+}
+.memo-section-title.memo-strength {
+  color: var(--ok);
+}
+.finding {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel-2);
+  padding: 0.7rem 0.8rem;
+  margin-bottom: 0.6rem;
+}
+.finding-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.6rem;
+}
+.finding-title {
+  font-size: 0.9rem;
+  font-weight: 600;
+}
+.finding-conf {
+  font-family: ui-monospace, Menlo, monospace;
+  font-size: 0.68rem;
+  color: var(--muted);
+  flex: none;
+}
+.finding-detail {
+  margin: 0.3rem 0 0;
+  font-size: 0.82rem;
+  line-height: 1.45;
+  color: var(--muted);
+}
+/* Evidence chain — each link traces back to a provenance-tagged claim in shared memory. */
+.chain {
+  list-style: none;
+  margin: 0.55rem 0 0;
+  padding: 0;
+  border-left: 2px solid var(--line);
+}
+.chain-link {
+  position: relative;
+  padding: 0.12rem 0 0.12rem 0.85rem;
+  font-family: ui-monospace, Menlo, monospace;
+  font-size: 0.72rem;
+  color: var(--muted);
+  line-height: 1.4;
+}
+.chain-link::before {
+  content: "";
+  position: absolute;
+  left: -4px;
+  top: 0.5rem;
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--accent);
 }
