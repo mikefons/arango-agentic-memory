@@ -12,6 +12,7 @@
 
 import type { Claim, Ctx, FlushResult, RetrieveResult, StoreResult } from "./types";
 import { SHARED_AGENT } from "./types";
+import { claimText } from "./claims";
 
 // Default to 127.0.0.1 (not "localhost"): server-side fetch can resolve "localhost"
 // to IPv6 ::1, which a Docker-published (IPv4) core won't answer.
@@ -73,14 +74,12 @@ export function storeClaim(
   claim: Claim,
   opts?: { sync?: boolean },
 ): Promise<StoreResult> {
-  const content =
-    `${claim.subject} — ${claim.predicate}: ${claim.value} ` +
-    `(source: ${claim.source}${claim.as_of ? `, as of ${claim.as_of}` : ""})`;
   return coreFetch<StoreResult>("/v1/store", {
     method: "POST",
     body: JSON.stringify({
-      content,
+      content: claimText(claim),
       ctx: { tenant_id: roomTenant(roomId), agent_id: agentId, access_level: "write" },
+      // Reliability weights belief (CC-*); kept out of the text so it doesn't pollute extraction.
       source_reliability: claim.source_reliability,
       sync: opts?.sync ?? true,
     }),
