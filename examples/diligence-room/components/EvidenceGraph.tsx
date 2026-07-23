@@ -17,7 +17,14 @@ import "@xyflow/react/dist/style.css";
 import ELK from "elkjs/lib/elk.bundled.js";
 import { EvidenceNode, type EvidenceFlowNode } from "./EvidenceNode";
 import { NODE_HEIGHT, communityHue, nodeWidth } from "@/lib/graph-viz";
+import { disputeNodeIds } from "@/lib/dispute-map";
+import type { Dispute } from "@/lib/agents/redteam";
 import type { GraphView, GraphViewNode } from "@/lib/room-state";
+
+/** Edge stroke opacity from belief (dim → solid). */
+function edgeOpacity(belief: number): number {
+  return 0.35 + belief * 0.5;
+}
 
 const nodeTypes = { evidence: EvidenceNode };
 const elk = new ELK();
@@ -43,7 +50,17 @@ async function layout(view: GraphView): Promise<Record<string, { x: number; y: n
   return pos;
 }
 
-function Inner({ roomId, canned, refreshKey }: { roomId?: string; canned: boolean; refreshKey?: string | number }) {
+function Inner({
+  roomId,
+  canned,
+  refreshKey,
+  activeDispute,
+}: {
+  roomId?: string;
+  canned: boolean;
+  refreshKey?: string | number;
+  activeDispute?: Dispute | null;
+}) {
   const [nodes, setNodes, onNodesChange] = useNodesState<EvidenceFlowNode>([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([]);
   const [view, setView] = useState<GraphView | null>(null);
@@ -86,7 +103,8 @@ function Inner({ roomId, canned, refreshKey }: { roomId?: string; canned: boolea
           source: e.source,
           target: e.target,
           animated: false,
-          style: { stroke: "#3a4453", strokeWidth: 1, opacity: 0.35 + e.belief * 0.5 },
+          data: { belief: e.belief },
+          style: { stroke: "#3a4453", strokeWidth: 1, opacity: edgeOpacity(e.belief) },
         })),
       );
     });
@@ -94,6 +112,24 @@ function Inner({ roomId, canned, refreshKey }: { roomId?: string; canned: boolea
       alive = false;
     };
   }, [view, setNodes, setEdges]);
+
+  // Cross-highlight: dim everything outside the active contradiction's cluster (no re-layout).
+  useEffect(() => {
+    const ids = activeDispute && view ? disputeNodeIds(activeDispute, view.nodes) : null;
+    setNodes((nds) =>
+      nds.map((nd) => ({
+        ...nd,
+        data: { ...nd.data, dimmed: ids ? !ids.has(nd.id) : false, active: ids ? ids.has(nd.id) : false },
+      })),
+    );
+    setEdges((eds) =>
+      eds.map((e) => {
+        const belief = (e.data as { belief?: number })?.belief ?? 0;
+        const lit = ids ? ids.has(e.source) && ids.has(e.target) : true;
+        return { ...e, style: { ...e.style, opacity: ids ? (lit ? 0.95 : 0.05) : edgeOpacity(belief) } };
+      }),
+    );
+  }, [activeDispute, view, setNodes, setEdges]);
 
   return (
     <ReactFlow
@@ -121,10 +157,12 @@ export function EvidenceGraph({
   roomId,
   canned = true,
   refreshKey,
+  activeDispute,
 }: {
   roomId?: string;
   canned?: boolean;
   refreshKey?: string | number;
+  activeDispute?: Dispute | null;
 }) {
   const legend = useMemo(
     () => [
@@ -137,7 +175,7 @@ export function EvidenceGraph({
   return (
     <div className="ev-graph">
       <ReactFlowProvider>
-        <Inner roomId={roomId} canned={canned} refreshKey={refreshKey} />
+        <Inner roomId={roomId} canned={canned} refreshKey={refreshKey} activeDispute={activeDispute} />
       </ReactFlowProvider>
       <div className="ev-legend">
         {legend.map((l) => (

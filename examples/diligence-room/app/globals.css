@@ -167,15 +167,21 @@ body {
   50% { opacity: 0.55; }
 }
 
-/* ── Main grid: rail | graph ── */
+/* ── Main grid: rail | graph | feed ── */
 .wr-main {
   flex: 1;
   min-height: 0;
   display: grid;
-  grid-template-columns: 264px 1fr;
+  grid-template-columns: 264px 1fr 340px;
 }
 .wr-side {
   border-right: 1px solid var(--line);
+  background: var(--panel-2);
+  overflow-y: auto;
+  padding: 0.9rem;
+}
+.wr-right {
+  border-left: 1px solid var(--line);
   background: var(--panel-2);
   overflow-y: auto;
   padding: 0.9rem;
@@ -289,7 +295,11 @@ body {
   box-shadow: 0 1px 0 rgba(0, 0, 0, 0.3);
 }
 .ev-dimmed {
-  opacity: 0.28;
+  opacity: 0.18;
+  transition: opacity 0.25s ease;
+}
+.ev-active {
+  transition: box-shadow 0.2s ease, background 0.2s ease;
 }
 .ev-type {
   display: block;
@@ -352,4 +362,117 @@ body {
 }
 .react-flow__minimap {
   background: var(--panel-2);
+}
+
+/* ── Contradiction feed (DR-3d) ── */
+.feed-title {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-family: ui-monospace, Menlo, monospace;
+  font-size: 0.68rem;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--faint);
+  margin-bottom: 0.6rem;
+}
+.feed-count {
+  font-size: 0.66rem;
+  color: var(--down);
+  border: 1px solid color-mix(in srgb, var(--down) 45%, var(--line));
+  border-radius: 999px;
+  padding: 0 0.4rem;
+  letter-spacing: 0;
+}
+.feed-empty {
+  font-size: 0.78rem;
+  color: var(--muted);
+  line-height: 1.45;
+  margin: 0.4rem 0 0;
+}
+.feed-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+}
+
+/* Dispute card — accent tone per kind. */
+.disp {
+  --tone: var(--faint);
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--tone);
+  border-radius: 8px;
+  background: var(--panel);
+  padding: 0.6rem 0.7rem;
+  cursor: default;
+  transition: border-color 0.15s ease, background 0.15s ease, transform 0.15s ease;
+}
+.disp-active {
+  border-color: var(--tone);
+  background: color-mix(in srgb, var(--tone) 12%, var(--panel));
+  transform: translateX(-2px);
+}
+.disp-contradiction { --tone: #e5675f; }
+.disp-temporal { --tone: #4f8ef7; }
+.disp-reliability { --tone: #f2a13d; }
+.disp-related { --tone: #a879f0; }
+.disp-stale { --tone: #8ea2b8; }
+
+.disp-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+.disp-kind {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-family: ui-monospace, Menlo, monospace;
+  font-size: 0.64rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--tone);
+}
+.disp-glyph {
+  font-size: 0.8rem;
+}
+.disp-conf {
+  font-family: ui-monospace, Menlo, monospace;
+  font-size: 0.66rem;
+  color: var(--muted);
+}
+.disp-subject {
+  font-size: 0.86rem;
+  font-weight: 600;
+  margin-top: 0.3rem;
+}
+.disp-summary {
+  font-size: 0.76rem;
+  color: var(--muted);
+  line-height: 1.4;
+  margin: 0.25rem 0 0;
+}
+.disp-resolve {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  margin-top: 0.45rem;
+  font-size: 0.72rem;
+  font-family: ui-monospace, Menlo, monospace;
+}
+.disp-winner {
+  color: var(--ok);
+}
+.disp-loser {
+  color: var(--faint);
+  text-decoration: line-through;
+  text-decoration-color: color-mix(in srgb, var(--down) 60%, transparent);
+}
+.disp-mark {
+  display: inline-block;
+  width: 0.9rem;
 }

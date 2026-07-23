@@ -5,21 +5,24 @@ import { beliefBorderAlpha, beliefPct, communityHue } from "@/lib/graph-viz";
 export interface EvidenceNodeData extends Record<string, unknown> {
   node: GraphViewNode;
   dimmed: boolean;
+  /** In the cluster of the active contradiction — gets an accent ring. */
+  active?: boolean;
 }
 
 export type EvidenceFlowNode = Node<EvidenceNodeData, "evidence">;
 
 /** One entity in the evidence graph: type tag, name, community accent, belief meter. */
 export function EvidenceNode({ data }: NodeProps<EvidenceFlowNode>) {
-  const { node, dimmed } = data;
+  const { node, dimmed, active } = data;
   const hue = communityHue(node.community);
   return (
     <div
-      className={`ev-node${dimmed ? " ev-dimmed" : ""}`}
+      className={`ev-node${dimmed ? " ev-dimmed" : ""}${active ? " ev-active" : ""}`}
       style={{
-        borderColor: hexAlpha(hue, beliefBorderAlpha(node.belief)),
+        borderColor: active ? hue : hexAlpha(hue, beliefBorderAlpha(node.belief)),
         // faint community wash so clusters read as groups
-        background: `linear-gradient(180deg, ${hexAlpha(hue, 0.1)}, transparent)`,
+        background: `linear-gradient(180deg, ${hexAlpha(hue, active ? 0.22 : 0.1)}, transparent)`,
+        boxShadow: active ? `0 0 0 2px ${hexAlpha(hue, 0.85)}, 0 4px 18px ${hexAlpha(hue, 0.4)}` : undefined,
       }}
     >
       <Handle type="target" position={Position.Top} className="ev-handle" />
