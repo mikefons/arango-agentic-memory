@@ -150,3 +150,32 @@ export function prime(roomId: string, task: string): Promise<PrimeResult> {
 export function memoryGraph(roomId: string): Promise<unknown> {
   return coreFetch(`/v1/graph?${qs({ tenant_id: roomTenant(roomId) })}`);
 }
+
+// ── Consolidation passes (the campaign's "reconcile" phase, §9/§13) ─────────
+function consolidateCtx(roomId: string) {
+  return { tenant_id: roomTenant(roomId), agent_id: "synthesis", access_level: "write" };
+}
+
+/** Recompute PageRank salience over the Room's entities (§9). */
+export function salience(roomId: string): Promise<{ entities: number }> {
+  return coreFetch("/v1/salience", {
+    method: "POST",
+    body: JSON.stringify({ ctx: consolidateCtx(roomId) }),
+  });
+}
+
+/** Recompute label-propagation communities — clusters related parties (§9/§13). */
+export function community(roomId: string): Promise<{ entities: number; communities: number }> {
+  return coreFetch("/v1/community", {
+    method: "POST",
+    body: JSON.stringify({ ctx: consolidateCtx(roomId) }),
+  });
+}
+
+/** Run Dream-State consolidation — confirm conflicts, distil summaries (§13). */
+export function dream(roomId: string): Promise<unknown> {
+  return coreFetch("/v1/dream", {
+    method: "POST",
+    body: JSON.stringify({ ctx: consolidateCtx(roomId) }),
+  });
+}
