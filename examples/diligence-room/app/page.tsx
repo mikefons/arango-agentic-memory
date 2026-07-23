@@ -4,13 +4,20 @@ import { useEffect, useState } from "react";
 import { EvidenceGraph } from "@/components/EvidenceGraph";
 import { AgentRail } from "@/components/AgentRail";
 import { Pipeline } from "@/components/Pipeline";
+import { ContradictionFeed } from "@/components/ContradictionFeed";
 import { useCampaign } from "@/components/useCampaign";
 
 type CoreState = "checking" | "online" | "offline";
 
 export default function WarRoom() {
   const [core, setCore] = useState<CoreState>("checking");
+  const [active, setActive] = useState<number | null>(null);
   const { state, start } = useCampaign();
+
+  // Drop the cross-highlight whenever a new run starts (disputes are replaced).
+  useEffect(() => {
+    if (state.run === "running") setActive(null);
+  }, [state.run]);
 
   useEffect(() => {
     let alive = true;
@@ -63,8 +70,20 @@ export default function WarRoom() {
             <span className="wr-stage-title">Evidence graph</span>
             <span className="wr-stage-sub">what the deal team knows — entities, relationships, belief</span>
           </div>
-          <EvidenceGraph canned refreshKey={state.run} />
+          <EvidenceGraph
+            canned
+            refreshKey={state.run}
+            activeDispute={active === null ? null : (state.disputes[active] ?? null)}
+          />
         </div>
+        <aside className="wr-right">
+          <ContradictionFeed
+            disputes={state.disputes}
+            activeIndex={active}
+            onHover={setActive}
+            running={state.run === "running"}
+          />
+        </aside>
       </section>
     </main>
   );
