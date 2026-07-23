@@ -33,9 +33,9 @@ export interface Claim {
 }
 
 export interface StoreResult {
-  episode_id: string;
+  status: "queued" | "committed";
+  episode_id: string | null;
   memory_ids: string[];
-  entity_ids: string[];
 }
 
 export interface RetrieveHit {
