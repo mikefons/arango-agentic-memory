@@ -1,10 +1,11 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { EvidenceGraph } from "@/components/EvidenceGraph";
 
 type CoreState = "checking" | "online" | "offline";
 
-export default function Home() {
+export default function WarRoom() {
   const [core, setCore] = useState<CoreState>("checking");
 
   useEffect(() => {
@@ -26,31 +27,28 @@ export default function Home() {
     };
   }, []);
 
-  const dot = core === "online" ? "ok" : core === "offline" ? "down" : "";
-  const label =
-    core === "checking" ? "checking core…" : core === "online" ? "core online" : "core offline";
-
   return (
-    <main className="wrap">
-      <div className="kicker">arango-agentic-memory · demo</div>
-      <h1>The Due-Diligence Room</h1>
-      <p className="lede">
-        Specialist agents interrogate a target company&rsquo;s data room, disagree, correct
-        each other over time, and hand off to a red-team and a synthesizer — reasoning over one
-        shared, bi-temporal, contradiction-aware memory. This is the DR-0a scaffold: the app is
-        wired to the core and ready for the specialists.
-      </p>
+    <main className="war-room">
+      <header className="wr-header">
+        <div className="wr-brand">
+          <span className="wr-kicker">arango-agentic-memory</span>
+          <h1 className="wr-title">The Due-Diligence Room</h1>
+        </div>
+        <div className="wr-case">
+          <span className="wr-q">Should we invest in <b>Northwind Robotics</b>?</span>
+          <span className={`wr-core wr-core-${core === "online" ? "ok" : core === "offline" ? "down" : "wait"}`}>
+            <span className="wr-dot" /> {core === "online" ? "core online" : core === "offline" ? "canned mode" : "…"}
+          </span>
+        </div>
+      </header>
 
-      <div className="status">
-        <span className={`dot ${dot}`} />
-        {label}
-      </div>
-
-      <div>
-        <button className="cta" disabled title="Coming in DR-2/DR-3">
-          Open a Room →
-        </button>
-      </div>
+      <section className="wr-stage">
+        <div className="wr-stage-head">
+          <span className="wr-stage-title">Evidence graph</span>
+          <span className="wr-stage-sub">what the deal team knows — entities, relationships, belief</span>
+        </div>
+        <EvidenceGraph canned />
+      </section>
     </main>
   );
 }
