@@ -5,6 +5,8 @@ import { EvidenceGraph } from "@/components/EvidenceGraph";
 import { AgentRail } from "@/components/AgentRail";
 import { Pipeline } from "@/components/Pipeline";
 import { ContradictionFeed } from "@/components/ContradictionFeed";
+import { MemoPanel } from "@/components/MemoPanel";
+import { RECOMMENDATION } from "@/lib/memo-export";
 import { useCampaign } from "@/components/useCampaign";
 
 type CoreState = "checking" | "online" | "offline";
@@ -12,12 +14,21 @@ type CoreState = "checking" | "online" | "offline";
 export default function WarRoom() {
   const [core, setCore] = useState<CoreState>("checking");
   const [active, setActive] = useState<number | null>(null);
+  const [memoOpen, setMemoOpen] = useState(false);
   const { state, start } = useCampaign();
 
-  // Drop the cross-highlight whenever a new run starts (disputes are replaced).
+  // Drop the cross-highlight + close the memo whenever a new run starts.
   useEffect(() => {
-    if (state.run === "running") setActive(null);
+    if (state.run === "running") {
+      setActive(null);
+      setMemoOpen(false);
+    }
   }, [state.run]);
+
+  // Auto-open the memo when the deal team finishes — the deliverable is the payoff.
+  useEffect(() => {
+    if (state.run === "done" && state.memo) setMemoOpen(true);
+  }, [state.run, state.memo]);
 
   useEffect(() => {
     let alive = true;
@@ -50,6 +61,16 @@ export default function WarRoom() {
         </div>
         <div className="wr-case">
           <span className="wr-q">Should we invest in <b>Northwind Robotics</b>?</span>
+          {state.memo && (
+            <button
+              className={`wr-verdict wr-verdict-${RECOMMENDATION[state.memo.recommendation].tone}`}
+              onClick={() => setMemoOpen(true)}
+            >
+              <span className="wr-verdict-dot" />
+              {RECOMMENDATION[state.memo.recommendation].label}
+              <span className="wr-verdict-more">· view memo</span>
+            </button>
+          )}
           <button className="wr-run" onClick={() => start({ canned: true })} disabled={running}>
             {runLabel}
           </button>
@@ -85,6 +106,8 @@ export default function WarRoom() {
           />
         </aside>
       </section>
+
+      {memoOpen && state.memo && <MemoPanel memo={state.memo} onClose={() => setMemoOpen(false)} />}
     </main>
   );
 }
