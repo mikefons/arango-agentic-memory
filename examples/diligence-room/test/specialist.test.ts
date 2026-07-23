@@ -13,17 +13,27 @@ describe("chooseProvider", () => {
   });
 });
 
-describe("financial specialist config", () => {
-  it("is wired and reads a non-empty slice of the data room", () => {
-    const fin = specialist("financial");
-    expect(fin).toBeDefined();
-    expect(fin!.docs.length).toBeGreaterThan(0);
-    expect(fin!.mandate.toLowerCase()).toContain("revenue");
-    expect(specialists().map((s) => s.id)).toContain("financial");
+describe("specialist configs", () => {
+  it("wires all four disciplines, each reading a non-empty slice of the data room", () => {
+    const ids = specialists().map((s) => s.id);
+    for (const id of ["financial", "legal", "technical", "market"] as const) {
+      expect(ids, id).toContain(id);
+      const cfg = specialist(id)!;
+      expect(cfg.docs.length, `${id} docs`).toBeGreaterThan(0);
+      expect(cfg.mandate.length, `${id} mandate`).toBeGreaterThan(20);
+    }
   });
 
-  it("returns undefined for a specialist not yet wired (DR-1b)", () => {
-    expect(specialist("legal")).toBeUndefined();
+  it("gives each discipline a distinct mandate focus", () => {
+    expect(specialist("financial")!.mandate.toLowerCase()).toContain("revenue");
+    expect(specialist("legal")!.mandate.toLowerCase()).toContain("litigation");
+    expect(specialist("technical")!.mandate.toLowerCase()).toContain("uptime");
+    expect(specialist("market")!.mandate.toLowerCase()).toContain("competitive");
+  });
+
+  it("returns undefined for a role that is not a data-room specialist (e.g. redteam)", () => {
+    expect(specialist("redteam")).toBeUndefined();
+    expect(specialist("synthesis")).toBeUndefined();
   });
 });
 
