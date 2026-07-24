@@ -148,6 +148,27 @@ on a *sequential* runner first (prove the thesis fast), then wrap in Workflows (
 the war-room UI (DR-3), then golden run + docs (DR-5). Core additions (DR-4) slot in only if
 the existing endpoints don't already surface conflicts/provenance. Stretch items last.
 
+## Status (shipped)
+
+The demo is feature-complete. Run guide: [`examples/diligence-room/README.md`](../examples/diligence-room/README.md).
+
+- **DR-0 … DR-2** ✅ scaffold, data-room fixtures + claim model, the four specialists, the
+  red-team, the synthesis agent, and a durable single-call campaign.
+- **DR-3 (war-room UI)** ✅ shipped as **DR-3a…DR-3g** (rescoped during detailed DR-3 design
+  into finer packages): evidence-graph hero, live agent rail + pipeline, contradiction feed with
+  graph cross-highlight, investment-memo slide-over with evidence chains + Markdown export,
+  guided-narration ribbon, and "why shared memory" callouts. Live **and** canned (auto-fallback
+  to the golden replay when no provider key), so the stage demo can't break.
+- **DR-4 (core conflicts/provenance)** ✅ *satisfied by existing endpoints* — reliability and
+  provenance are already threaded through `store` and surfaced via `retrieve`/`prime`, so no core
+  change was needed (keeping dungeon isolation at zero files).
+- **DR-5a** ✅ deterministic golden run + keyless CI gate (`lib/golden-oracle.ts`,
+  `test/golden-run.test.ts`) that locks the fixture to the planted-defect oracle.
+- **DR-5b** ✅ this run guide + Fluid Compute deploy config (`vercel.json`).
+- **DR-5c / DR-5d** — *(stretch, not started)* `eve` variant; real connectors + Cron.
+
+Isolation held throughout: **0 files changed under `examples/dungeon`** across every DR PR.
+
 ---
 
 ### DR-0a — Scaffold (the first step, detailed)
