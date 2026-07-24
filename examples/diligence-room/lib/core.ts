@@ -151,6 +151,24 @@ export function memoryGraph(roomId: string): Promise<unknown> {
   return coreFetch(`/v1/graph?${qs({ tenant_id: roomTenant(roomId) })}`);
 }
 
+export interface ResetResult {
+  status: string;
+  counts: Record<string, number>;
+}
+
+/**
+ * Reset a Room's shared memory so a live run starts clean (soft-delete every claim + entity
+ * under the Room's tenant, via the core's tenant-scoped `/v1/forget`). Only ever touches
+ * `room:<id>` — never another demo's tenant, never drops a collection. Requires the write scope
+ * the storeClaim key already has.
+ */
+export function resetRoom(roomId: string): Promise<ResetResult> {
+  return coreFetch<ResetResult>("/v1/forget", {
+    method: "POST",
+    body: JSON.stringify({ tenant_id: roomTenant(roomId), access_level: "write" }),
+  });
+}
+
 // ── Consolidation passes (the campaign's "reconcile" phase, §9/§13) ─────────
 function consolidateCtx(roomId: string) {
   return { tenant_id: roomTenant(roomId), agent_id: "synthesis", access_level: "write" };

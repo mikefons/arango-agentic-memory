@@ -1,5 +1,5 @@
-import { describe, expect, it } from "vitest";
-import { normalizeCoreUrl, roomTenant } from "../lib/core";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { normalizeCoreUrl, resetRoom, roomTenant } from "../lib/core";
 
 describe("normalizeCoreUrl", () => {
   it("strips trailing slashes so paths never double up", () => {
@@ -23,5 +23,34 @@ describe("roomTenant", () => {
 
   it("falls back to a safe slug for empty input", () => {
     expect(roomTenant("   ")).toBe("room:untitled");
+  });
+});
+
+describe("resetRoom", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("soft-deletes only the Room's own tenant via /v1/forget with write scope", async () => {
+    const fetchMock = vi.fn((_url: string | URL | Request, _init?: RequestInit) =>
+      Promise.resolve(
+        new Response(JSON.stringify({ status: "forgotten", counts: { memories: 11 } }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const res = await resetRoom("Northwind Robotics");
+
+    expect(res).toEqual({ status: "forgotten", counts: { memories: 11 } });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(String(url)).toMatch(/\/v1\/forget$/);
+    expect(init?.method).toBe("POST");
+    const body = JSON.parse(init?.body as string);
+    expect(body.tenant_id).toBe("room:northwind-robotics"); // never a bare tenant / another demo
+    expect(body.access_level).toBe("write");
   });
 });
