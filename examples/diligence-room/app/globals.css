@@ -265,6 +265,14 @@ body {
   padding: 0.9rem;
 }
 
+/* Capability caption pinned under a panel title (DR-3g). */
+.panel-cap {
+  font-size: 0.72rem;
+  line-height: 1.4;
+  color: var(--faint);
+  margin: -0.2rem 0 0.7rem;
+}
+
 /* ── Agent rail ── */
 .rail-title {
   font-family: ui-monospace, Menlo, monospace;
@@ -745,4 +753,43 @@ body {
   height: 6px;
   border-radius: 999px;
   background: var(--accent);
+}
+
+/* ── "Why this needed shared memory" (DR-3g closing argument) ── */
+.why {
+  margin-top: 1.6rem;
+  padding-top: 1.1rem;
+  border-top: 1px solid var(--line);
+}
+.why-title {
+  font-size: 0.72rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  font-family: ui-monospace, Menlo, monospace;
+  color: var(--accent);
+  margin: 0 0 0.7rem;
+}
+.why-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+.why-item {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  padding-left: 0.8rem;
+  border-left: 2px solid color-mix(in srgb, var(--accent) 40%, var(--line));
+}
+.why-item-title {
+  font-size: 0.82rem;
+  font-weight: 600;
+}
+.why-item-blurb {
+  font-size: 0.76rem;
+  line-height: 1.45;
+  color: var(--muted);
 }
