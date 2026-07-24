@@ -148,6 +148,22 @@ body {
   background: #e5675f;
 }
 
+/* ── Live toggle (run the real agents against the core) ── */
+.wr-live {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-family: ui-monospace, Menlo, monospace;
+  font-size: 0.74rem;
+  color: var(--muted);
+  cursor: pointer;
+  user-select: none;
+}
+.wr-live input {
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
 /* ── Run button ── */
 .wr-run {
   padding: 0.35rem 0.85rem;

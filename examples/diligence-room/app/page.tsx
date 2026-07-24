@@ -12,10 +12,15 @@ import { useCampaign } from "@/components/useCampaign";
 
 type CoreState = "checking" | "online" | "offline";
 
+// The room the live campaign writes to. Must match the core key's tenant (`room:<id>`)
+// when the core enforces auth — see README "Actually driving the core live".
+const ROOM_ID = process.env.NEXT_PUBLIC_DILIGENCE_ROOM ?? "northwind";
+
 export default function WarRoom() {
   const [core, setCore] = useState<CoreState>("checking");
   const [active, setActive] = useState<number | null>(null);
   const [memoOpen, setMemoOpen] = useState(false);
+  const [live, setLive] = useState(false);
   const { state, start } = useCampaign();
 
   // Drop the cross-highlight + close the memo whenever a new run starts.
@@ -72,7 +77,17 @@ export default function WarRoom() {
               <span className="wr-verdict-more">· view memo</span>
             </button>
           )}
-          <button className="wr-run" onClick={() => start({ canned: true })} disabled={running}>
+          {core === "online" && (
+            <label className="wr-live" title="Run the real agents against the core (falls back to canned if no key)">
+              <input type="checkbox" checked={live} onChange={(e) => setLive(e.target.checked)} disabled={running} />
+              live
+            </label>
+          )}
+          <button
+            className="wr-run"
+            onClick={() => start(live ? { canned: false, roomId: ROOM_ID } : { canned: true })}
+            disabled={running}
+          >
             {runLabel}
           </button>
           <span className={`wr-core wr-core-${core === "online" ? "ok" : core === "offline" ? "down" : "wait"}`}>
@@ -94,7 +109,8 @@ export default function WarRoom() {
             <span className="wr-stage-sub">what the deal team knows — entities, relationships, belief</span>
           </div>
           <EvidenceGraph
-            canned
+            canned={!live}
+            roomId={live ? ROOM_ID : undefined}
             refreshKey={state.run}
             activeDispute={active === null ? null : (state.disputes[active] ?? null)}
           />

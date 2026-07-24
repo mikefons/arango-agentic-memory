@@ -48,9 +48,12 @@ cp .env.example .env.local
 npm run dev                       # http://localhost:3001
 ```
 
-The header pill shows **core online** once the stack is up. With a provider key set, **▶ run
-campaign** runs the real specialists/red-team/synthesis against the core (writing under a
-`room:<id>` tenant); without one it falls back to the canned replay automatically.
+The header pill shows **core online** once the stack is up, and a **live** checkbox appears
+next to the run button. Tick it and press **▶ run campaign** to run the real
+specialists/red-team/synthesis against the core (writing under the `room:<id>` tenant from
+`NEXT_PUBLIC_DILIGENCE_ROOM`, default `northwind`). Leave it unticked — or run with no core/key
+— and the campaign serves the canned golden replay. If a live run has no provider key or errors
+mid-flight, it falls back to canned automatically, so the demo always completes.
 
 ### Environment
 
@@ -60,6 +63,7 @@ campaign** runs the real specialists/red-team/synthesis against the core (writin
 | `CORE_API_KEY` | if core enforces auth | Bearer key mapped to the Room's tenant + write scope. |
 | `AI_GATEWAY_API_KEY` *or* `ANTHROPIC_API_KEY` | live only | LLM for the agents. Neither → canned replay. |
 | `DILIGENCE_MODEL` | no | Model override (default `claude-haiku-4-5`). |
+| `NEXT_PUBLIC_DILIGENCE_ROOM` | no | Room id the **live** toggle writes to (default `northwind`). Must match the core key's `room:<id>` tenant when the core enforces auth. |
 
 ## What to look for (the demo)
 
