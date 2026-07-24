@@ -13,3 +13,7 @@ next-env.d.ts.timestamp
 # misc
 *.tsbuildinfo
 .DS_Store
+/.swc
+
+# Vercel Workflows generated routes (regenerated each build)
+app/.well-known/workflow/
