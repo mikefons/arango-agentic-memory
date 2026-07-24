@@ -5,6 +5,7 @@ import { EvidenceGraph } from "@/components/EvidenceGraph";
 import { AgentRail } from "@/components/AgentRail";
 import { Pipeline } from "@/components/Pipeline";
 import { ContradictionFeed } from "@/components/ContradictionFeed";
+import { Narration } from "@/components/Narration";
 import { MemoPanel } from "@/components/MemoPanel";
 import { RECOMMENDATION } from "@/lib/memo-export";
 import { useCampaign } from "@/components/useCampaign";
@@ -56,7 +57,7 @@ export default function WarRoom() {
     <main className="war-room">
       <header className="wr-header">
         <div className="wr-brand">
-          <span className="wr-kicker">arango-agentic-memory</span>
+          <span className="wr-kicker">Multi-agent due diligence · shared memory · arango-agentic-memory</span>
           <h1 className="wr-title">The Due-Diligence Room</h1>
         </div>
         <div className="wr-case">
@@ -81,6 +82,7 @@ export default function WarRoom() {
       </header>
 
       <Pipeline state={state} />
+      <Narration state={state} />
 
       <section className="wr-main">
         <aside className="wr-side">

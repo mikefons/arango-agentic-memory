@@ -212,6 +212,39 @@ body {
   50% { opacity: 0.55; }
 }
 
+/* ── Guided-narration ribbon (DR-3f) ── */
+.narr {
+  display: flex;
+  align-items: center;
+  gap: 0.9rem;
+  padding: 0.55rem 1.4rem;
+  border-bottom: 1px solid var(--line);
+  border-left: 3px solid var(--accent);
+  background: var(--panel);
+}
+.narr-step {
+  font-family: ui-monospace, Menlo, monospace;
+  font-size: 0.78rem;
+  font-weight: 600;
+  flex: none;
+  min-width: 2.5rem;
+}
+.narr-body {
+  display: flex;
+  align-items: baseline;
+  gap: 0.7rem;
+  min-width: 0;
+  flex-wrap: wrap;
+}
+.narr-line {
+  font-size: 0.9rem;
+  color: var(--fg);
+}
+.narr-note {
+  font-size: 0.78rem;
+  color: var(--muted);
+}
+
 /* ── Main grid: rail | graph | feed ── */
 .wr-main {
   flex: 1;
