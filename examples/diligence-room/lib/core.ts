@@ -18,7 +18,9 @@ import { claimText } from "./claims";
 // to IPv6 ::1, which a Docker-published (IPv4) core won't answer.
 const CORE_URL = normalizeCoreUrl(process.env.CORE_URL ?? "http://127.0.0.1:8080");
 const CORE_API_KEY = process.env.CORE_API_KEY; // bearer key when the core enforces auth (§17)
-const DEFAULT_TIMEOUT_MS = 8000;
+// Per-request timeout. 8s is fine for a local core, but a hosted core doing extraction +
+// embedding on a read/consolidate call can take longer — override with CORE_TIMEOUT_MS.
+const DEFAULT_TIMEOUT_MS = Number(process.env.CORE_TIMEOUT_MS ?? 30000);
 
 /** Strip any trailing slashes so `${CORE_URL}/path` never yields `//path` → 404. */
 export function normalizeCoreUrl(url: string): string {
@@ -122,6 +124,8 @@ export function flush(roomId: string, agentId: string, timeoutMs = 8000): Promis
       ctx: { tenant_id: roomTenant(roomId), agent_id: agentId },
       timeout_ms: timeoutMs,
     }),
+    // The core blocks up to timeout_ms draining the queue; the client abort must outlast it.
+    signal: AbortSignal.timeout(timeoutMs + 2000),
   });
 }
 

@@ -31,23 +31,30 @@ const SYNTHESIS_TASK =
   "Assess whether to invest in Northwind Robotics. Weigh the specialists' findings and the " +
   "red-team's disputes; flag material risks and give a recommendation.";
 
-/** Run one specialist with the real extractor + store. */
+// Async writes: specialists/red-team enqueue claims (fast) and the campaign's flush barrier
+// drains them before anyone reads (MA-1). This keeps a hosted-core live run from blocking on
+// per-claim extraction + embedding — the difference between fitting the function budget or not.
+const FLUSH_TIMEOUT_MS = Number(process.env.DILIGENCE_FLUSH_MS ?? 90000);
+
+/** Run one specialist with the real extractor + async store (drained at flush:specialists). */
 export function liveSpecialist(roomId: string, config: SpecialistConfig) {
   const extract = makeExtractor(getModel());
   return runSpecialist(config, {
     extract,
     store: async (agentId, doc, triple) => {
-      await storeClaim(roomId, agentId, claimFromDoc(doc, triple), { sync: true });
+      await storeClaim(roomId, agentId, claimFromDoc(doc, triple), { sync: false });
     },
   });
 }
 
-/** Reconcile the Room's memory: salience + communities + Dream-State (best-effort). */
+/** Reconcile the Room's memory: salience + communities (best-effort so a slow pass can't
+ *  stall the run). Dream-State is the heaviest pass — opt in with DILIGENCE_DREAM=1. */
 export async function liveConsolidate(roomId: string): Promise<void> {
-  await salience(roomId);
-  await community(roomId);
-  // Dream-State needs a background model; don't fail the campaign if it's unavailable.
-  await dream(roomId).catch(() => undefined);
+  await salience(roomId).catch(() => undefined);
+  await community(roomId).catch(() => undefined);
+  if (process.env.DILIGENCE_DREAM === "1") {
+    await dream(roomId).catch(() => undefined);
+  }
 }
 
 /** Cross-examine shared memory and record the red-team's disputes. */
@@ -65,7 +72,7 @@ export async function liveRedTeam(roomId: string) {
         source: "red-team analysis",
         source_reliability: d.confidence,
       };
-      await storeClaim(roomId, "redteam", finding, { sync: true });
+      await storeClaim(roomId, "redteam", finding, { sync: false });
     },
   });
 }
@@ -81,11 +88,12 @@ export async function liveSynthesis(roomId: string): Promise<Memo> {
     source: "synthesis",
     source_reliability: 0.9,
   };
-  await storeClaim(roomId, "synthesis", verdict, { sync: true });
+  await storeClaim(roomId, "synthesis", verdict, { sync: false });
   return memo;
 }
 
-/** The read-your-writes barrier bound to a Room. */
+/** The read-your-writes barrier bound to a Room — generous timeout so the queue actually
+ *  drains (all extraction done) before the next phase reads. */
 export function liveFlush(roomId: string): Promise<void> {
-  return flush(roomId, "synthesis").then(() => undefined);
+  return flush(roomId, "synthesis", FLUSH_TIMEOUT_MS).then(() => undefined);
 }
