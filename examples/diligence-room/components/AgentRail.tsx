@@ -1,5 +1,6 @@
 import { ROLES } from "@/lib/agents-meta";
 import { agentColor } from "@/lib/room-state";
+import { PANEL_CAPTIONS } from "@/lib/callouts";
 import type { WarState } from "@/lib/campaign-state";
 
 /** The six agents, color-coded by provenance, showing live status + output counts (DR-3c). */
@@ -7,6 +8,7 @@ export function AgentRail({ state }: { state: WarState }) {
   return (
     <div className="rail">
       <div className="rail-title">Deal team</div>
+      <p className="panel-cap">{PANEL_CAPTIONS.rail}</p>
       {ROLES.map((role) => {
         const a = state.agents[role.id];
         const color = agentColor(role.id);

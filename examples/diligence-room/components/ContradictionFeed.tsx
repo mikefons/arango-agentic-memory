@@ -1,5 +1,6 @@
 import type { Dispute } from "@/lib/agents/redteam";
 import { DISPUTE_KIND } from "@/lib/dispute-map";
+import { PANEL_CAPTIONS } from "@/lib/callouts";
 
 /**
  * The contradiction feed (DR-3d) — the red-team's findings, each a card that shows the
@@ -24,6 +25,8 @@ export function ContradictionFeed({
         Contradictions
         {disputes.length > 0 && <span className="feed-count">{disputes.length}</span>}
       </div>
+
+      {disputes.length > 0 && <p className="panel-cap">{PANEL_CAPTIONS.feed}</p>}
 
       {disputes.length === 0 ? (
         <p className="feed-empty">
