@@ -48,8 +48,11 @@ cp .env.example .env.local
 npm run dev                       # http://localhost:3001
 ```
 
-The header pill shows **core online** once the stack is up, and a **live** checkbox appears
-next to the run button. Tick it and press **▶ run campaign** to run the real
+The header pill shows **core online** once the stack is up, and a **⌫ reset room** button plus a
+**live** checkbox appear next to the run button. **Reset room** clears just this room's shared
+memory (tenant-scoped soft-delete via the core's `/v1/forget` — it never touches another tenant
+or drops a collection), so each live run starts from a clean, fast graph; run it before a
+re-run. Tick it and press **▶ run campaign** to run the real
 specialists/red-team/synthesis against the core (writing under the `room:<id>` tenant from
 `NEXT_PUBLIC_DILIGENCE_ROOM`, default `northwind`). Leave it unticked — or run with no core/key
 — and the campaign serves the canned golden replay. If a live run has no provider key or errors

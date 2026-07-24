@@ -148,6 +148,26 @@ body {
   background: #e5675f;
 }
 
+/* ── Reset room button (clear the tenant before a live run) ── */
+.wr-reset {
+  padding: 0.35rem 0.7rem;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--panel);
+  color: var(--muted);
+  font: inherit;
+  font-size: 0.78rem;
+  cursor: pointer;
+}
+.wr-reset:hover:not(:disabled) {
+  border-color: var(--down);
+  color: var(--fg);
+}
+.wr-reset:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
 /* ── Live toggle (run the real agents against the core) ── */
 .wr-live {
   display: inline-flex;

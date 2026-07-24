@@ -21,7 +21,24 @@ export default function WarRoom() {
   const [active, setActive] = useState<number | null>(null);
   const [memoOpen, setMemoOpen] = useState(false);
   const [live, setLive] = useState(false);
+  const [resetting, setResetting] = useState(false);
+  const [resetNonce, setResetNonce] = useState(0);
   const { state, start } = useCampaign();
+
+  // Clear the Room's shared memory so a live run starts clean (tenant-scoped, safe to repeat).
+  const handleReset = async () => {
+    setResetting(true);
+    try {
+      await fetch("/api/reset", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ roomId: ROOM_ID }),
+      });
+      setResetNonce((n) => n + 1); // reload the (now-empty) live graph
+    } finally {
+      setResetting(false);
+    }
+  };
 
   // Drop the cross-highlight + close the memo whenever a new run starts.
   useEffect(() => {
@@ -78,10 +95,20 @@ export default function WarRoom() {
             </button>
           )}
           {core === "online" && (
-            <label className="wr-live" title="Run the real agents against the core (falls back to canned if no key)">
-              <input type="checkbox" checked={live} onChange={(e) => setLive(e.target.checked)} disabled={running} />
-              live
-            </label>
+            <>
+              <button
+                className="wr-reset"
+                onClick={handleReset}
+                disabled={running || resetting}
+                title={`Clear ${ROOM_ID}'s shared memory so a live run starts clean`}
+              >
+                {resetting ? "resetting…" : "⌫ reset room"}
+              </button>
+              <label className="wr-live" title="Run the real agents against the core (falls back to canned if no key)">
+                <input type="checkbox" checked={live} onChange={(e) => setLive(e.target.checked)} disabled={running} />
+                live
+              </label>
+            </>
           )}
           <button
             className="wr-run"
@@ -111,7 +138,7 @@ export default function WarRoom() {
           <EvidenceGraph
             canned={!live}
             roomId={live ? ROOM_ID : undefined}
-            refreshKey={state.run}
+            refreshKey={`${state.run}:${resetNonce}`}
             activeDispute={active === null ? null : (state.disputes[active] ?? null)}
           />
         </div>
