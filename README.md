@@ -2,14 +2,14 @@
 
 Persistent, relational memory for AI agents — built on ArangoDB (graph + vector + full-text in one engine), with a Python core and a thin Vercel AI SDK adapter.
 
-> **Status:** Feature-complete against the spec and hardened into a deployable
-> service — v1 core (Steps 0–7), all v2 adapters (MCP, LangChain/LangGraph, CrewAI),
-> the full entity API, the GLiNER/Haiku extraction tier, the **Memory Dungeon**
-> reference app (`examples/dungeon/`), plus the hardening tracks: bearer-key **+
-> JWT/OIDC auth**, durable write queue, rate limiting, structured logging,
-> OpenAPI `/docs`, a gated release pipeline, and an optional **Redis** shared layer
-> for horizontal scaling. See [`docs/DESIGN.md`](docs/DESIGN.md) — the authoritative
-> spec — and [`docs/api.md`](docs/api.md) — the core API reference..
+**Why it matters for multi-agent systems.** Agents forget between turns, and a *team* of agents has no shared ground truth — each reasons from its own context window, so they can't build on each other's work, reconcile contradictions, or hand off cleanly. This is the shared, persistent memory that makes a team of agents smarter than any one of them.
+
+- **One memory, many agents** — per-agent provenance + read-your-writes handoffs, so the whole team reasons from everything the team found, not one context window.
+- **Truth over time** — bi-temporal supersession, conflict detection, and belief weighted by source reliability: later/audited facts win, and contradictions surface instead of hiding.
+- **A knowledge graph, not just embeddings** — entities, typed relations, salience, and communities in one engine (graph + vector + BM25), so retrieval reasons over structure.
+- **Self-maintaining** — decay, Dream-State consolidation, and ontology evolution keep memory coherent as it grows.
+
+See [`docs/DESIGN.md`](docs/DESIGN.md) — the authoritative spec — and [`docs/api.md`](docs/api.md) — the core API reference.
 
 ## Architecture (v1)
 
