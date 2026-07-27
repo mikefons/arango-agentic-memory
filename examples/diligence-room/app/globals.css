@@ -829,3 +829,64 @@ body {
   line-height: 1.45;
   color: var(--muted);
 }
+
+/* ── Responsive: stack the war room on narrow screens (tablet + phone) ── */
+@media (max-width: 900px) {
+  /* Let the page grow and scroll instead of forcing everything into one 100vh screen. */
+  .war-room {
+    height: auto;
+    min-height: 100vh;
+  }
+
+  /* Header wraps; the case controls drop to their own full-width row. */
+  .wr-header {
+    flex-wrap: wrap;
+    gap: 0.55rem;
+    padding: 0.75rem 1rem;
+  }
+  .wr-case {
+    flex-wrap: wrap;
+    gap: 0.5rem 0.75rem;
+    width: 100%;
+  }
+  .wr-title {
+    font-size: 1.05rem;
+  }
+  .wr-q {
+    font-size: 0.85rem;
+  }
+
+  .pipe,
+  .narr {
+    padding-left: 1rem;
+    padding-right: 1rem;
+  }
+
+  /* Rail | graph | feed → a single scrolling column. */
+  .wr-main {
+    display: flex;
+    flex-direction: column;
+  }
+  .wr-side,
+  .wr-right {
+    border-right: none;
+    border-left: none;
+    border-bottom: 1px solid var(--line);
+    overflow-y: visible;
+  }
+
+  /* The graph is flex:1 by default; when the page scrolls it needs an explicit height. */
+  .wr-stage {
+    order: -1; /* lead with the evidence graph (the hero) on mobile */
+  }
+  .ev-graph {
+    flex: none;
+    height: 62vh;
+    min-height: 340px;
+  }
+
+  /* Full-width memo drawer on a phone. */
+  .memo {
+    width: 100%;
+  }
+}
