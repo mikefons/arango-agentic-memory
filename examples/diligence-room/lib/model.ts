@@ -13,6 +13,18 @@ export type Provider = "gateway" | "anthropic";
 /** A small, cheap model is plenty for claim extraction. */
 const DEFAULT_MODEL = "claude-haiku-4-5";
 
+/**
+ * Per-agent LLM-call timeout. On a durable workflow, a *hung* model call is worse than a failed
+ * one — a failure is caught and the run finishes; a hang stalls the step forever. Aborting turns
+ * a wedged call into a throw the step's try/catch handles. Override with DILIGENCE_AGENT_TIMEOUT_MS.
+ */
+export const AGENT_TIMEOUT_MS = Number(process.env.DILIGENCE_AGENT_TIMEOUT_MS ?? 60000);
+
+/** A fresh abort signal for one agent LLM call. */
+export function agentSignal(): AbortSignal {
+  return AbortSignal.timeout(AGENT_TIMEOUT_MS);
+}
+
 export function chooseProvider(env: {
   AI_GATEWAY_API_KEY?: string;
   ANTHROPIC_API_KEY?: string;

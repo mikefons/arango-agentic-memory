@@ -11,6 +11,7 @@
 
 import { generateObject, type LanguageModel } from "ai";
 import { z } from "zod";
+import { agentSignal } from "../model";
 
 export type Recommendation = "proceed" | "proceed_with_conditions" | "pass";
 
@@ -69,6 +70,7 @@ export function makeMemoWriter(model: LanguageModel): MemoWriter {
       model,
       schema: MemoSchema,
       system: SYSTEM,
+      abortSignal: agentSignal(),
       prompt: `Deal-team briefing (from shared memory):\n${briefing}\n\nWrite the investment memo.`,
     });
     return object;

@@ -57,9 +57,14 @@ export async function liveConsolidate(roomId: string): Promise<void> {
   }
 }
 
+// Bound the red-team's cross-examination pool. Its dispute-finder stuffs every claim into ONE
+// prompt, so an unbounded pool (a live run can produce 100+ claims) makes that call crawl or
+// wedge. Override with DILIGENCE_REDTEAM_K.
+const REDTEAM_K = Number(process.env.DILIGENCE_REDTEAM_K ?? 24);
+
 /** Cross-examine shared memory and record the red-team's disputes. */
 export async function liveRedTeam(roomId: string) {
-  const pool = await gatherClaims(roomId, GATHER_QUERY);
+  const pool = await gatherClaims(roomId, GATHER_QUERY, REDTEAM_K);
   const claims = pool.hits.map((h) => ({ text: h.text, agent_id: h.agent_id }));
   return runRedTeam({
     claims,

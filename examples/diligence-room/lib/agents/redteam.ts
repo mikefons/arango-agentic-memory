@@ -14,6 +14,7 @@
 
 import { generateObject, type LanguageModel } from "ai";
 import { z } from "zod";
+import { agentSignal } from "../model";
 
 /** The kinds of dispute the red-team can raise (mirror the planted-defect kinds). */
 export type DisputeKind =
@@ -90,6 +91,7 @@ export function makeDisputeFinder(model: LanguageModel): DisputeFinder {
       model,
       schema: DisputeSchema,
       system: SYSTEM,
+      abortSignal: agentSignal(),
       prompt: `Claims in shared memory:\n${rendered}\n\nFind the disputes.`,
     });
     return object.disputes;
