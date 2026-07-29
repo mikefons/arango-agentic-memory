@@ -47,7 +47,13 @@ async function specialistStep(roomId: string, config: SpecialistConfig): Promise
 
 async function flushStep(roomId: string, phase: "flush:specialists" | "flush:redteam"): Promise<void> {
   "use step";
-  await liveFlush(roomId);
+  // Best-effort barrier: the flush is a read-your-writes convenience, not a hard gate. A slow or
+  // wedged flush must never stall the durable run — bound it, and advance regardless.
+  try {
+    await liveFlush(roomId);
+  } catch {
+    // queue still draining or the call timed out — the next phase reads what has landed
+  }
   await emit({ type: "step", step: { name: phase, status: "ok" } });
 }
 

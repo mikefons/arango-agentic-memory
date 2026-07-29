@@ -34,7 +34,9 @@ const SYNTHESIS_TASK =
 // Async writes: specialists/red-team enqueue claims (fast) and the campaign's flush barrier
 // drains them before anyone reads (MA-1). This keeps a hosted-core live run from blocking on
 // per-claim extraction + embedding — the difference between fitting the function budget or not.
-const FLUSH_TIMEOUT_MS = Number(process.env.DILIGENCE_FLUSH_MS ?? 90000);
+// Keep the flush short — a durable step should be a brief unit, not a 90s blocking poll. With the
+// claim caps this is plenty of drain window; the barrier is best-effort anyway (see flushStep).
+const FLUSH_TIMEOUT_MS = Number(process.env.DILIGENCE_FLUSH_MS ?? 30000);
 
 /** Run one specialist with the real extractor + async store (drained at flush:specialists). */
 export function liveSpecialist(roomId: string, config: SpecialistConfig) {
