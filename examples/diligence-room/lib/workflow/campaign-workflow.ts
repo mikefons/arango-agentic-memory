@@ -73,9 +73,14 @@ async function redTeamStep(roomId: string): Promise<boolean> {
 
 async function synthesisStep(roomId: string): Promise<void> {
   "use step";
-  const memo = await liveSynthesis(roomId);
-  await emit({ type: "step", step: { name: "synthesis", status: "ok", detail: `${memo.findings.length} finding(s) → ${memo.recommendation}` } });
-  await emit({ type: "memo", memo });
+  try {
+    const memo = await liveSynthesis(roomId);
+    await emit({ type: "step", step: { name: "synthesis", status: "ok", detail: `${memo.findings.length} finding(s) → ${memo.recommendation}` } });
+    await emit({ type: "memo", memo });
+  } catch (e) {
+    // Non-fatal: a slow/failed memo shouldn't stall the run — record it and still finish.
+    await emit({ type: "step", step: { name: "synthesis", status: "error", detail: msg(e) } });
+  }
 }
 
 async function finishStep(ok: boolean): Promise<void> {
