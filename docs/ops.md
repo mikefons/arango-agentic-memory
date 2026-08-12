@@ -325,6 +325,25 @@ RERANKER_PROVIDER=local make benchmark DATASET=musique.json MODE=lite RERANK=--r
 
 Compare `recall-frac` / all-hops `Recall@k` against the un-reranked baseline on the same
 dataset (the reranker is CPU-heavy — expect higher latency; it's off the lite hot path).
+
+### Running the LongMemEval benchmark (HX-1, §23)
+
+Where LoCoMo/MuSiQue score *retrieval* recall, LongMemEval scores **end-to-end answer
+accuracy** — the metric the long-term-memory field reports. Bring-your-own
+([longmemeval_s.json](https://github.com/xiaowu0162/LongMemEval), externally licensed, never
+committed). Needs real embeddings **and** a real generator (the answerer + the LLM judge):
+`EMBEDDING_PROVIDER=openai GENERATION_PROVIDER=anthropic` + keys.
+
+1. Convert (JSONL/JSON → runner schema; `--limit` for a smoke subset):
+   `python -m arango_memory.eval.longmemeval_convert longmemeval_s.json lme.json`
+2. Run (compose with `--rerank` / `MODE=multihop` as for the other benchmarks):
+   `make longmemeval LME_DATASET=lme.json MODE=lite RERANK=--rerank`
+
+Each question becomes its own tenant (its evidence + distractor sessions as the corpus). The
+report is **Accuracy** overall + per `question_type`, plus a **correct-decline rate** over the
+abstention (`_abs`) questions. `--min-accuracy X` makes the run exit nonzero below a gate.
+Note the accuracy partly reflects the answerer/judge model, so record which model was used and
+read it alongside the LoCoMo/MuSiQue retrieval-recall numbers (which isolate the memory layer).
 With `RERANKER_PROVIDER=fake` the run uses the keyless token-overlap stand-in (CI/plumbing
 only, not a real quality signal).
 
