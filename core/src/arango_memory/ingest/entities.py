@@ -20,6 +20,7 @@ full scan (fine at small N). The merge/flag decision itself is unchanged.
 from __future__ import annotations
 
 import math
+from dataclasses import dataclass, field
 from typing import Any, cast
 
 from arango.cursor import Cursor
@@ -32,7 +33,7 @@ from ..models import utcnow_iso
 from ..schema.collections import ensure_vector_index
 from ..telemetry import metrics
 from ..telemetry.logging import logger
-from .extract import ExtractedEntity, Extractor, cooccurring_pairs
+from .extract import ExtractedEntity, ExtractedRelation, Extractor, cooccurring_pairs
 from .temporal import parse_explicit_time
 
 # A corroborating mention bumps mention_count, accumulates the source's
@@ -123,11 +124,8 @@ def _best_match(
     return best, best_sim
 
 
-def _edge(
-    db: StandardDatabase, collection: str, key: str, from_id: str, to_id: str, **extra: Any
-) -> None:
-    now = utcnow_iso()
-    doc = {
+def _edge_doc(key: str, from_id: str, to_id: str, now: str, **extra: Any) -> dict[str, Any]:
+    return {
         "_key": key,
         "_from": from_id,
         "_to": to_id,
@@ -138,6 +136,12 @@ def _edge(
         "weight": 1.0,              # EWA computation deferred (§12)
         **extra,
     }
+
+
+def _edge(
+    db: StandardDatabase, collection: str, key: str, from_id: str, to_id: str, **extra: Any
+) -> None:
+    doc = _edge_doc(key, from_id, to_id, utcnow_iso(), **extra)
     db.collection(collection).insert(doc, overwrite_mode="ignore", silent=True)
 
 
@@ -352,3 +356,255 @@ def _entity_doc(
         "conflict_with": match["key"] if needs_review and match else None,
         "schema_version": "0.1.0",
     }
+
+
+# ── IN-2: batched graph pass — reflect a batch of memories in a handful of round trips ──
+
+@dataclass(frozen=True)
+class GraphMemory:
+    """One recorded memory to reflect into the graph (IN-2 batched pass)."""
+
+    memory_key: str
+    episode_key: str
+    content: str
+    source_reliability: float = 1.0
+
+
+_PerMem = tuple[GraphMemory, list[ExtractedEntity], list[ExtractedRelation], "str | None"]
+
+
+@dataclass
+class _EntityAccum:
+    ent: ExtractedEntity
+    vec: list[float]
+    valid_time: str | None
+    count: int = 0
+    rel_sum: float = 0.0
+    mem_refs: list[tuple[str, str]] = field(default_factory=list)  # (memory_key, episode_key)
+
+
+# Bulk entity upsert: INSERT carries the batch totals (mention_count/reliability_sum), UPDATE
+# ADDS them to an existing entity — identical to N sequential single upserts (belief is a
+# function of the reliability *sum*, §8/§12).
+_BULK_UPSERT_ENTITY = """
+FOR row IN @rows
+  UPSERT { tenant_id: @tenant_id, name: row.name, label: row.label }
+  INSERT row.doc
+  UPDATE {
+    mention_count: OLD.mention_count + row.count,
+    reliability_sum: NOT_NULL(OLD.reliability_sum, 0) + row.rel_sum,
+    belief: OLD.confidence * (1 - POW(1 - @base, NOT_NULL(OLD.reliability_sum, 0) + row.rel_sum)),
+    accessed_at: @now
+  }
+  IN entities
+  RETURN { name: row.name, label: row.label, key: NEW._key }
+"""
+
+# Bulk increment (semantic-merge targets): add each batch total to an existing entity by key.
+_BULK_INCREMENT = """
+FOR row IN @rows
+  FOR e IN entities
+    FILTER e._key == row.key
+    UPDATE e WITH {
+      mention_count: e.mention_count + row.count,
+      reliability_sum: NOT_NULL(e.reliability_sum, 0) + row.rel_sum,
+      belief: e.confidence * (1 - POW(1 - @base, NOT_NULL(e.reliability_sum, 0) + row.rel_sum)),
+      accessed_at: @now
+    } IN entities
+"""
+
+# Bulk relates_to upsert: same shape as _RELATE, but corroboration/reliability accumulate the
+# batch totals. The EWA weight is folded once (Δt≈0 within a batch — a recency heuristic).
+_BULK_RELATE = """
+FOR row IN @rows
+  UPSERT { _key: row.key }
+  INSERT row.doc
+  UPDATE {
+    corroboration: NOT_NULL(OLD.corroboration, 1) + row.corr,
+    reliability_sum: NOT_NULL(OLD.reliability_sum, 0) + row.rel_sum,
+    belief: 1 - POW(1 - @base, NOT_NULL(OLD.reliability_sum, 0) + row.rel_sum),
+    weight: @w_alpha + (1 - @w_alpha) * NOT_NULL(OLD.weight, @w_alpha)
+            * EXP(@w_neg_lam * DATE_DIFF(NOT_NULL(OLD.last_seen, @now), @now, "s") / 86400.0),
+    relationship: row.relationship,
+    last_seen: @now
+  }
+  IN relates_to
+"""
+
+
+def write_entities_many(
+    db: StandardDatabase,
+    memories: list[GraphMemory],
+    *,
+    tenant_id: str,
+    agent_id: str,
+    extractor: Extractor,
+    embedder: Embedder,
+) -> dict[str, list[str]]:
+    """Reflect a *batch* of recorded memories into the entity graph in a handful of round trips
+    instead of ~4E+pairs per memory. Extract per memory, resolve distinct entities once, then
+    **bulk**-upsert entities and **bulk**-insert edges. Belief/corroboration fold by sum, so the
+    result equals calling `write_entities` per memory (DESIGN §8). Returns memory_key → keys.
+
+    Two documented, benign differences from the sequential path: (1) intra-batch *semantic* dedup
+    of two differently-named-but-similar NEW entities is left to consolidation — exact-name repeats
+    still merge via the upsert key; (2) the EWA edge weight (a recency heuristic, not a correctness
+    invariant) folds once per batch (Δt≈0)."""
+    if not memories:
+        return {}
+    now = utcnow_iso()
+    base = settings.corroboration_base
+    result: dict[str, list[str]] = {mem.memory_key: [] for mem in memories}
+
+    # 1. extract per memory (model calls are inherent; DB round trips are what we batch).
+    per_mem: list[_PerMem] = []
+    for mem in memories:
+        ents = extractor.extract(mem.content)
+        per_mem.append(
+            (mem, ents, extractor.extract_relations(mem.content, ents),
+             parse_explicit_time(mem.content))
+        )
+
+    names = [e.name for _, ents, _, _ in per_mem for e in ents]
+    if not names:
+        return result
+    vec_by_name = embed_batch_cached(embedder, names, tenant_id=tenant_id)
+
+    # 2. accumulate per distinct (name, label) across the batch.
+    accum: dict[tuple[str, str], _EntityAccum] = {}
+    for mem, ents, _rels, vt in per_mem:
+        for ent in {(e.name, e.label): e for e in ents}.values():  # per-memory dedup
+            nl = (ent.name, ent.label)
+            a = accum.get(nl)
+            if a is None:
+                a = accum[nl] = _EntityAccum(ent=ent, vec=vec_by_name[ent.name], valid_time=vt)
+            a.count += 1
+            a.rel_sum += mem.source_reliability
+            a.mem_refs.append((mem.memory_key, mem.episode_key))
+
+    # 3. resolve distinct entities against existing DB entities (ANN, or one cached scan).
+    use_ann = ensure_vector_index(
+        db, dimensions=embedder.dimensions, n_lists=settings.entity_vector_n_lists,
+        train_factor=settings.entity_vector_train_factor, collection="entities",
+    )
+    scan_cache: list[dict[str, Any]] | None = None
+
+    def _candidates(qvec: list[float]) -> list[dict[str, Any]]:
+        nonlocal scan_cache
+        if use_ann and qvec:
+            try:
+                bind: dict[str, Any] = {"tenant_id": tenant_id, "qvec": qvec,
+                                        "topk": settings.entity_resolution_top_k}
+                return list(cast(Cursor, db.aql.execute(_NEAREST_ENTITIES, bind_vars=bind)))
+            except Exception as exc:  # noqa: BLE001 — ANN fault → scan, never break ingest
+                logger.warning("entity ANN resolution failed; scanning",
+                               extra={"reason": type(exc).__name__, "detail": str(exc)})
+        if scan_cache is None:
+            scan_cache = list(cast(Cursor, db.aql.execute(
+                _FETCH_EXISTING, bind_vars={"tenant_id": tenant_id})))
+        return scan_cache
+
+    key_by_nl: dict[tuple[str, str], str] = {}
+    increments: dict[str, list[float]] = {}  # existing key -> [count, rel_sum]
+    own: dict[tuple[str, str], tuple[_EntityAccum, dict[str, Any] | None, bool]] = {}
+    detected = 0
+    for nl, a in accum.items():
+        match, sim = _best_match(a.vec, _candidates(a.vec), exclude=nl)
+        if match is not None and sim >= settings.entity_merge_threshold:
+            key_by_nl[nl] = cast(str, match["key"])
+            inc = increments.setdefault(cast(str, match["key"]), [0.0, 0.0])
+            inc[0] += a.count
+            inc[1] += a.rel_sum
+        else:
+            needs_review = match is not None and sim >= settings.entity_flag_threshold
+            detected += int(needs_review)
+            own[nl] = (a, match, needs_review)
+
+    # 4. bulk increment semantic-merge targets.
+    if increments:
+        inc_rows = [{"key": k, "count": c, "rel_sum": r} for k, (c, r) in increments.items()]
+        inc_bind: dict[str, Any] = {"rows": inc_rows, "now": now, "base": base}
+        db.aql.execute(_BULK_INCREMENT, bind_vars=inc_bind)
+
+    # 5. bulk upsert own entities → resolved keys.
+    if own:
+        up_rows: list[dict[str, Any]] = []
+        for (name, label), (a, match, needs_review) in own.items():
+            doc = _entity_doc(a.ent, a.vec, tenant_id, agent_id, embedder, now,
+                              needs_review, match, a.valid_time, a.rel_sum, base)
+            doc["mention_count"] = a.count  # INSERT carries the batch total (UPDATE adds it)
+            up_rows.append({"name": name, "label": label, "doc": doc,
+                            "count": a.count, "rel_sum": a.rel_sum})
+        up_bind: dict[str, Any] = {
+            "rows": up_rows, "tenant_id": tenant_id, "now": now, "base": base}
+        cur = cast(Cursor, db.aql.execute(_BULK_UPSERT_ENTITY, bind_vars=up_bind))
+        for row in cur:
+            key_by_nl[(row["name"], row["label"])] = row["key"]
+
+    name_to_key: dict[str, str] = {}
+    for (name, _label), key in key_by_nl.items():
+        name_to_key.setdefault(name, key)
+
+    # 6. bulk-insert mention + produced_by edges.
+    mention_edges: list[dict[str, Any]] = []
+    produced_edges: list[dict[str, Any]] = []
+    for nl, a in accum.items():
+        key = key_by_nl[nl]
+        for mkey, ekey in a.mem_refs:
+            mention_edges.append(_edge_doc(
+                f"{mkey}__{key}", f"memories/{mkey}", f"entities/{key}", now))
+            produced_edges.append(_edge_doc(
+                f"{key}__{ekey}", f"entities/{key}", f"episodes/{ekey}", now))
+            result[mkey].append(key)
+    if mention_edges:
+        db.collection("mentions").insert_many(mention_edges, overwrite_mode="ignore", silent=True)
+    if produced_edges:
+        db.collection("produced_by").insert_many(
+            produced_edges, overwrite_mode="ignore", silent=True)
+
+    # 7. aggregate relates_to across the batch (typed wins; co-occurrence capped per memory).
+    pair_accum: dict[tuple[str, str], dict[str, Any]] = {}
+    for mem, ents, rels, vt in per_mem:
+        mpairs: dict[tuple[str, str], str] = {}
+        for r in rels:
+            ka, kb = name_to_key.get(r.source), name_to_key.get(r.target)
+            if not ka or not kb or ka == kb:
+                continue
+            lo, hi = sorted((ka, kb))
+            mpairs[(lo, hi)] = r.relationship
+        for left, right in cooccurring_pairs(ents, max_pairs=settings.graph_max_pairs_per_turn):
+            ka = key_by_nl.get((left.name, left.label))
+            kb = key_by_nl.get((right.name, right.label))
+            if not ka or not kb or ka == kb:
+                continue
+            lo, hi = sorted((ka, kb))
+            mpairs.setdefault((lo, hi), "associated_with")
+        for pair, relationship in mpairs.items():
+            pa = pair_accum.get(pair)
+            if pa is None:
+                pa = pair_accum[pair] = {"corr": 0, "rel_sum": 0.0, "vt": vt}
+            pa["corr"] += 1
+            pa["rel_sum"] += mem.source_reliability
+            pa["relationship"] = relationship  # last assertion wins (mirrors the sequential path)
+    if pair_accum:
+        rel_rows: list[dict[str, Any]] = []
+        for (lo, hi), pa in pair_accum.items():
+            vt = pa["vt"]
+            doc = {
+                "_key": f"{lo}__{hi}", "_from": f"entities/{lo}", "_to": f"entities/{hi}",
+                "relationship": pa["relationship"], "corroboration": pa["corr"],
+                "reliability_sum": pa["rel_sum"], "belief": 1 - (1 - base) ** pa["rel_sum"],
+                "ingestion_time": now, "valid_time": vt or now,
+                "valid_time_explicit": vt is not None, "invalid_at": None,
+                "weight": settings.weight_ewa_alpha, "last_seen": now,
+            }
+            rel_rows.append({"key": f"{lo}__{hi}", "doc": doc, "corr": pa["corr"],
+                             "rel_sum": pa["rel_sum"], "relationship": pa["relationship"]})
+        rel_bind: dict[str, Any] = {
+            "rows": rel_rows, "base": base, "now": now,
+            "w_alpha": settings.weight_ewa_alpha, "w_neg_lam": -settings.weight_lambda}
+        db.aql.execute(_BULK_RELATE, bind_vars=rel_bind)
+
+    if detected:
+        metrics.emit("conflict", detected=detected)
+    return {mkey: list(dict.fromkeys(keys)) for mkey, keys in result.items()}

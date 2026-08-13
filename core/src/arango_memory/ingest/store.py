@@ -25,7 +25,7 @@ from ..generation import Generator, get_generator
 from ..models import idempotency_key, utcnow_iso
 from ..security.redact import redact
 from ..telemetry import metrics, span
-from .entities import write_entities
+from .entities import GraphMemory, write_entities, write_entities_many
 from .extract import Extractor, get_extractor
 from .prospective import generate_prospective
 
@@ -89,24 +89,20 @@ def store_many(
     tenant_id: str,
     agent_id: str,
     embedder: Embedder | None = None,
+    extractor: Extractor | None = None,
     mode: str = "lite",
     extract: bool = False,
 ) -> list[StoreResult]:
-    """Bulk "record" path (IN-1, DESIGN §8): redact → **batch-embed** → **bulk-insert** episodes
-    + memories in ~2 round trips per call instead of ~3 per turn. Idempotent and read-your-writes
-    consistent (same keys as `store()`), so BM25 + vector retrieval work immediately.
+    """Bulk ingest (IN-1 record + IN-2 graph): redact → **batch-embed** → **bulk-insert** episodes
+    + memories (~2 round trips), then — when `extract=True` — reflect the whole batch into the
+    entity graph in a handful more round trips (`write_entities_many`), instead of ~3+4E+pairs
+    per turn. Idempotent and read-your-writes consistent (same keys as `store()`), so BM25 +
+    vector retrieval work immediately.
 
-    Scope: the record path only. `extract=True` (the batched entity/graph pass) is **IN-2** and
-    raises here. Full-mode prospective indexing, working-capacity eviction, and topic-shift
-    tracking are per-item concerns kept in `store()`; `store_many` records working memories with
-    their TTL but skips the capacity sweep. Bulk callers (evals, importers) use the lite episodic
-    path, which this makes ~40× cheaper in round trips.
+    Full-mode prospective indexing, working-capacity eviction, and topic-shift tracking stay
+    per-item concerns in `store()`; `store_many` records working memories with their TTL but
+    skips the capacity sweep.
     """
-    if extract:
-        raise NotImplementedError(
-            "store_many(extract=True): the batched graph pass is IN-2. Use extract=False for "
-            "the record path (retrieval works; entities/graph are built by IN-2)."
-        )
     if not items:
         return []
     emb = embedder or get_embedder()
@@ -129,10 +125,11 @@ def store_many(
     # 2. one embed batch for all distinct contents (cache-aware, §16).
     vec_by_text = embed_batch_cached(emb, [c for _, c, _ in prepared], tenant_id=tenant_id)
 
-    # 3. build docs, then 4. two bulk inserts (the whole point — O(1) round trips, not O(N)).
+    # 3. build docs, then 4. bulk-insert record, then 5. (optional) batched graph pass.
     episodes: list[dict[str, Any]] = []
     memories: list[dict[str, Any]] = []
-    results: list[StoreResult] = []
+    order: list[tuple[str, str]] = []  # (episode_key, memory_key), for building results
+    graph_inputs: list[GraphMemory] = []
     for item, content, ep_key in prepared:
         is_working = item.memory_type == "working"
         mem_key = f"{ep_key}-mem"
@@ -147,14 +144,29 @@ def store_many(
             session_id=item.session_id, agent_id=agent_id, tenant_id=tenant_id,
             emb=emb, prospective=[], now=now,
         ))
-        results.append(StoreResult(episode_id=ep_key, memory_ids=[mem_key], entity_ids=[]))
+        order.append((ep_key, mem_key))
+        # Working memory never mints durable entities (mirrors _store_impl).
+        if extract and not is_working:
+            graph_inputs.append(GraphMemory(
+                memory_key=mem_key, episode_key=ep_key, content=content,
+                source_reliability=item.source_reliability,
+            ))
 
     started = time.perf_counter()
+    ent_by_mem: dict[str, list[str]] = {}
     with span("memory.write_many", tenant_id=tenant_id):
         db.collection("episodes").insert_many(episodes, overwrite_mode="ignore", silent=True)
         db.collection("memories").insert_many(memories, overwrite_mode="ignore", silent=True)
+        if graph_inputs:  # IN-2: reflect the whole batch into the graph in a few round trips
+            ent_by_mem = write_entities_many(
+                db, graph_inputs, tenant_id=tenant_id, agent_id=agent_id,
+                extractor=extractor or get_extractor(), embedder=emb,
+            )
     metrics.emit("write", duration_ms=(time.perf_counter() - started) * 1000.0, count=len(items))
-    return results
+    return [
+        StoreResult(episode_id=ep, memory_ids=[mem], entity_ids=ent_by_mem.get(mem, []))
+        for ep, mem in order
+    ]
 
 
 def store(

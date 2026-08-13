@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import pytest
 from arango.database import StandardDatabase
 
 from arango_memory.embedding import FakeEmbedder
@@ -41,14 +40,6 @@ def test_store_many_is_o1_round_trips() -> None:
     assert db.cols["memories"].insert_many_sizes == [50]
     assert db.cols["episodes"].insert_calls == 0
     assert db.cols["memories"].insert_calls == 0
-
-
-def test_store_many_extract_true_raises() -> None:
-    with pytest.raises(NotImplementedError, match="IN-2"):
-        store_many(
-            _RecordingDB(), [StoreItem(content="x")],  # type: ignore[arg-type]
-            tenant_id="t", agent_id="a", extract=True, embedder=FakeEmbedder(),
-        )
 
 
 def test_store_many_empty_is_noop() -> None:
