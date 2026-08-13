@@ -65,6 +65,138 @@ E-2 is the visible payoff of MA-1 + MA-2 + MA-3.
 
 ---
 
+## Ingestion scalability (`IN-*`) — TOP PRIORITY
+
+**Where this comes from:** the LongMemEval run (2026-08, DESIGN §23) forced `extract=False`
+to terminate — which meant the benchmark measured only the BM25+vector **substrate**, with the
+entity graph, supersession, belief, and communities all switched **off**. We benchmarked the
+substrate, not the product, and the reason is architectural: **`store()` is O(round trips) per
+turn, quadratic in entities-per-turn**, and there is no bulk path.
+
+**The arithmetic (counted from the code).** One `store(extract=True)` issues
+`4 + 4E + E(E−1)/2` sequential DB round trips (E = entities/turn): `episodes.has` +
+`episodes.insert` + `memories.insert` + an **uncached** `collection.indexes()` probe
+(`ensure_vector_index` → `has_vector_index`), then **per entity** an ANN query + an upsert +
+2 edge inserts, then **per co-occurring pair** a `relates_to` upsert. At E=5 that's **34 round
+trips/turn → ~17,000/question** over a 500-turn history → ~7 min/question at ~25 ms/hop —
+exactly what was observed. `extract=False` drops it to 3/turn (~40× faster), which is why the
+substrate run was tractable. SC-1b/c/d fixed the *tenant-size* O(N²); this is the per-turn
+**constant** and the per-turn **O(E²)** that remain.
+
+**The design: two-phase ingestion (batch, don't drop).** Split *recording* from *reflecting*.
+Every capability is preserved — only *when* and *in what batch* the work runs changes.
+- **Phase 1 "record" (hot):** redact → batch-embed → **bulk-insert** episodes + memories.
+  ~2 round trips per *batch*. BM25+vector retrieval works immediately (MA-1 unaffected).
+- **Phase 2 "reflect" (batched graph pass):** batched extraction → one embed batch of distinct
+  names → one ANN query per distinct name (batch-local resolution map) → **aggregate** mentions
+  per entity → one bulk entity upsert → one bulk edge insert per collection. ~a handful of round
+  trips per batch instead of thousands.
+
+**Why batching is provably safe (load-bearing).** Belief is
+`confidence × (1 − (1−base)^Σreliability)` — a function of the **sum** of reliabilities
+(`entities.py`), and corroboration counts are additive. Folding N mentions into one upsert with
+`Σrel` is **mathematically identical** to N sequential upserts. The only non-associative term is
+the EWA edge weight recurrence; within a batch Δt≈0 and it's a recency heuristic, not a
+correctness invariant — fold once per batch and document the approximation.
+
+**The bonus insight.** `RRF_GRAPH_WEIGHT` is pinned at 0.1 because the graph "buries real hits"
+— but that's because linking *every* entity pair in *every* turn (O(E²)) fills the graph with
+meaningless `associated_with` edges, so hop-distance carries no signal. Capping the fan-out
+(IN-3) fixes speed **and** graph quality together, and plausibly lets the arm's weight rise —
+which is exactly what `multi-session` recall (0.067 on LongMemEval) needs.
+
+| # | ID | Item | Effect | Size |
+|---|----|------|--------|------|
+| 1 | IN-1 | `store_many()` bulk record path (Phase 1) | ~40× ingest; unblocks honest benchmarking | M |
+| 2 | IN-2 | Batched graph pass (Phase 2) + memoized index probe | graph ON at benchmark scale | M |
+| 3 | IN-3 | Cap co-occurrence fan-out | speed **+ graph quality** (revisit `RRF_GRAPH_WEIGHT`) | S |
+| 4 | IN-4 | Metadata-as-fields (dates) surfaced at assembly | recovers the date-noise recall regression | S |
+| 5 | IN-5 | Re-run stratified LongMemEval with the graph ON | the *real* number → DESIGN §23 + README | — |
+
+**Recommended sequence: IN-1 → IN-3 → IN-2 → IN-4 → IN-5.** IN-1 removes the reason
+`extract=False` exists; IN-3 is small and lifts graph quality; IN-2 makes the graph affordable
+at scale; IN-4 fixes the date-encoding regression; IN-5 produces the number worth publishing.
+
+### IN-1 — `store_many()` bulk record path
+
+**Problem.** `store()` is the only write path; every caller ingests one item at a time
+(`grep`: zero `insert_many`/`import_bulk` in the core). Even with `extract=False`, a 500-turn
+history is ~1,500 sequential round trips + N sequential embedding calls (the pre-warm mitigates
+the latter but not the writes).
+
+**Design.** Add `store_many(db, items, *, extract=False, ...)` that, for a list of turns:
+redacts all, computes idempotency keys, **batch-embeds** (reuse `embed_batch_cached`), and
+**bulk-inserts** episodes + memories via `collection.insert_many(overwrite_mode="ignore")` (or
+an AQL `FOR … INSERT`). Returns per-item `StoreResult`s. `store()` stays as the single-item
+convenience wrapper (`store_many([one])`) so adapters/interactive turns are unchanged.
+Idempotency + read-your-writes semantics preserved (same keys, same view-sync). Working-memory
+capacity + topic-shift tracking apply per session as today (batch may span sessions — group by
+session for those side effects). `extract` handling deferred to IN-2 (Phase 2); IN-1 lands the
+record path with `extract=False`.
+
+**Files.** `core/src/arango_memory/ingest/store.py` (new `store_many`, factor `_store_impl`'s
+episode/memory doc-builders for reuse), `core/src/arango_memory/ingest/bulk.py` (optional
+helper), tests, `docs/api.md`/DESIGN §8.
+
+**Tests.** `store_many` of N turns issues O(1) insert round trips (assert via a call-counting
+fake db or by wall-clock/`explain`), not O(N); results equal N× `store()` (same keys, same
+retrieval); idempotent replay; mixed sessions handled; keyless (FakeEmbedder), testcontainers.
+
+**Acceptance.** A benchmark harness ingesting a 500-turn history via `store_many` completes in
+seconds, not minutes; single-item `store()` behavior byte-identical; CI green.
+
+### IN-2 — Batched graph pass (Phase 2)
+
+**Design.** `write_entities_many(db, memories, ...)`: extract per memory, collect **distinct**
+entity names across the batch, one embed batch, one ANN query per distinct name into a
+batch-local `name→key` resolution map (repeated names free), aggregate mentions/reliabilities
+per resolved entity, then **one bulk upsert** (AQL `FOR e IN @rows UPSERT …`) and **one bulk
+edge insert** per collection (`mentions`/`produced_by`/`relates_to`). Belief/corroboration fold
+by sum (identical result). Memoize `has_vector_index` per (db, collection). Wire into
+`store_many(extract=True)` and the durable worker (batch-drain). Cold-start (untrained ANN)
+falls back to the existing scan, once per batch.
+
+**Files.** `ingest/entities.py` (batched path), `ingest/store.py`, `schema/collections.py`
+(memoized probe), `ingest/worker.py` (batch drain), tests, DESIGN §8.
+
+**Acceptance.** `store_many(extract=True)` over a 500-turn history completes in seconds with an
+entity graph identical (belief/counts/edges) to the per-turn path; round trips per batch are
+O(distinct entities), not O(Σ pairs).
+
+### IN-3 — Cap co-occurrence fan-out
+
+**Design.** `cooccurring_pairs` currently emits all `E(E−1)/2` pairs. Bound it: a
+`GRAPH_MAX_PAIRS_PER_TURN` cap (config), and/or scope pairs to a sentence/window, and/or prefer
+typed relations and only backfill co-occurrence up to the cap. Fewer edges → faster writes **and**
+a higher-signal graph; then re-measure `RRF_GRAPH_WEIGHT` on LoCoMo/MuSiQue (it may rise off 0.1).
+
+**Files.** `ingest/extract.py` (`cooccurring_pairs`), `config.py`, `ingest/entities.py`, tests,
+`docs/ops.md` knob, DESIGN §5/§9.
+
+**Acceptance.** Pairs/turn bounded by the cap; graph-arm recall on LoCoMo/MuSiQue does not
+regress at weight 0.1 and is re-tested at a higher weight; documented.
+
+### IN-4 — Metadata-as-fields at assembly
+
+**Problem.** Prefixing dates into every turn's matchable text (LongMemEval date fix) diluted BM25
+and cost single-session-user recall (0.733 → 0.467) while lifting temporal (0.067 → 0.533).
+**Design.** Carry provenance/time as memory **fields** (e.g. `event_time`, `source_date`) rather
+than in `text`; surface them in the assembled context (a `[date]` prefix at *assembly*, not at
+*index*), so retrieval matches clean content but the answerer still sees the timestamp. The eval
+converter sets the field instead of mangling the text.
+**Files.** `retrieve/search.py` (assembly), `ingest/store.py` (field passthrough),
+`eval/longmemeval_convert.py`, tests, DESIGN §9.
+**Acceptance.** Temporal keeps its gain; single-session-user recovers; dates visible in context.
+
+### IN-5 — Re-run LongMemEval with the graph ON
+
+After IN-1..4, re-run the stratified-90 with `extract=True` (now affordable) and record the
+per-type table in DESIGN §23 + a README callout — the number that reflects the *product*, not
+the substrate. Compare graph-on vs graph-off to quantify what supersession/entities buy on
+`knowledge-update` and `multi-session`.
+
+---
+
 ## MA-1 — Read-your-writes: `sync` store + `/v1/flush` barrier
 
 **Problem.** `POST /v1/store` enqueues a durable write intent and returns `"queued"`;
