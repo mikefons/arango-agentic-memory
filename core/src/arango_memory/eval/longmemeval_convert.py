@@ -39,10 +39,12 @@ from typing import Any
 def _convert_item(item: dict[str, Any]) -> dict[str, Any]:
     """One LongMemEval question → one Sample dict.
 
-    The session timestamp (`haystack_dates[i]`) is prefixed onto each turn's text, and the
-    `question_date` onto the question — without them `temporal-reasoning` questions are
-    unanswerable (no time signal) and cross-session recency is ambiguous. The dates thus live
-    in the retrievable/injected text, which is what the answerer reasons over."""
+    IN-5 / IN-4b: the session timestamp (`haystack_dates[i]`) rides on each turn as an
+    **`event_time` field**, not folded into the turn text — the retrieval assembly surfaces it
+    into the injected context (`[event_time] …`) so `temporal-reasoning` gets its time signal,
+    but the date never dilutes BM25/vector matching (an earlier text-prefix version lifted
+    temporal but cost single-session-user recall). The `question_date` still prefixes the
+    question (that's read by the answerer, not a corpus memory, so it can't dilute retrieval)."""
     dates = item.get("haystack_dates") or []
     sessions_out: list[list[dict[str, str]]] = []
     for i, session in enumerate(item.get("haystack_sessions", [])):
@@ -52,9 +54,10 @@ def _convert_item(item: dict[str, Any]) -> dict[str, Any]:
             text = str(turn.get("content", "")).strip()
             if not text:
                 continue  # drop blank/system-only turns
+            turn_out: dict[str, str] = {"speaker": str(turn.get("role", "")), "text": text}
             if date:
-                text = f"[{date}] {text}"
-            session_out.append({"speaker": str(turn.get("role", "")), "text": text})
+                turn_out["event_time"] = date  # a field, not a text prefix (IN-4b)
+            session_out.append(turn_out)
         if session_out:
             sessions_out.append(session_out)
 
