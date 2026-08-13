@@ -25,6 +25,7 @@ CLI: `python -m arango_memory.eval.longmemeval <lme.json> [--mode] [--k] [--rera
 from __future__ import annotations
 
 import argparse
+import contextlib
 import sys
 import time
 from collections.abc import Sequence
@@ -33,6 +34,9 @@ from dataclasses import dataclass, field
 from arango.database import StandardDatabase
 
 from ..client import ArangoMemoryClient
+from ..config import settings
+from ..embedding import get_embedder
+from ..embedding_cache import embed_batch_cached
 from ..generation import Generator, get_generator
 from ..ingest.store import store
 from ..retrieve.search import retrieve
@@ -40,6 +44,28 @@ from ..schema.collections import ensure_schema
 from ..telemetry.logging import configure_logging
 from .halu import generate_answer
 from .locomo import Sample, load_dataset
+
+#: Batch size for the embedding pre-warm — one provider call per this many turns.
+_PREWARM_BATCH = 256
+
+
+def _prewarm_embeddings(sample: Sample, tenant: str) -> None:
+    """Batch-embed a question's whole history up front so per-turn `store()` calls hit the
+    embedding cache instead of making one sequential provider call each.
+
+    This is the dominant cost of a real run: a LongMemEval history is hundreds of turns, and
+    `store()` embeds them one at a time (a network round-trip per turn). Embedding them in
+    `_PREWARM_BATCH`-sized batches turns ~N sequential calls into ~N/256. Best-effort: a batch
+    error just leaves those turns to embed individually (never breaks ingest). Skipped for the
+    `fake` embedder (instant) or when the cache is off. PII turns that `store()` redact-then-
+    embeds miss the raw-text warm and re-embed — rare, so the win stands."""
+    if settings.embedding_provider == "fake" or not settings.embedding_cache:
+        return
+    embedder = get_embedder()
+    contents = [f"{turn.speaker}: {turn.text}" for session in sample.sessions for turn in session]
+    for i in range(0, len(contents), _PREWARM_BATCH):
+        with contextlib.suppress(Exception):
+            embed_batch_cached(embedder, contents[i : i + _PREWARM_BATCH], tenant_id=tenant)
 
 _JUDGE_SYSTEM = (
     "You grade a model's answer against the gold answer for a question. Reply with exactly "
@@ -107,6 +133,7 @@ def _ingest_sample(
     resolution against the growing tenant is ~O(n²) (the BX-2 wall) — the dominant cost of a
     real run. LongMemEval scores *answers* via BM25+vector retrieval, so the entity graph adds
     ~nothing here; skipping it is both correct and a large speedup (§23)."""
+    _prewarm_embeddings(sample, sample.sample_id)  # one batch embed call/history vs one per turn
     turn_index = 0
     for session in sample.sessions:
         for turn in session:
