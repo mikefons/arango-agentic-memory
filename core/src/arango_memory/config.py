@@ -159,6 +159,10 @@ class Settings(BaseSettings):
     # fix (it embeds a hypothetical answer, so proximity *is* relevance) — lower this only
     # if your corpus shows the arm hurting with HyDE off.
     rrf_vector_weight: float = Field(default=1.0, ge=0.0, le=1.0)
+    # RRF weight of the BM25 arm — the reference relevance ranker, so 1.0 by default. Rarely
+    # changed in production; exposed so a benchmark can isolate a single arm (e.g. set it to 0
+    # for a vector-only "VectorDB" baseline in the recall-vs-scale curve, HX-2).
+    rrf_bm25_weight: float = Field(default=1.0, ge=0.0, le=1.0)
     # Faiss IVF partitions (DESIGN.md §7). Keep well below the corpus size — IVF
     # trains one centroid per list, so `n_lists ≪ docs` (see `vector_train_factor`).
     vector_n_lists: int = Field(default=64, ge=1)
