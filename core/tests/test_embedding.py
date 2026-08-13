@@ -8,8 +8,10 @@ import pytest
 
 from arango_memory.config import Settings
 from arango_memory.embedding import (
+    _EMBED_MAX_INPUTS,
     _EMBED_MAX_TOKENS,
     FakeEmbedder,
+    OpenAIEmbedder,
     _truncate_to_token_limit,
     get_embedder,
 )
@@ -54,6 +56,34 @@ def test_fake_embedder_lexical_similarity_signal() -> None:
 def test_fake_embedder_batch_matches_single() -> None:
     emb = FakeEmbedder(dimensions=32)
     assert emb.embed_batch(["a", "b"]) == [emb.embed("a"), emb.embed("b")]
+
+
+def test_openai_embed_batch_chunks_over_input_cap() -> None:
+    # The batched graph pass can hand more than 2048 distinct entity names at once; the OpenAI
+    # endpoint rejects a request over 2048 inputs, so embed_batch must split into sub-requests
+    # (and stitch the vectors back in order) rather than 400.
+    emb = OpenAIEmbedder.__new__(OpenAIEmbedder)
+    emb.model = "text-embedding-3-small"
+    emb.version = emb.model
+    emb.dimensions = 3
+    sizes: list[int] = []
+
+    class _Resp:
+        def __init__(self, batch: list[str]) -> None:
+            self.data = [type("D", (), {"embedding": [float(len(t)), 0.0, 0.0]}) for t in batch]
+
+    class _Embeddings:
+        def create(self, *, model: str, input: list[str]):  # noqa: A002 — matches SDK kwarg
+            sizes.append(len(input))
+            return _Resp(input)
+
+    emb._client = type("C", (), {"embeddings": _Embeddings()})()
+
+    n = _EMBED_MAX_INPUTS * 2 + 5
+    out = emb.embed_batch([f"t{i}" for i in range(n)])
+    assert len(out) == n  # every input got a vector, order preserved
+    assert sizes == [_EMBED_MAX_INPUTS, _EMBED_MAX_INPUTS, 5]  # chunked under the cap
+    assert max(sizes) <= _EMBED_MAX_INPUTS
 
 
 def test_get_embedder_fake_from_config() -> None:

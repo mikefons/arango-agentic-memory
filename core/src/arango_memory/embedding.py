@@ -63,6 +63,10 @@ class FakeEmbedder:
 # text-embedding-3-* reject inputs over 8192 tokens with a 400; truncate to fit (an
 # over-long memory still embeds on its first 8k tokens rather than crashing the write).
 _EMBED_MAX_TOKENS = 8192
+# …and reject a request carrying more than 2048 inputs with a 400. The batched graph pass
+# (write_entities_many) can hand a whole question's distinct entity names in one call — well
+# over 2048 on a 500-turn history — so chunk the request into sub-batches under the cap.
+_EMBED_MAX_INPUTS = 2048
 _embed_encoder: Any = None
 
 
@@ -106,10 +110,14 @@ class OpenAIEmbedder:
         return self.embed_batch([text])[0]
 
     def embed_batch(self, texts: Sequence[str]) -> list[list[float]]:
-        resp = self._client.embeddings.create(
-            model=self.model, input=_truncate_to_token_limit(list(texts))
-        )
-        return [item.embedding for item in resp.data]
+        inputs = _truncate_to_token_limit(list(texts))
+        vectors: list[list[float]] = []
+        for start in range(0, len(inputs), _EMBED_MAX_INPUTS):
+            resp = self._client.embeddings.create(
+                model=self.model, input=inputs[start : start + _EMBED_MAX_INPUTS]
+            )
+            vectors.extend(item.embedding for item in resp.data)
+        return vectors
 
 
 def get_embedder(config: Settings | None = None) -> Embedder:
