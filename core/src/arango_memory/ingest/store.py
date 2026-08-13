@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import math
 import time
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any, cast
@@ -19,7 +20,7 @@ from arango.database import StandardDatabase
 
 from ..config import settings
 from ..embedding import Embedder, get_embedder
-from ..embedding_cache import embed_cached
+from ..embedding_cache import embed_batch_cached, embed_cached
 from ..generation import Generator, get_generator
 from ..models import idempotency_key, utcnow_iso
 from ..security.redact import redact
@@ -34,6 +35,126 @@ class StoreResult:
     episode_id: str
     memory_ids: list[str]
     entity_ids: list[str]
+
+
+@dataclass(frozen=True)
+class StoreItem:
+    """One turn for bulk ingestion via `store_many` (IN-1)."""
+
+    content: str
+    turn_index: int = 0
+    session_id: str | None = None
+    message_type: str | None = None
+    source_reliability: float = 1.0
+    memory_type: str = "episodic"
+
+
+def _episode_doc(
+    key: str, *, content: str, agent_id: str, tenant_id: str, session_id: str | None,
+    message_type: str | None, source_reliability: float, now: str,
+) -> dict[str, Any]:
+    return {
+        "_key": key, "idempotency_key": key, "content": content,
+        "source_type": "interaction", "agent_id": agent_id, "tenant_id": tenant_id,
+        "session_id": session_id, "message_type": message_type,
+        "source_reliability": source_reliability, "ingested_at": now,
+    }
+
+
+def _memory_doc(
+    mem_key: str, *, episode_key: str, content: str, turn_vec: list[float], is_working: bool,
+    expires_at: str | None, session_id: str | None, agent_id: str, tenant_id: str,
+    emb: Embedder, prospective: list[str], now: str,
+) -> dict[str, Any]:
+    return {
+        "_key": mem_key, "idempotency_key": mem_key, "text": content,
+        "type": "working" if is_working else "episodic", "strength": 1.0, "access_count": 1,
+        "created_at": now, "accessed_at": now, "invalid_at": None, "expires_at": expires_at,
+        "session_id": session_id, "source_episode_id": episode_key, "agent_id": agent_id,
+        "tenant_id": tenant_id, "schema_version": "0.1.0", "embedding": turn_vec,
+        "embedding_model": emb.model, "embedding_version": emb.version,
+        "prospective_queries": prospective,
+    }
+
+
+def _working_expires(now: str) -> str:
+    delta = timedelta(seconds=settings.working_session_ttl_seconds)
+    return (datetime.fromisoformat(now) + delta).isoformat()
+
+
+def store_many(
+    db: StandardDatabase,
+    items: Sequence[StoreItem],
+    *,
+    tenant_id: str,
+    agent_id: str,
+    embedder: Embedder | None = None,
+    mode: str = "lite",
+    extract: bool = False,
+) -> list[StoreResult]:
+    """Bulk "record" path (IN-1, DESIGN §8): redact → **batch-embed** → **bulk-insert** episodes
+    + memories in ~2 round trips per call instead of ~3 per turn. Idempotent and read-your-writes
+    consistent (same keys as `store()`), so BM25 + vector retrieval work immediately.
+
+    Scope: the record path only. `extract=True` (the batched entity/graph pass) is **IN-2** and
+    raises here. Full-mode prospective indexing, working-capacity eviction, and topic-shift
+    tracking are per-item concerns kept in `store()`; `store_many` records working memories with
+    their TTL but skips the capacity sweep. Bulk callers (evals, importers) use the lite episodic
+    path, which this makes ~40× cheaper in round trips.
+    """
+    if extract:
+        raise NotImplementedError(
+            "store_many(extract=True): the batched graph pass is IN-2. Use extract=False for "
+            "the record path (retrieval works; entities/graph are built by IN-2)."
+        )
+    if not items:
+        return []
+    emb = embedder or get_embedder()
+    now = utcnow_iso()
+
+    # 1. redact + idempotency key per item — deterministic, identical to store().
+    prepared: list[tuple[StoreItem, str, str]] = []  # (item, redacted_content, ep_key)
+    for item in items:
+        content = (
+            redact(item.content, mode=mode, generator=None)
+            if settings.redact_pii
+            else item.content
+        )
+        ep_key = idempotency_key(
+            tenant_id=tenant_id, agent_id=agent_id, session_id=item.session_id,
+            content=content, turn_index=item.turn_index,
+        )
+        prepared.append((item, content, ep_key))
+
+    # 2. one embed batch for all distinct contents (cache-aware, §16).
+    vec_by_text = embed_batch_cached(emb, [c for _, c, _ in prepared], tenant_id=tenant_id)
+
+    # 3. build docs, then 4. two bulk inserts (the whole point — O(1) round trips, not O(N)).
+    episodes: list[dict[str, Any]] = []
+    memories: list[dict[str, Any]] = []
+    results: list[StoreResult] = []
+    for item, content, ep_key in prepared:
+        is_working = item.memory_type == "working"
+        mem_key = f"{ep_key}-mem"
+        episodes.append(_episode_doc(
+            ep_key, content=content, agent_id=agent_id, tenant_id=tenant_id,
+            session_id=item.session_id, message_type=item.message_type,
+            source_reliability=item.source_reliability, now=now,
+        ))
+        memories.append(_memory_doc(
+            mem_key, episode_key=ep_key, content=content, turn_vec=vec_by_text[content],
+            is_working=is_working, expires_at=_working_expires(now) if is_working else None,
+            session_id=item.session_id, agent_id=agent_id, tenant_id=tenant_id,
+            emb=emb, prospective=[], now=now,
+        ))
+        results.append(StoreResult(episode_id=ep_key, memory_ids=[mem_key], entity_ids=[]))
+
+    started = time.perf_counter()
+    with span("memory.write_many", tenant_id=tenant_id):
+        db.collection("episodes").insert_many(episodes, overwrite_mode="ignore", silent=True)
+        db.collection("memories").insert_many(memories, overwrite_mode="ignore", silent=True)
+    metrics.emit("write", duration_ms=(time.perf_counter() - started) * 1000.0, count=len(items))
+    return results
 
 
 def store(
@@ -236,18 +357,10 @@ def _store_impl(
     if is_new and mode == "full":
         prospective = generate_prospective(content, generator or get_generator())
 
-    episode = {
-        "_key": key,
-        "idempotency_key": key,
-        "content": content,
-        "source_type": "interaction",
-        "agent_id": agent_id,
-        "tenant_id": tenant_id,
-        "session_id": session_id,
-        "message_type": message_type,
-        "source_reliability": source_reliability,
-        "ingested_at": now,
-    }
+    episode = _episode_doc(
+        key, content=content, agent_id=agent_id, tenant_id=tenant_id, session_id=session_id,
+        message_type=message_type, source_reliability=source_reliability, now=now,
+    )
     db.collection("episodes").insert(episode, overwrite_mode="ignore", silent=True)
 
     # Working memory (§5/§14): a session-scoped scratch tier that auto-expires via a
@@ -270,27 +383,11 @@ def _store_impl(
         )
 
     mem_key = f"{key}-mem"
-    memory = {
-        "_key": mem_key,
-        "idempotency_key": mem_key,
-        "text": content,
-        "type": "working" if is_working else "episodic",
-        "strength": 1.0,
-        "access_count": 1,
-        "created_at": now,
-        "accessed_at": now,
-        "invalid_at": None,
-        "expires_at": expires_at,
-        "session_id": session_id,
-        "source_episode_id": key,
-        "agent_id": agent_id,
-        "tenant_id": tenant_id,
-        "schema_version": "0.1.0",
-        "embedding": turn_vec,
-        "embedding_model": emb.model,
-        "embedding_version": emb.version,
-        "prospective_queries": prospective,
-    }
+    memory = _memory_doc(
+        mem_key, episode_key=key, content=content, turn_vec=turn_vec, is_working=is_working,
+        expires_at=expires_at, session_id=session_id, agent_id=agent_id, tenant_id=tenant_id,
+        emb=emb, prospective=prospective, now=now,
+    )
     db.collection("memories").insert(memory, overwrite_mode="ignore", silent=True)
 
     if is_new and is_working:
