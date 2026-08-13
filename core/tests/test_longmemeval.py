@@ -12,7 +12,7 @@ from arango_memory.eval.longmemeval import (
     judge_correct,
     run_longmemeval,
 )
-from arango_memory.eval.longmemeval_convert import convert
+from arango_memory.eval.longmemeval_convert import _stratified_sample, convert
 from arango_memory.generation import FakeGenerator
 
 _SMOKE = Path(__file__).parent / "data" / "longmemeval_smoke.json"
@@ -75,6 +75,22 @@ def test_convert_maps_sessions_and_flags_abstention() -> None:
     assert len(s1.sessions[0]) == 1  # blank assistant turn dropped
     assert s1.sessions[0][0].speaker == "user"
     assert s2.qa[0].abstention is False and s2.qa[0].answer == "Munich"
+
+
+def test_stratified_sample_spreads_across_types() -> None:
+    # 10 of type A, 10 of B, 2 of C — grouped (as LongMemEval-S is).
+    raw = (
+        [{"question_type": "A", "i": i} for i in range(10)]
+        + [{"question_type": "B", "i": i} for i in range(10)]
+        + [{"question_type": "C", "i": i} for i in range(2)]
+    )
+    picked = _stratified_sample(raw, 9)
+    types = [item["question_type"] for item in picked]
+    assert len(picked) == 9
+    # every available type is represented (a plain raw[:9] would be all "A")
+    assert set(types) == {"A", "B", "C"}
+    # round-robin: C exhausts (only 2), A/B keep filling — balanced, not one category
+    assert types.count("A") >= 3 and types.count("B") >= 3 and types.count("C") == 2
 
 
 def _write_tmp(dataset: dict) -> Path:

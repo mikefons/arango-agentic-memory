@@ -334,9 +334,11 @@ accuracy** — the metric the long-term-memory field reports. Bring-your-own
 committed). Needs real embeddings **and** a real generator (the answerer + the LLM judge):
 `EMBEDDING_PROVIDER=openai GENERATION_PROVIDER=anthropic` + keys.
 
-1. Convert (JSONL/JSON → runner schema; **use `--limit` for a first pass** — 50 questions gives a
-   number in ~an hour before committing to the full ~500):
-   `python -m arango_memory.eval.longmemeval_convert longmemeval_s.json lme.json --limit 50`
+1. Convert (JSONL/JSON → runner schema). LongMemEval-S is **grouped by question type**, so a
+   plain `--limit N` returns a single category — use **`--stratified`** to sample `--limit`
+   questions evenly across all six types for a representative first pass (it prints the type
+   distribution):
+   `python -m arango_memory.eval.longmemeval_convert longmemeval_s.json lme.json --stratified --limit 90`
 2. Run (compose with `--rerank` / `MODE=multihop` as for the other benchmarks):
    `make longmemeval LME_DATASET=lme.json MODE=lite RERANK=--rerank`
 

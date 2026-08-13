@@ -60,6 +60,26 @@ def _convert_item(item: dict[str, Any]) -> dict[str, Any]:
     return {"sample_id": question_id, "sessions": sessions_out, "qa": [qa]}
 
 
+def _stratified_sample(raw: list[dict[str, Any]], limit: int) -> list[dict[str, Any]]:
+    """Pick up to `limit` questions spread evenly across `question_type` (round-robin over
+    per-type buckets). LongMemEval-S is grouped by type, so a plain first-N slice returns a
+    single category — this gives a type-representative subset instead. Within-type order kept."""
+    from collections import deque
+
+    buckets: dict[str, deque[dict[str, Any]]] = {}
+    for item in raw:
+        buckets.setdefault(str(item.get("question_type") or "unknown"), deque()).append(item)
+    queues = list(buckets.values())
+    out: list[dict[str, Any]] = []
+    while len(out) < limit and any(queues):
+        for q in queues:
+            if q:
+                out.append(q.popleft())
+                if len(out) >= limit:
+                    break
+    return out
+
+
 def convert(raw: list[dict[str, Any]]) -> tuple[dict[str, Any], dict[str, int]]:
     """Convert the LongMemEval release list → (dataset dict, conversion stats)."""
     samples = [_convert_item(item) for item in raw]
@@ -75,20 +95,30 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("input", help="path to the official longmemeval_s.json (or _m/_oracle)")
     parser.add_argument("output", help="path to write the converted dataset")
     parser.add_argument("--limit", type=int, default=None,
-                        help="convert only the first N questions")
+                        help="convert only N questions (first N, or evenly across types with "
+                             "--stratified)")
+    parser.add_argument("--stratified", action="store_true",
+                        help="sample --limit questions evenly across question_type (LongMemEval-S "
+                             "is grouped by type, so a plain --limit returns one category)")
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
+    from collections import Counter
+
     args = _build_parser().parse_args(argv)
     raw = json.loads(Path(args.input).read_text())
-    if args.limit is not None:
+    if args.stratified:
+        raw = _stratified_sample(raw, args.limit if args.limit is not None else len(raw))
+    elif args.limit is not None:
         raw = raw[: args.limit]
     dataset, stats = convert(raw)
     Path(args.output).write_text(json.dumps(dataset, indent=2))
+    by_type = Counter(str(item.get("question_type") or "unknown") for item in raw)
+    dist = ", ".join(f"{t}={n}" for t, n in sorted(by_type.items()))
     print(
         f"converted {stats['questions']} questions "
-        f"({stats['abstention']} abstention) → {args.output}"
+        f"({stats['abstention']} abstention) → {args.output}\n  types: {dist}"
     )
     return 0
 
