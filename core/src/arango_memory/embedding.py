@@ -20,7 +20,7 @@ from __future__ import annotations
 import hashlib
 import math
 from collections.abc import Sequence
-from typing import Protocol, runtime_checkable
+from typing import Any, Protocol, runtime_checkable
 
 from .config import Settings, settings
 
@@ -60,6 +60,35 @@ class FakeEmbedder:
         return [self.embed(t) for t in texts]
 
 
+# text-embedding-3-* reject inputs over 8192 tokens with a 400; truncate to fit (an
+# over-long memory still embeds on its first 8k tokens rather than crashing the write).
+_EMBED_MAX_TOKENS = 8192
+_embed_encoder: Any = None
+
+
+def _truncate_to_token_limit(texts: Sequence[str]) -> list[str]:
+    """Truncate any input over the embedding model's token limit. Only tokenizes texts long
+    enough to possibly exceed it (token count ≤ char count for ordinary text), so short turns
+    pay no tokenizer cost."""
+    global _embed_encoder
+    out: list[str] = []
+    for text in texts:
+        if len(text) <= _EMBED_MAX_TOKENS:
+            out.append(text)
+            continue
+        if _embed_encoder is None:
+            import tiktoken
+
+            _embed_encoder = tiktoken.get_encoding("cl100k_base")
+        tokens = _embed_encoder.encode(text)
+        out.append(
+            _embed_encoder.decode(tokens[:_EMBED_MAX_TOKENS])
+            if len(tokens) > _EMBED_MAX_TOKENS
+            else text
+        )
+    return out
+
+
 class OpenAIEmbedder:
     """Real embeddings via the OpenAI API (default `text-embedding-3-small`)."""
 
@@ -77,7 +106,9 @@ class OpenAIEmbedder:
         return self.embed_batch([text])[0]
 
     def embed_batch(self, texts: Sequence[str]) -> list[list[float]]:
-        resp = self._client.embeddings.create(model=self.model, input=list(texts))
+        resp = self._client.embeddings.create(
+            model=self.model, input=_truncate_to_token_limit(list(texts))
+        )
         return [item.embedding for item in resp.data]
 
 
