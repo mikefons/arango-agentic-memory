@@ -77,6 +77,25 @@ def test_convert_maps_sessions_and_flags_abstention() -> None:
     assert s2.qa[0].abstention is False and s2.qa[0].answer == "Munich"
 
 
+def test_convert_injects_session_and_question_dates() -> None:
+    raw = [
+        {
+            "question_id": "q1",
+            "question_type": "temporal-reasoning",
+            "question": "When did I move?",
+            "answer": "May",
+            "question_date": "2023/05/30 (Tue) 23:40",
+            "haystack_dates": ["2023/05/20 (Sat) 02:21"],
+            "haystack_sessions": [[{"role": "user", "content": "I moved to Munich."}]],
+        }
+    ]
+    dataset, _ = convert(raw)
+    samples = load_dataset(_write_tmp(dataset))
+    turn = samples[0].sessions[0][0]
+    assert turn.text == "[2023/05/20 (Sat) 02:21] I moved to Munich."  # session date prefixed
+    assert samples[0].qa[0].question.startswith("[Today's date is 2023/05/30 (Tue) 23:40.]")
+
+
 def test_stratified_sample_spreads_across_types() -> None:
     # 10 of type A, 10 of B, 2 of C — grouped (as LongMemEval-S is).
     raw = (

@@ -37,21 +37,33 @@ from typing import Any
 
 
 def _convert_item(item: dict[str, Any]) -> dict[str, Any]:
-    """One LongMemEval question → one Sample dict."""
+    """One LongMemEval question → one Sample dict.
+
+    The session timestamp (`haystack_dates[i]`) is prefixed onto each turn's text, and the
+    `question_date` onto the question — without them `temporal-reasoning` questions are
+    unanswerable (no time signal) and cross-session recency is ambiguous. The dates thus live
+    in the retrievable/injected text, which is what the answerer reasons over."""
+    dates = item.get("haystack_dates") or []
     sessions_out: list[list[dict[str, str]]] = []
-    for session in item.get("haystack_sessions", []):
+    for i, session in enumerate(item.get("haystack_sessions", [])):
+        date = str(dates[i]).strip() if i < len(dates) else ""
         session_out: list[dict[str, str]] = []
         for turn in session:
             text = str(turn.get("content", "")).strip()
             if not text:
                 continue  # drop blank/system-only turns
+            if date:
+                text = f"[{date}] {text}"
             session_out.append({"speaker": str(turn.get("role", "")), "text": text})
         if session_out:
             sessions_out.append(session_out)
 
     question_id = str(item["question_id"])
+    question = str(item["question"])
+    if question_date := item.get("question_date"):
+        question = f"[Today's date is {question_date}.] {question}"
     qa = {
-        "question": str(item["question"]),
+        "question": question,
         "answer": str(item.get("answer", "")),
         "category": str(item.get("question_type") or "") or None,
         # Official convention: abstention questions carry an `_abs` id suffix.
