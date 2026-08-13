@@ -25,7 +25,6 @@ CLI: `python -m arango_memory.eval.longmemeval <lme.json> [--mode] [--k] [--rera
 from __future__ import annotations
 
 import argparse
-import contextlib
 import sys
 import time
 from collections.abc import Sequence
@@ -34,38 +33,13 @@ from dataclasses import dataclass, field
 from arango.database import StandardDatabase
 
 from ..client import ArangoMemoryClient
-from ..config import settings
-from ..embedding import get_embedder
-from ..embedding_cache import embed_batch_cached
 from ..generation import Generator, get_generator
-from ..ingest.store import store
+from ..ingest.store import StoreItem, store_many
 from ..retrieve.search import retrieve
 from ..schema.collections import ensure_schema
 from ..telemetry.logging import configure_logging
 from .halu import generate_answer
 from .locomo import Sample, load_dataset
-
-#: Batch size for the embedding pre-warm — one provider call per this many turns.
-_PREWARM_BATCH = 256
-
-
-def _prewarm_embeddings(sample: Sample, tenant: str) -> None:
-    """Batch-embed a question's whole history up front so per-turn `store()` calls hit the
-    embedding cache instead of making one sequential provider call each.
-
-    This is the dominant cost of a real run: a LongMemEval history is hundreds of turns, and
-    `store()` embeds them one at a time (a network round-trip per turn). Embedding them in
-    `_PREWARM_BATCH`-sized batches turns ~N sequential calls into ~N/256. Best-effort: a batch
-    error just leaves those turns to embed individually (never breaks ingest). Skipped for the
-    `fake` embedder (instant) or when the cache is off. PII turns that `store()` redact-then-
-    embeds miss the raw-text warm and re-embed — rare, so the win stands."""
-    if settings.embedding_provider == "fake" or not settings.embedding_cache:
-        return
-    embedder = get_embedder()
-    contents = [f"{turn.speaker}: {turn.text}" for session in sample.sessions for turn in session]
-    for i in range(0, len(contents), _PREWARM_BATCH):
-        with contextlib.suppress(Exception):
-            embed_batch_cached(embedder, contents[i : i + _PREWARM_BATCH], tenant_id=tenant)
 
 _JUDGE_SYSTEM = (
     "You grade a model's answer against the gold answer for a question. Reply with exactly "
@@ -125,27 +99,21 @@ def _ingest_sample(
     db: StandardDatabase, sample: Sample, agent_id: str, *, attempts: int, delay: float,
     extract: bool,
 ) -> None:
-    """Ingest a question's sessions (tenant = sample_id), then wait for search visibility.
+    """Ingest a question's whole history in one batched `store_many` call (IN-5), then wait for
+    search visibility.
 
-    Ingest-only (unlike `locomo.run_eval`, which also scores + generates) so a real run
-    doesn't pay a second, throwaway answer per question. `extract=False` (default) skips
-    entity extraction + resolution: a LongMemEval history is hundreds of turns, and per-turn
-    resolution against the growing tenant is ~O(n²) (the BX-2 wall) — the dominant cost of a
-    real run. LongMemEval scores *answers* via BM25+vector retrieval, so the entity graph adds
-    ~nothing here; skipping it is both correct and a large speedup (§23)."""
-    _prewarm_embeddings(sample, sample.sample_id)  # one batch embed call/history vs one per turn
-    turn_index = 0
-    for session in sample.sessions:
-        for turn in session:
-            store(
-                db,
-                content=f"{turn.speaker}: {turn.text}",
-                tenant_id=sample.sample_id,
-                agent_id=agent_id,
-                turn_index=turn_index,
-                extract=extract,
-            )
-            turn_index += 1
+    One bulk call replaces the per-turn `store()` loop + the old embedding pre-warm: `store_many`
+    batch-embeds and bulk-inserts the record (IN-1), and — when `extract=True` — runs the batched
+    graph pass (IN-2), which makes the entity graph affordable at LongMemEval's 500-turn histories
+    (per-turn `extract=True` was the ~O(n²) BX-2 wall). Each turn's session date rides as
+    `event_time` (IN-4), surfaced in the retrieved context without diluting the matched text."""
+    items = [
+        StoreItem(content=f"{turn.speaker}: {turn.text}", turn_index=i,
+                  event_time=turn.event_time)
+        for i, turn in enumerate(t for session in sample.sessions for t in session)
+    ]
+    if items:
+        store_many(db, items, tenant_id=sample.sample_id, agent_id=agent_id, extract=extract)
     if not sample.qa:
         return
     probe = sample.qa[0].question

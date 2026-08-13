@@ -45,6 +45,7 @@ def _answer(question: str, context: str, generator: Generator) -> str:
 class Turn:
     speaker: str
     text: str
+    event_time: str | None = None  # IN-4/IN-5: provenance time carried as a field, not in text
 
 
 @dataclass(frozen=True)

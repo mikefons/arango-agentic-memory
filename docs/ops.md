@@ -349,13 +349,16 @@ committed). Needs real embeddings **and** a real generator (the answerer + the L
 2. Run (compose with `--rerank` / `MODE=multihop` as for the other benchmarks):
    `make longmemeval LME_DATASET=lme.json MODE=lite RERANK=--rerank`
 
-**Ingestion skips entity extraction by default.** A LongMemEval history is hundreds of turns;
-per-turn entity resolution over the growing tenant is ~O(n²) (the BX-2 wall) and dominates a
-real run, while the graph adds ~nothing to *answer* accuracy — so extraction is off unless you
-pass `--extract`. This is the difference between a many-hour run and a tractable one. Even so,
-each question ingests its whole history with real embeddings (sequential API calls), so `--limit`
-for the first pass. Set `EXTRACTION_PROVIDER=fake` and `MEMORY_MODE=lite` (the defaults) — a real
-extractor or `full` mode adds an LLM call *per turn* and will make the run intractable.
+**Ingestion is batched (IN-5).** Each history is ingested in **one `store_many` call** — bulk
+record (IN-1) plus, with `--extract`, the **batched graph pass** (IN-2). The old per-turn
+`store()` loop (and its ~O(n²) entity-resolution BX-2 wall) is gone, so **`--extract` is now
+affordable** — pass it to run with the **graph ON**, which measures the *product* (entity
+supersession for `knowledge-update`, cross-session links for `multi-session`), not just the
+BM25+vector substrate. Session dates ride as an **`event_time` field** surfaced in the retrieved
+context (IN-4), never folded into the matched text (an earlier text-prefix version lifted
+`temporal-reasoning` but cost `single-session-user` recall). `--limit`/`--stratified` still
+recommended for a first pass (each question still embeds its whole history); keep
+`EXTRACTION_PROVIDER=fake` + `MEMORY_MODE=lite` unless you specifically want LLM extraction.
 
 Each question becomes its own tenant (its evidence + distractor sessions as the corpus). The
 report is **Accuracy** overall + per `question_type`, plus a **correct-decline rate** over the

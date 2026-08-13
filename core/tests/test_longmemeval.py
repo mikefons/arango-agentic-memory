@@ -92,7 +92,9 @@ def test_convert_injects_session_and_question_dates() -> None:
     dataset, _ = convert(raw)
     samples = load_dataset(_write_tmp(dataset))
     turn = samples[0].sessions[0][0]
-    assert turn.text == "[2023/05/20 (Sat) 02:21] I moved to Munich."  # session date prefixed
+    # IN-4b/IN-5: session date is a *field*, not a text prefix (so it can't dilute retrieval).
+    assert turn.text == "I moved to Munich."
+    assert turn.event_time == "2023/05/20 (Sat) 02:21"
     assert samples[0].qa[0].question.startswith("[Today's date is 2023/05/30 (Tue) 23:40.]")
 
 
@@ -163,3 +165,17 @@ def test_min_accuracy_gates(db: StandardDatabase) -> None:
     gen = _mixed({"currently live": "CORRECT", "sister": "INCORRECT"})
     report = run_longmemeval(db, samples, generator=gen, judge=gen, k=10, min_accuracy=0.9)
     assert report.passed is False and report.failures
+
+
+def test_extract_true_builds_graph_via_store_many(db: StandardDatabase) -> None:
+    # IN-5: the harness ingests each history through store_many(extract=True), so the entity
+    # graph is built (batched) — affordable now that the record + graph passes are bulk.
+    samples = load_dataset(_SMOKE)
+    gen = _mixed({"currently live": "CORRECT", "sister": "INCORRECT"})
+    run_longmemeval(db, samples, generator=gen, judge=gen, k=10, extract=True)
+    tenant = samples[0].sample_id
+    cur = db.aql.execute(
+        "FOR e IN entities FILTER e.tenant_id == @t COLLECT WITH COUNT INTO c RETURN c",
+        bind_vars={"t": tenant},
+    )
+    assert int(next(iter(cur), 0)) > 0
