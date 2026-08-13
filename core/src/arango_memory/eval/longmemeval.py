@@ -13,7 +13,12 @@ Both the answerer and the judge are injectable `Generator`s, so CI runs **keyles
 scored run is a bring-your-own dataset (large, externally licensed); the runner is tested on
 the smoke slice.
 
-CLI: `python -m arango_memory.eval.longmemeval <lme.json> [--mode] [--k] [--rerank]
+Ingestion skips entity extraction by default (`--extract` to opt in): a LongMemEval history is
+hundreds of turns and per-turn entity resolution over the growing tenant is ~O(n²) (the BX-2
+wall) — the dominant cost of a real run — while the entity graph adds ~nothing to answer
+accuracy. Skipping it turns a many-hour run into a tractable one.
+
+CLI: `python -m arango_memory.eval.longmemeval <lme.json> [--mode] [--k] [--rerank] [--extract]
 [--min-accuracy X]` (exits nonzero below a gate, so a nightly run can fail the build).
 """
 
@@ -91,12 +96,17 @@ class LongMemReport:
 
 
 def _ingest_sample(
-    db: StandardDatabase, sample: Sample, agent_id: str, *, attempts: int, delay: float
+    db: StandardDatabase, sample: Sample, agent_id: str, *, attempts: int, delay: float,
+    extract: bool,
 ) -> None:
     """Ingest a question's sessions (tenant = sample_id), then wait for search visibility.
 
     Ingest-only (unlike `locomo.run_eval`, which also scores + generates) so a real run
-    doesn't pay a second, throwaway answer per question."""
+    doesn't pay a second, throwaway answer per question. `extract=False` (default) skips
+    entity extraction + resolution: a LongMemEval history is hundreds of turns, and per-turn
+    resolution against the growing tenant is ~O(n²) (the BX-2 wall) — the dominant cost of a
+    real run. LongMemEval scores *answers* via BM25+vector retrieval, so the entity graph adds
+    ~nothing here; skipping it is both correct and a large speedup (§23)."""
     turn_index = 0
     for session in sample.sessions:
         for turn in session:
@@ -106,6 +116,7 @@ def _ingest_sample(
                 tenant_id=sample.sample_id,
                 agent_id=agent_id,
                 turn_index=turn_index,
+                extract=extract,
             )
             turn_index += 1
     if not sample.qa:
@@ -127,12 +138,16 @@ def run_longmemeval(
     mode: str = "lite",
     k: int = 10,
     rerank: bool = False,
+    extract: bool = False,
     min_accuracy: float | None = None,
     consistency_attempts: int = 30,
     consistency_delay: float = 0.25,
     progress: bool = False,
 ) -> LongMemReport:
-    """Ingest each question's history, answer from memory, judge accuracy; aggregate."""
+    """Ingest each question's history, answer from memory, judge accuracy; aggregate.
+
+    `extract=False` (default) skips the ~O(n²) entity resolution over each question's long
+    history — the dominant cost of a real run (see `_ingest_sample`)."""
     gen = generator or get_generator()
     jdg = judge or gen
     scores: list[LongMemScore] = []
@@ -146,7 +161,8 @@ def run_longmemeval(
                 file=sys.stderr, flush=True,
             )
         _ingest_sample(
-            db, sample, agent_id, attempts=consistency_attempts, delay=consistency_delay
+            db, sample, agent_id, attempts=consistency_attempts, delay=consistency_delay,
+            extract=extract,
         )
         for qa in sample.qa:
             retrieved = retrieve(
@@ -235,6 +251,10 @@ def _build_parser() -> argparse.ArgumentParser:
                              "provider — set RERANKER_PROVIDER=local + the 'rerank' extra)")
     parser.add_argument("--min-accuracy", type=float, default=None,
                         help="fail (nonzero exit) if overall accuracy is below this")
+    parser.add_argument("--extract", action="store_true",
+                        help="build the entity graph while ingesting (default off). LongMemEval "
+                             "scores answers, so the graph adds little here and per-turn "
+                             "resolution over a long history is ~O(n²) — leave off unless testing")
     return parser
 
 
@@ -246,7 +266,7 @@ def main(argv: list[str] | None = None) -> int:
     ensure_schema(db)
     report = run_longmemeval(
         db, load_dataset(args.dataset), mode=args.mode, k=args.k,
-        rerank=args.rerank, min_accuracy=args.min_accuracy, progress=True,
+        rerank=args.rerank, extract=args.extract, min_accuracy=args.min_accuracy, progress=True,
     )
     print(_format(report, gated=args.min_accuracy is not None))
     return 0 if report.passed else 1

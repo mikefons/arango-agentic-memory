@@ -334,10 +334,19 @@ accuracy** — the metric the long-term-memory field reports. Bring-your-own
 committed). Needs real embeddings **and** a real generator (the answerer + the LLM judge):
 `EMBEDDING_PROVIDER=openai GENERATION_PROVIDER=anthropic` + keys.
 
-1. Convert (JSONL/JSON → runner schema; `--limit` for a smoke subset):
-   `python -m arango_memory.eval.longmemeval_convert longmemeval_s.json lme.json`
+1. Convert (JSONL/JSON → runner schema; **use `--limit` for a first pass** — 50 questions gives a
+   number in ~an hour before committing to the full ~500):
+   `python -m arango_memory.eval.longmemeval_convert longmemeval_s.json lme.json --limit 50`
 2. Run (compose with `--rerank` / `MODE=multihop` as for the other benchmarks):
    `make longmemeval LME_DATASET=lme.json MODE=lite RERANK=--rerank`
+
+**Ingestion skips entity extraction by default.** A LongMemEval history is hundreds of turns;
+per-turn entity resolution over the growing tenant is ~O(n²) (the BX-2 wall) and dominates a
+real run, while the graph adds ~nothing to *answer* accuracy — so extraction is off unless you
+pass `--extract`. This is the difference between a many-hour run and a tractable one. Even so,
+each question ingests its whole history with real embeddings (sequential API calls), so `--limit`
+for the first pass. Set `EXTRACTION_PROVIDER=fake` and `MEMORY_MODE=lite` (the defaults) — a real
+extractor or `full` mode adds an LLM call *per turn* and will make the run intractable.
 
 Each question becomes its own tenant (its evidence + distractor sessions as the corpus). The
 report is **Accuracy** overall + per `question_type`, plus a **correct-decline rate** over the
