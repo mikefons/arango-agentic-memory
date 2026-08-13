@@ -47,6 +47,7 @@ class StoreItem:
     message_type: str | None = None
     source_reliability: float = 1.0
     memory_type: str = "episodic"
+    event_time: str | None = None  # IN-4: when the memory's content happened (a timestamp/date)
 
 
 def _episode_doc(
@@ -64,7 +65,7 @@ def _episode_doc(
 def _memory_doc(
     mem_key: str, *, episode_key: str, content: str, turn_vec: list[float], is_working: bool,
     expires_at: str | None, session_id: str | None, agent_id: str, tenant_id: str,
-    emb: Embedder, prospective: list[str], now: str,
+    emb: Embedder, prospective: list[str], now: str, event_time: str | None = None,
 ) -> dict[str, Any]:
     return {
         "_key": mem_key, "idempotency_key": mem_key, "text": content,
@@ -74,6 +75,9 @@ def _memory_doc(
         "tenant_id": tenant_id, "schema_version": "0.1.0", "embedding": turn_vec,
         "embedding_model": emb.model, "embedding_version": emb.version,
         "prospective_queries": prospective,
+        # IN-4: provenance time carried as a *field* (not folded into `text`), so it never
+        # dilutes BM25/vector matching but is surfaced in the assembled context (retrieve).
+        "event_time": event_time,
     }
 
 
@@ -142,7 +146,7 @@ def store_many(
             mem_key, episode_key=ep_key, content=content, turn_vec=vec_by_text[content],
             is_working=is_working, expires_at=_working_expires(now) if is_working else None,
             session_id=item.session_id, agent_id=agent_id, tenant_id=tenant_id,
-            emb=emb, prospective=[], now=now,
+            emb=emb, prospective=[], now=now, event_time=item.event_time,
         ))
         order.append((ep_key, mem_key))
         # Working memory never mints durable entities (mirrors _store_impl).
@@ -184,6 +188,7 @@ def store(
     message_type: str | None = None,
     source_reliability: float = 1.0,
     memory_type: str = "episodic",
+    event_time: str | None = None,
     extract: bool = True,
 ) -> StoreResult:
     """Instrumented write (DESIGN.md §18): `memory.write` span + `write` metric.
@@ -216,6 +221,7 @@ def store(
             message_type=message_type,
             source_reliability=source_reliability,
             memory_type=memory_type,
+            event_time=event_time,
             extract=extract,
         )
     metrics.emit("write", duration_ms=(time.perf_counter() - started) * 1000.0)
@@ -338,6 +344,7 @@ def _store_impl(
     message_type: str | None = None,
     source_reliability: float = 1.0,
     memory_type: str = "episodic",
+    event_time: str | None = None,
     extract: bool = True,
 ) -> StoreResult:
     """Persist one turn as an episode + episodic memory, with extracted entities.
@@ -398,7 +405,7 @@ def _store_impl(
     memory = _memory_doc(
         mem_key, episode_key=key, content=content, turn_vec=turn_vec, is_working=is_working,
         expires_at=expires_at, session_id=session_id, agent_id=agent_id, tenant_id=tenant_id,
-        emb=emb, prospective=prospective, now=now,
+        emb=emb, prospective=prospective, now=now, event_time=event_time,
     )
     db.collection("memories").insert(memory, overwrite_mode="ignore", silent=True)
 
