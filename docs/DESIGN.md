@@ -1013,6 +1013,30 @@ RQ-1 multi-hop-decomposition experiment below. That experiment came back **negat
 see the next subsection — so the residual gap to 0.6 is a *retrieval-content* gap
 (question↔evidence lexical overlap ≈ 0.27), not one that query decomposition can close.
 
+### LongMemEval — end-to-end answer accuracy (HX-1)
+
+`benchmark.py` scores *retrieval* (Recall@k) on LoCoMo/MuSiQue. **LongMemEval** adds the axis
+the long-term-memory field (and competing products) actually report: **end-to-end answer
+accuracy**. [LongMemEval](https://github.com/xiaowu0162/LongMemEval)-S pairs ~500 questions
+with long (~115k-token) multi-session histories where evidence hides among distractor
+sessions; question types map onto our differentiators — `knowledge-update` (bi-temporal
+supersession), `temporal-reasoning` (`valid_time`), `single-session-preference`,
+`multi-session`.
+
+Harness (`eval/longmemeval.py` + `eval/longmemeval_convert.py`): one question → one tenant
+(distractors bounded); ingest → retrieve → answer from memory → an **LLM judge** grades the
+answer against gold → accuracy, overall and per question-type. Abstention questions
+(unanswerable by construction, `_abs` ids) are judged for a correct *decline*. Answerer and
+judge are injectable `Generator`s, so CI runs **keyless** on `FakeGenerator` (smoke slice);
+a real run uses the configured provider. Composable with `--rerank` / `--mode multihop`.
+Reports QA accuracy only (LongMemEval scores answers, not evidence) — a caveat: the absolute
+number partly reflects the answerer/judge model, so report the model + keep retrieval recall
+(LoCoMo/MuSiQue) as the companion metric that isolates the memory layer's contribution.
+
+**Status:** harness built + CI-gated keyless; the scored run is a bring-your-own dataset run
+(pending). Run: `make longmemeval LME_DATASET=lme.json MODE=lite RERANK=--rerank` after
+`longmemeval_convert`. Record the accuracy table here when the run lands (HX-1 in ROADMAP).
+
 ### Recall vs corpus size — the fusion-holds curve (HX-2)
 
 The project's thesis as a chart: on an **open corpus that grows**, graph+vector+BM25 fusion

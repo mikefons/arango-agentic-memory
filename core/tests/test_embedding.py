@@ -7,7 +7,27 @@ import math
 import pytest
 
 from arango_memory.config import Settings
-from arango_memory.embedding import FakeEmbedder, get_embedder
+from arango_memory.embedding import (
+    _EMBED_MAX_TOKENS,
+    FakeEmbedder,
+    _truncate_to_token_limit,
+    get_embedder,
+)
+
+
+def test_truncate_leaves_short_text_untouched() -> None:
+    texts = ["hi", "a normal short memory turn"]
+    assert _truncate_to_token_limit(texts) == texts  # no tokenizer cost, identity
+
+
+def test_truncate_caps_overlong_text_to_token_limit() -> None:
+    import tiktoken
+
+    enc = tiktoken.get_encoding("cl100k_base")
+    long_text = "word " * 20000  # ~20k tokens, well over the 8192 limit
+    out = _truncate_to_token_limit([long_text])[0]
+    assert len(enc.encode(out)) <= _EMBED_MAX_TOKENS
+    assert out != long_text and long_text.startswith(out[:20])  # a prefix, truncated
 
 
 def test_fake_embedder_deterministic_and_unit_norm() -> None:

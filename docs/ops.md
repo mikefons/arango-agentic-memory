@@ -333,6 +333,36 @@ RERANKER_PROVIDER=local make benchmark DATASET=musique.json MODE=lite RERANK=--r
 Compare `recall-frac` / all-hops `Recall@k` against the un-reranked baseline on the same
 dataset (the reranker is CPU-heavy — expect higher latency; it's off the lite hot path).
 
+### Running the LongMemEval benchmark (HX-1, §23)
+
+Where LoCoMo/MuSiQue score *retrieval* recall, LongMemEval scores **end-to-end answer
+accuracy** — the metric the long-term-memory field reports. Bring-your-own
+([longmemeval_s.json](https://github.com/xiaowu0162/LongMemEval), externally licensed, never
+committed). Needs real embeddings **and** a real generator (the answerer + the LLM judge):
+`EMBEDDING_PROVIDER=openai GENERATION_PROVIDER=anthropic` + keys.
+
+1. Convert (JSONL/JSON → runner schema). LongMemEval-S is **grouped by question type**, so a
+   plain `--limit N` returns a single category — use **`--stratified`** to sample `--limit`
+   questions evenly across all six types for a representative first pass (it prints the type
+   distribution):
+   `python -m arango_memory.eval.longmemeval_convert longmemeval_s.json lme.json --stratified --limit 90`
+2. Run (compose with `--rerank` / `MODE=multihop` as for the other benchmarks):
+   `make longmemeval LME_DATASET=lme.json MODE=lite RERANK=--rerank`
+
+**Ingestion skips entity extraction by default.** A LongMemEval history is hundreds of turns;
+per-turn entity resolution over the growing tenant is ~O(n²) (the BX-2 wall) and dominates a
+real run, while the graph adds ~nothing to *answer* accuracy — so extraction is off unless you
+pass `--extract`. This is the difference between a many-hour run and a tractable one. Even so,
+each question ingests its whole history with real embeddings (sequential API calls), so `--limit`
+for the first pass. Set `EXTRACTION_PROVIDER=fake` and `MEMORY_MODE=lite` (the defaults) — a real
+extractor or `full` mode adds an LLM call *per turn* and will make the run intractable.
+
+Each question becomes its own tenant (its evidence + distractor sessions as the corpus). The
+report is **Accuracy** overall + per `question_type`, plus a **correct-decline rate** over the
+abstention (`_abs`) questions. `--min-accuracy X` makes the run exit nonzero below a gate.
+Note the accuracy partly reflects the answerer/judge model, so record which model was used and
+read it alongside the LoCoMo/MuSiQue retrieval-recall numbers (which isolate the memory layer).
+
 ### Recall vs corpus size (HX-2)
 
 The chart of the project's thesis: does fusion hold recall as an open corpus grows while

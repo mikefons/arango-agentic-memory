@@ -91,3 +91,17 @@ locomo10.json
 **/locomo_converted*.json
 converted.json
 core/converted.json
+
+# MuSiQue benchmark data — externally licensed + large, never commit (BX-1, §23).
+/core/musique*.json
+/core/musique*.jsonl
+/core/converted*.json
+
+# LongMemEval benchmark data — externally licensed + large, never commit (HX-1, §23).
+# Anchored to core/ so the committed smoke slice (core/tests/data/*_smoke.json) stays tracked.
+/core/longmemeval_*.json
+/core/lme.json
+
+# ─── Local presentation assets (never commit) ───────────────
+presentation-screenshots/
+presentation-prompt.md

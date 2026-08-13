@@ -1,0 +1,42 @@
+{
+  "samples": [
+    {
+      "sample_id": "lme-knowledge-update-1",
+      "sessions": [
+        [
+          {"speaker": "user", "text": "I moved to Berlin back in 2021 for a new job."},
+          {"speaker": "assistant", "text": "Congratulations on the move to Berlin!"}
+        ],
+        [
+          {"speaker": "user", "text": "Quick update — I actually relocated to Munich last month."},
+          {"speaker": "assistant", "text": "Noted, Munich it is."}
+        ]
+      ],
+      "qa": [
+        {
+          "question": "Where do I currently live?",
+          "answer": "Munich",
+          "category": "knowledge-update",
+          "abstention": false
+        }
+      ]
+    },
+    {
+      "sample_id": "lme-abstention-1_abs",
+      "sessions": [
+        [
+          {"speaker": "user", "text": "I really enjoy hiking in the mountains on weekends."},
+          {"speaker": "assistant", "text": "Hiking is a great way to unwind."}
+        ]
+      ],
+      "qa": [
+        {
+          "question": "What is my sister's name?",
+          "answer": "",
+          "category": "single-session-user",
+          "abstention": true
+        }
+      ]
+    }
+  ]
+}

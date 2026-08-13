@@ -10,7 +10,7 @@ export PYTHONPATH := src
 
 UVRUN := uv run --no-sync
 
-.PHONY: sync dev check test lint type ci clean-venv benchmark handoff-eval recall-curve
+.PHONY: sync dev check test lint type ci clean-venv benchmark longmemeval handoff-eval recall-curve
 
 # LoCoMo benchmark (§23). Override DATASET/MODE/K; needs a running ArangoDB and, for a
 # real run, real providers (EMBEDDING_PROVIDER=openai GENERATION_PROVIDER=anthropic + keys).
@@ -45,6 +45,13 @@ benchmark:       ## LoCoMo benchmark vs §23 (DATASET=… MODE=lite|full|multiho
 HANDOFF_DATASET ?= tests/data/handoff_smoke.json
 handoff-eval:    ## Multi-agent handoff eval vs §23 (MA-5; HANDOFF_DATASET=…)
 	$(UVRUN) python -m arango_memory.eval.handoff $(HANDOFF_DATASET)
+
+# LongMemEval end-to-end answer-accuracy benchmark (HX-1, §23). BYO dataset: convert the
+# official longmemeval_s.json first, then run. Reuses MODE/K/RERANK; a real run needs
+# EMBEDDING_PROVIDER=openai + GENERATION_PROVIDER=anthropic (+ keys) for answers + judge.
+LME_DATASET ?= tests/data/longmemeval_smoke.json
+longmemeval:     ## LongMemEval QA-accuracy benchmark (HX-1; LME_DATASET=… MODE=… RERANK=…)
+	$(UVRUN) python -m arango_memory.eval.longmemeval $(LME_DATASET) --mode $(MODE) --k $(K) $(RERANK)
 
 # Recall-vs-corpus-size curve (HX-2). Input is a POOLED MuSiQue file
 # (musique_convert --pooled). Real curve needs EMBEDDING_PROVIDER=openai + a key.

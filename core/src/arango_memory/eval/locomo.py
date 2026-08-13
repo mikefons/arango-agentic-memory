@@ -57,6 +57,9 @@ class QA:
     gold_fact: str = ""  # substring expected to appear in a retrieved memory
     gold_facts: list[str] = field(default_factory=list)  # multi-evidence support set
     category: str | None = None  # e.g. single-hop | multi-hop | temporal (LoCoMo)
+    abstention: bool = False  # question unanswerable from memory — the model should decline
+                              # (LongMemEval, HX-1). Default False leaves all other datasets
+                              # unchanged; retrieval-recall scoring ignores it.
 
     def support(self) -> list[str]:
         """The evidence set retrieval is scored against (multi-evidence or single-fact)."""
