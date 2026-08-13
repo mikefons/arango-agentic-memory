@@ -1013,6 +1013,29 @@ RQ-1 multi-hop-decomposition experiment below. That experiment came back **negat
 see the next subsection — so the residual gap to 0.6 is a *retrieval-content* gap
 (question↔evidence lexical overlap ≈ 0.27), not one that query decomposition can close.
 
+### Recall vs corpus size — the fusion-holds curve (HX-2)
+
+The project's thesis as a chart: on an **open corpus that grows**, graph+vector+BM25 fusion
+should hold recall while a **pure-vector arm degrades** (the classic "VectorDB recall falls with
+scale" failure). Harness `eval/recall_curve.py` + `eval/plot_recall_curve.py`.
+
+Honest design — *fix the scored probe set, grow the distractors* — so the x-axis is size alone,
+not the question mix: reserve N probe questions (their gold paragraphs always ingested), then add
+distractor paragraphs from other questions in `--step` increments, re-measuring the probe set's
+recall-frac at each checkpoint. Three lines isolated by RRF weights (retrieve reads `settings.rrf_*`
+live): **fused** (bm25+vector), **bm25-only** (`rrf_vector_weight=0`), **vector-only**
+(`rrf_bm25_weight=0` — the new knob this adds; the "VectorDB" baseline). Distractors ingest with
+`extract=False` (the BX-3 lever) so entity resolution stays ~O(n) and the sweep runs in minutes;
+consequently the graph arm is off and "fused" here means BM25+vector — the meaningful
+vector-vs-fusion contrast (a graph-on figure on a capped corpus is a separate exercise). Input is a
+**pooled** MuSiQue file (`musique_convert --pooled`).
+
+**Status:** harness built + CI-gated keyless (FakeEmbedder proves the plumbing; the *shape* needs
+real embeddings). The plotted curve is a bring-your-own real-embedding run (pending):
+`make recall-curve CURVE_DATASET=pooled.json` then `plot_recall_curve`. Record the figure here +
+in the README when it lands (HX-2 in the competitive roadmap). Companion to the SC-1 scalability
+work, which is what keeps ingestion tractable at the sizes this curve sweeps.
+
 ### RQ-1 multi-hop decomposition — benchmark-dependent (rev 82)
 
 RQ-1 hypothesized that decomposing a multi-hop question into sub-lookups would lift

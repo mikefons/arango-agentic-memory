@@ -248,6 +248,7 @@ def _arm_weight(name: str) -> float:
     so an arm can score worse than useless. Tune per corpus.
     """
     return {
+        "bm25": settings.rrf_bm25_weight,
         "graph": settings.rrf_graph_weight,
         "vector": settings.rrf_vector_weight,
     }.get(name, 1.0)

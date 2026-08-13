@@ -1,0 +1,33 @@
+{
+  "samples": [
+    {
+      "sample_id": "recall-curve-smoke",
+      "sessions": [
+        [
+          {"speaker": "musique", "text": "Paris is the capital of France."},
+          {"speaker": "musique", "text": "Mount Everest is the tallest mountain on Earth."},
+          {"speaker": "musique", "text": "The Eiffel Tower is a landmark in Paris."},
+          {"speaker": "musique", "text": "The Nile is a very long river in Africa."},
+          {"speaker": "musique", "text": "Photosynthesis occurs in the leaves of plants."},
+          {"speaker": "musique", "text": "Water boils at one hundred degrees Celsius."},
+          {"speaker": "musique", "text": "The violin is a stringed musical instrument."},
+          {"speaker": "musique", "text": "Basalt is a common volcanic rock."}
+        ]
+      ],
+      "qa": [
+        {
+          "question": "What is the capital of France?",
+          "answer": "Paris",
+          "gold_facts": ["Paris is the capital of France."],
+          "category": "geography"
+        },
+        {
+          "question": "What is the tallest mountain on Earth?",
+          "answer": "Mount Everest",
+          "gold_facts": ["Mount Everest is the tallest mountain on Earth."],
+          "category": "geography"
+        }
+      ]
+    }
+  ]
+}

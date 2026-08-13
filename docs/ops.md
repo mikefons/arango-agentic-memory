@@ -93,6 +93,9 @@ below the threshold it full-scans, which is fine at small N),
 query relevance, so it stays down-weighted), `RRF_VECTOR_WEIGHT` (1.0 — lower it if the
 vector arm hurts on your corpus: it ranks by proximity to the *query*, which is only
 relevance when the query resembles the answer; full mode's HyDE is the intended fix),
+`RRF_BM25_WEIGHT` (1.0 — the reference relevance arm; rarely changed in production, exposed so a
+benchmark can isolate one arm, e.g. set it to 0 for the vector-only baseline in the HX-2 recall
+curve),
 `ADAPTIVE_GATE` (`true` — full mode only:
 spend an LLM call to skip retrieval when the turn needs no memory; set `false` when every
 turn does, making full mode HyDE-only with no gate call),
@@ -329,6 +332,25 @@ RERANKER_PROVIDER=local make benchmark DATASET=musique.json MODE=lite RERANK=--r
 
 Compare `recall-frac` / all-hops `Recall@k` against the un-reranked baseline on the same
 dataset (the reranker is CPU-heavy — expect higher latency; it's off the lite hot path).
+
+### Recall vs corpus size (HX-2)
+
+The chart of the project's thesis: does fusion hold recall as an open corpus grows while
+vector-only degrades? Uses a **pooled** MuSiQue corpus (one tenant). Fixes a probe set and grows
+the distractors, measuring recall of three arms (fused / vector-only / BM25-only) at each step.
+Real curve needs real embeddings (`EMBEDDING_PROVIDER=openai` + key); keyless runs prove plumbing
+only (FakeEmbedder has no semantics).
+
+```
+python -m arango_memory.eval.musique_convert musique_ans_v1.0_dev.jsonl pooled.json --limit 500 --pooled
+make recall-curve CURVE_DATASET=pooled.json CURVE_CSV=curve.csv   # sweeps sizes, writes curve.csv
+python -m arango_memory.eval.plot_recall_curve curve.csv curve.png   # optional (needs matplotlib)
+```
+
+Distractors ingest with `extract=False` (no entity resolution, graph off — the BX-3 lever) so the
+sweep runs in minutes; "fused" here is BM25+vector. Tune `--probes` (fixed scored set) and `--step`
+(distractors per checkpoint). The CSV (`corpus_size,arm,recall_frac,recall_hit`) is the durable
+artifact; the plot just draws it.
 With `RERANKER_PROVIDER=fake` the run uses the keyless token-overlap stand-in (CI/plumbing
 only, not a real quality signal).
 
