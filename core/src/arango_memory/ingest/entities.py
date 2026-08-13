@@ -287,7 +287,9 @@ def write_entities(
             continue
         lo, hi = sorted((ka, kb))
         pairs[(lo, hi)] = relation.relationship
-    for left, right in cooccurring_pairs(extracted):
+    # IN-3: typed relations are already in `pairs`; bound the co-occurrence backfill so a dense
+    # turn can't flood the graph with low-signal edges (setdefault keeps typed relations).
+    for left, right in cooccurring_pairs(extracted, max_pairs=settings.graph_max_pairs_per_turn):
         ka = key_by_entity[(left.name, left.label)]
         kb = key_by_entity[(right.name, right.label)]
         if ka == kb:

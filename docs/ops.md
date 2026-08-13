@@ -76,6 +76,10 @@ single-tenant graph can't blow up retrieval; the arm is a down-weighted expander
 neighbourhood costs little), `GRAPH_MAX_MEMORIES_PER_ENTITY` (50 — SC-1d: caps the memories
 expanded per related entity, so a hub whose mentions grow as the tenant fills can't drive
 retrieval latency unbounded; 50 leaves real corpora untouched and only caps pathological hubs),
+`GRAPH_MAX_PAIRS_PER_TURN` (32 — IN-3: caps the co-occurrence `relates_to` edges minted per
+turn; a turn with E entities otherwise yields E(E−1)/2 pairs, both an ingestion cost and graph
+noise. Typed relations are never dropped; only co-occurrence backfill is bounded. 32 leaves
+ordinary turns (≤8 entities) untouched),
 `VECTOR_N_LISTS` (64), `VECTOR_TRAIN_FACTOR` (40 — index trains at
 `n_lists × factor` docs),
 `ENTITY_VECTOR_N_LISTS` (32) / `ENTITY_VECTOR_TRAIN_FACTOR` (40) / `ENTITY_RESOLUTION_TOP_K`
