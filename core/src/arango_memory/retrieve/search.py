@@ -56,7 +56,7 @@ FOR doc IN {SEARCH_VIEW}
   SORT BM25(doc) * ({_DECAY}) DESC
   LIMIT @pool
   RETURN {{ key: doc._key, text: doc.text, score: BM25(doc), agent_id: doc.agent_id,
-            embedding: doc.embedding, type: doc.type,
+            embedding: doc.embedding, type: doc.type, event_time: doc.event_time,
             strength: doc.strength, accessed_at: doc.accessed_at }}
 """
 
@@ -87,7 +87,7 @@ FOR doc IN memories
   SORT score DESC
   LIMIT @pool
   RETURN { key: doc._key, text: doc.text, score: score, agent_id: doc.agent_id,
-           embedding: doc.embedding, type: doc.type,
+           embedding: doc.embedding, type: doc.type, event_time: doc.event_time,
            strength: doc.strength, accessed_at: doc.accessed_at }
 """
 
@@ -146,6 +146,7 @@ FOR start IN @seed_ids
         LET doc = DOCUMENT("memories", key)
         RETURN { key: key, score: score, agent_id: doc.agent_id,
                  text: doc.text, embedding: doc.embedding, type: doc.type,
+                 event_time: doc.event_time,
                  strength: strength, accessed_at: accessed_at }
 """
 
@@ -188,10 +189,19 @@ class _Candidate:
     strength: float = 1.0
     accessed_at: str = ""
     agent_id: str = ""
+    event_time: str | None = None  # IN-4: surfaced at assembly, never in the matched text
 
 
 def _count_tokens(text: str) -> int:
     return len(_ENCODER.encode(text))
+
+
+def _assemble_line(cand: _Candidate) -> str:
+    """One injected context line — `- [event_time] text` when the memory carries a provenance
+    time (IN-4), else `- text`. The time lives in a field, so it never affected retrieval."""
+    if cand.event_time:
+        return f"- [{cand.event_time}] {cand.text}"
+    return f"- {cand.text}"
 
 
 def _cos(a: list[float], b: list[float]) -> float:
@@ -238,6 +248,7 @@ def _arm_weight(name: str) -> float:
     so an arm can score worse than useless. Tune per corpus.
     """
     return {
+        "bm25": settings.rrf_bm25_weight,
         "graph": settings.rrf_graph_weight,
         "vector": settings.rrf_vector_weight,
     }.get(name, 1.0)
@@ -260,6 +271,7 @@ def _rrf_fuse(ranked_lists: list[list[dict[str, Any]]], names: list[str]) -> lis
                     strength=row.get("strength", 1.0) or 1.0,
                     accessed_at=row.get("accessed_at") or "",
                     agent_id=row.get("agent_id") or "",
+                    event_time=row.get("event_time"),
                 )
                 by_key[key] = cand
             cand.signals.add(name)
@@ -349,7 +361,9 @@ def _assemble_tiered(hits: list[_Candidate], max_tokens: int) -> tuple[str, int]
             total += cost
 
     chosen.sort(key=lambda c: -c.fused_score)
-    context = "\n".join(f"- {c.text}" for c in chosen)
+    # IN-4: prefix the memory's provenance time (a field, not part of the matched text) into the
+    # injected line, so the answerer can reason over *when* without the date diluting retrieval.
+    context = "\n".join(_assemble_line(c) for c in chosen)
     return context, total
 
 
@@ -517,6 +531,7 @@ def _fuse_candidate_lists(lists: list[list[_Candidate]]) -> list[_Candidate]:
                     strength=cand.strength,
                     accessed_at=cand.accessed_at,
                     agent_id=cand.agent_id,
+                    event_time=cand.event_time,
                 )
                 merged.signals = set(cand.signals)
                 by_key[cand.key] = merged

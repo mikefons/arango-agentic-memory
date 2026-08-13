@@ -159,6 +159,10 @@ class Settings(BaseSettings):
     # fix (it embeds a hypothetical answer, so proximity *is* relevance) — lower this only
     # if your corpus shows the arm hurting with HyDE off.
     rrf_vector_weight: float = Field(default=1.0, ge=0.0, le=1.0)
+    # RRF weight of the BM25 arm — the reference relevance ranker, so 1.0 by default. Rarely
+    # changed in production; exposed so a benchmark can isolate a single arm (e.g. set it to 0
+    # for a vector-only "VectorDB" baseline in the recall-vs-scale curve, HX-2).
+    rrf_bm25_weight: float = Field(default=1.0, ge=0.0, le=1.0)
     # Faiss IVF partitions (DESIGN.md §7). Keep well below the corpus size — IVF
     # trains one centroid per list, so `n_lists ≪ docs` (see `vector_train_factor`).
     vector_n_lists: int = Field(default=64, ge=1)
@@ -187,6 +191,14 @@ class Settings(BaseSettings):
     # Total graph work is then bounded to max_neighbors × this. Default 50 leaves real corpora
     # (entities mentioned by a handful of memories) untouched; only pathological hubs are capped.
     graph_max_memories_per_entity: int = Field(default=50, ge=1)
+    # IN-3: cap the co-occurrence `relates_to` edges minted per turn. A turn with E entities
+    # yields E(E−1)/2 pairs (an all-pairs blow-up: 20 entities → 190 edges), which is both an
+    # ingestion cost and *graph noise* — a flood of low-signal `associated_with` edges is why
+    # the graph arm had to be down-weighted (`rrf_graph_weight` 0.1). Bounding pairs per turn
+    # cuts write cost and raises the graph's signal-to-noise. Typed relations are minted first
+    # and are never dropped by this cap; only co-occurrence backfill is bounded. Default 32
+    # leaves ordinary turns (≤8 entities) untouched; only dense turns are down-sampled.
+    graph_max_pairs_per_turn: int = Field(default=32, ge=1)
     # Multi-hop retrieval (RQ-1, DESIGN.md §9): mode="multihop" decomposes the query into
     # independent sub-lookups, retrieves each, and re-fuses. The cap bounds the fan-out
     # (N sub-queries = N retrievals + 1 decompose call); 1 disables decomposition entirely.

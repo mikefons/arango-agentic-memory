@@ -28,5 +28,15 @@ def test_cooccurring_pairs_are_unordered_combinations() -> None:
     assert len(pairs) == 3  # C(3,2)
 
 
+def test_cooccurring_pairs_cap_bounds_dense_turns() -> None:
+    # 8 entities → C(8,2)=28 pairs uncapped; the cap bounds the all-pairs blow-up (IN-3).
+    ents = [ExtractedEntity(name, "X") for name in "ABCDEFGH"]
+    assert len(cooccurring_pairs(ents)) == 28  # uncapped default unchanged
+    assert len(cooccurring_pairs(ents, max_pairs=10)) == 10  # capped
+    # a small turn is under any sane cap → untouched
+    small = [ExtractedEntity("A", "X"), ExtractedEntity("B", "X")]
+    assert cooccurring_pairs(small, max_pairs=32) == cooccurring_pairs(small)
+
+
 def test_get_extractor_fake_from_config() -> None:
     assert get_extractor(Settings(extraction_provider="fake")).name == "fake-caps"

@@ -363,11 +363,19 @@ def get_extractor(config: Settings | None = None) -> Extractor:
 
 
 def cooccurring_pairs(
-    entities: Sequence[ExtractedEntity],
+    entities: Sequence[ExtractedEntity], *, max_pairs: int | None = None,
 ) -> list[tuple[ExtractedEntity, ExtractedEntity]]:
-    """Unordered entity pairs that co-occur in one memory → `relates_to` edges (§5)."""
+    """Unordered entity pairs that co-occur in one memory → `relates_to` edges (§5).
+
+    `max_pairs` (IN-3) bounds the all-pairs blow-up: a turn with E entities otherwise yields
+    E(E−1)/2 pairs, which is both an ingestion cost and graph noise. When set, at most
+    `max_pairs` pairs are generated (early return), so dense turns are down-sampled rather than
+    minting hundreds of low-signal `associated_with` edges. Ordinary turns (small E) are
+    unaffected."""
     pairs: list[tuple[ExtractedEntity, ExtractedEntity]] = []
     for i in range(len(entities)):
         for j in range(i + 1, len(entities)):
             pairs.append((entities[i], entities[j]))
+            if max_pairs is not None and len(pairs) >= max_pairs:
+                return pairs
     return pairs
