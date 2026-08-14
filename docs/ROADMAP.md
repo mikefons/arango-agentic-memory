@@ -112,8 +112,9 @@ which is exactly what `multi-session` recall (0.067 on LongMemEval) needs.
 | 3 | IN-3 | Cap co-occurrence fan-out | speed **+ graph quality** (revisit `RRF_GRAPH_WEIGHT`) | S |
 | 4 | IN-4 | Metadata-as-fields (dates) surfaced at assembly | recovers the date-noise recall regression | S |
 | 5 | IN-5 | Re-run stratified LongMemEval with the graph ON | harness ✅; substrate-only **0.411** recorded; graph-on run confounded by `fake` extractor → **HX-1b** | — |
-| 6 | HX-1b | Legitimate graph-on LongMemEval (real extractor + reranker) | the *real* product number → DESIGN §23 + README | S |
+| 6 | HX-1b | Legitimate graph-on LongMemEval (real extractor + reranker) ✅ | **0.522 vs 0.411 substrate (+0.111)**; multi-session 0.067→0.267; every type up | S |
 | 7 | IN-6 | Batch entity resolution (the read loop IN-2 left unbatched) ✅ | graph-on ingest minutes→seconds; unblocks haiku rung + prod graph | M |
+| 8 | HX-1c | Isolate graph vs reranker (graph-OFF + real reranker run) | attributes the HX-1b +0.111 across the two levers | S |
 
 **Recommended sequence: IN-1 → IN-3 → IN-2 → IN-4 → IN-5 → HX-1b.** IN-1 removes the reason
 `extract=False` exists; IN-3 is small and lifts graph quality; IN-2 makes the graph affordable
@@ -206,7 +207,15 @@ built the graph with the FakeExtractor (every capitalized span → a `Concept` n
 *lowered* accuracy to 0.367 — a confound, not the product number. The real graph-on test moves to
 **HX-1b** (needs a real extractor). IN-5's affordability + wiring goal is done; the measurement isn't.
 
-### HX-1b — Legitimate graph-on LongMemEval (real extractor + real reranker)
+### HX-1b — Legitimate graph-on LongMemEval (real extractor + real reranker)  ✅
+
+**Result (2026-08-14, DESIGN §23).** Graph ON (`EXTRACTION_PROVIDER=spacy`) + real reranker
+(`RERANKER_PROVIDER=local`), stratified-90: **0.522 overall vs 0.411 substrate (+0.111, +27% rel)**.
+**Every question-type improved, none regressed**; `multi-session` — the graph's whole reason for being —
+went 0.067 → 0.267 (~4×). The product configuration earns its keep on a standard LTM benchmark. Caveat:
+the run flips two switches (graph + real reranker) vs the substrate baseline, so +0.111 is the combined
+product gain; a fast graph-OFF + real-reranker isolation run (no `--extract`) to split them is the open
+follow-up.
 
 **Why.** The graph-on number is the one that reflects the *product* (entities + supersession +
 belief), but it can only be measured with a **real** extractor. The IN-5 run used the default
@@ -243,6 +252,22 @@ and the clearest signal of whether the graph earns its cost here.
 
 **Success.** A recorded, un-confounded graph-on table + a one-line verdict: does the real entity
 graph raise LongMemEval accuracy over the fusion substrate, and on which question-types.
+
+### HX-1c — Isolate graph vs reranker (attribution run)
+
+**Why.** The HX-1b product number (0.522 vs 0.411, +0.111) flips **two** switches at once — the
+entity graph *and* a real reranker (the substrate baseline's `--rerank` was a no-op `fake`). So the
++0.111 is the combined product gain; we can't yet say how much is the graph vs the cross-encoder.
+
+**Plan — one cheap run.** Graph **OFF** + real reranker: `RERANKER_PROVIDER=local`, `--rerank`, **no**
+`--extract`. No extraction means substrate-speed ingestion (minutes, not hours — and IN-6 makes even
+the graph-on rung fast now), so this is a quick add. Same stratified-90 slice/model.
+- reranker-only Δ = (this run) − 0.411 substrate.
+- graph-only Δ ≈ 0.522 product − (this run).
+Record both deltas in DESIGN §23 next to the HX-1b table.
+
+**Success.** A three-row picture — substrate / +reranker / +reranker+graph — that attributes the
++0.111 across the two levers, closing the one open caveat on the HX-1b result.
 
 ### IN-6 — Batch entity resolution (the unbatched read loop IN-2 left behind)  ✅ (#208)
 
