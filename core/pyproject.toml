@@ -45,6 +45,12 @@ extraction = [
     "gliner>=0.2.0",
     "glirel>=1.0.0",
 ]
+# Lightweight spacy-only extractor (EXTRACTION_PROVIDER=spacy) — real typed NER without the
+# torch-heavy gliner/glirel tiers. The cheap first rung for the HX-1b graph-on benchmark.
+# After installing, fetch the model: `make spacy-model` (python -m spacy download en_core_web_sm).
+extraction-spacy = [
+    "spacy>=3.8.0",
+]
 mcp = [
     "mcp>=1.2.0",
 ]
