@@ -112,7 +112,7 @@ which is exactly what `multi-session` recall (0.067 on LongMemEval) needs.
 | 3 | IN-3 | Cap co-occurrence fan-out | speed **+ graph quality** (revisit `RRF_GRAPH_WEIGHT`) | S |
 | 4 | IN-4 | Metadata-as-fields (dates) surfaced at assembly | recovers the date-noise recall regression | S |
 | 5 | IN-5 | Re-run stratified LongMemEval with the graph ON | harness ✅; substrate-only **0.411** recorded; graph-on run confounded by `fake` extractor → **HX-1b** | — |
-| 6 | HX-1b | Legitimate graph-on LongMemEval (real extractor + reranker) | the *real* product number → DESIGN §23 + README | S |
+| 6 | HX-1b | Legitimate graph-on LongMemEval (real extractor + reranker) ✅ | **0.522 vs 0.411 substrate (+0.111)**; multi-session 0.067→0.267; every type up | S |
 | 7 | IN-6 | Batch entity resolution (the read loop IN-2 left unbatched) ✅ | graph-on ingest minutes→seconds; unblocks haiku rung + prod graph | M |
 
 **Recommended sequence: IN-1 → IN-3 → IN-2 → IN-4 → IN-5 → HX-1b.** IN-1 removes the reason
@@ -206,7 +206,15 @@ built the graph with the FakeExtractor (every capitalized span → a `Concept` n
 *lowered* accuracy to 0.367 — a confound, not the product number. The real graph-on test moves to
 **HX-1b** (needs a real extractor). IN-5's affordability + wiring goal is done; the measurement isn't.
 
-### HX-1b — Legitimate graph-on LongMemEval (real extractor + real reranker)
+### HX-1b — Legitimate graph-on LongMemEval (real extractor + real reranker)  ✅
+
+**Result (2026-08-14, DESIGN §23).** Graph ON (`EXTRACTION_PROVIDER=spacy`) + real reranker
+(`RERANKER_PROVIDER=local`), stratified-90: **0.522 overall vs 0.411 substrate (+0.111, +27% rel)**.
+**Every question-type improved, none regressed**; `multi-session` — the graph's whole reason for being —
+went 0.067 → 0.267 (~4×). The product configuration earns its keep on a standard LTM benchmark. Caveat:
+the run flips two switches (graph + real reranker) vs the substrate baseline, so +0.111 is the combined
+product gain; a fast graph-OFF + real-reranker isolation run (no `--extract`) to split them is the open
+follow-up.
 
 **Why.** The graph-on number is the one that reflects the *product* (entities + supersession +
 belief), but it can only be measured with a **real** extractor. The IN-5 run used the default

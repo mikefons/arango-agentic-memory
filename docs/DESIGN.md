@@ -1,7 +1,7 @@
 # ArangoDB Agentic Memory System — Design Specification
 
 > **Status:** ✅ **v1 build sequence complete (Steps 0–7).** v2: all §21 adapters shipped (MCP, LangChain/LangGraph, CrewAI) + full §19 entity API + **Step 3e heavy extraction tier done**, hardened into a deployable service. Authoritative reference.
-> **Last updated:** 2026-08-13 (rev 88 — LongMemEval first scored run: substrate-only (graph OFF) stratified-90 = **0.411** overall; graph-on deferred to a real extractor (fake-extractor run is a confound); HX-1b; §23)
+> **Last updated:** 2026-08-14 (rev 89 — HX-1b: LongMemEval graph-ON + real reranker (spacy) = **0.522** overall vs 0.411 substrate (+0.111); every type up, multi-session 0.067→0.267; §23)
 >
 > The **rev-by-rev build log** lives in [`HISTORY.md`](HISTORY.md); user-visible changes are in
 > [`CHANGELOG.md`](../CHANGELOG.md); the doc map is [`docs/README.md`](README.md). This file is
@@ -1052,16 +1052,35 @@ Run: `make longmemeval LME_DATASET=lme.json MODE=lite RERANK=--rerank` after `lo
 
 This is the honest **retrieval-substrate** number — what fusion retrieval alone answers, no graph.
 `multi-session` (cross-session fact-linking) and `single-session-preference` are the weak axes, and
-`multi-session` is exactly where a *real* entity graph should earn its keep. A `--extract` (graph-on)
-run is **not** recorded here: the only graph-on run so far used the default `EXTRACTION_PROVIDER=fake`
-(every capitalized span → a `Concept` node), which injects a junk graph and *lowers* accuracy to 0.367
-— a confound, not a measurement. A legitimate graph-on test needs a real extractor (`spacy`/`gliner`/
-`haiku`); tracked as **HX-1b in ROADMAP**.
+`multi-session` is exactly where a *real* entity graph should earn its keep.
 
-A caveat on the absolute number (above): it partly reflects the answerer/judge model, so it's reported
-with the model and paired with retrieval recall (LoCoMo/MuSiQue) as the metric that isolates the memory
-layer. `--rerank` was a no-op in this run (`RERANKER_PROVIDER` defaulted to `fake`); a real-reranker
-pass is part of HX-1b.
+**Product run — graph ON + real reranker (HX-1b, rev 89).** Same slice/model, but the full product
+configuration: `EXTRACTION_PROVIDER=spacy` (real typed NER → the entity graph), `RERANKER_PROVIDER=local`
+(cross-encoder rerank, real this time), `--k 10 --rerank --extract`:
+
+| question-type | substrate (graph OFF) | **product (graph ON + rerank)** | Δ |
+|---|---|---|---|
+| **overall** | 0.411 | **0.522** | **+0.111** |
+| multi-session | 0.067 | **0.267** | **+0.200** |
+| single-session-user | 0.467 | 0.600 | +0.133 |
+| temporal-reasoning | 0.533 | 0.667 | +0.133 |
+| knowledge-update | 0.533 | 0.600 | +0.067 |
+| single-session-assistant | 0.800 | 0.867 | +0.067 |
+| single-session-preference | 0.067 | 0.133 | +0.067 |
+
+**Every category improved; none regressed.** Overall +0.111 (27% relative), and `multi-session` —
+cross-session fact-linking, the graph's whole reason for being — nearly 4×'d (0.067 → 0.267). This is
+the product-vs-substrate result: the graph + supersession + reranker earn their keep on a standard
+long-term-memory benchmark. (Contrast the earlier confounded run with the default `fake` extractor,
+which built a junk `Concept`-per-capitalized-span graph and *lowered* accuracy to 0.367 — why HX-1b
+required a real extractor.)
+
+**Two caveats, kept honest.** (1) The absolute number partly reflects the answerer/judge model, so it's
+reported with the model and paired with retrieval recall (LoCoMo/MuSiQue) as the metric that isolates the
+memory layer. (2) The product run flips **two** switches vs the substrate baseline — graph ON *and* a real
+reranker (the substrate run's `--rerank` was a no-op `fake`) — so +0.111 is the combined product gain, not
+graph-alone. A cheap isolation run to split them (graph OFF + real reranker; no `--extract`, so it's
+fast) is the obvious follow-up.
 
 ### Recall vs corpus size — the fusion-holds curve (HX-2)
 

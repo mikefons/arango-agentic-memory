@@ -39,6 +39,17 @@ v1 ships the core + Vercel adapter. v2 adds three in-process adapters (the core 
 
 HTTP surface: `/health`, **`/docs`** (OpenAPI), `/v1/store`, `/v1/retrieve`, `/v1/prime`, `/v1/flush`, `/v1/step`, `/v1/steps`, `/v1/forget`, `/v1/stats`, `/v1/entity`, `/v1/entities`, `/v1/graph`, `/v1/seed`, `/v1/supersede`, `/v1/dream`, `/v1/salience`, `/v1/community`, `/v1/ontology/*`.
 
+## Benchmarks
+
+**LongMemEval-S** (end-to-end answer accuracy, stratified-90, `openai` embeddings + `anthropic` answerer/judge):
+
+| configuration | overall | multi-session |
+|---|---|---|
+| fusion substrate (BM25 + vector, graph OFF) | 0.411 | 0.067 |
+| **full product** (+ entity graph + cross-encoder reranker) | **0.522** | **0.267** |
+
+The entity graph + supersession + reranker lift accuracy **+0.111 (+27% rel)**, and cross-session fact-linking (`multi-session`) ~4× — every question-type improved, none regressed. Details, per-type table, and caveats in [DESIGN §23](docs/DESIGN.md). Retrieval-recall benchmarks (LoCoMo / MuSiQue) are the companion metric that isolates the memory layer.
+
 ## Quick start (local dev)
 
 ```bash
