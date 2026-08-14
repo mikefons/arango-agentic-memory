@@ -113,6 +113,7 @@ which is exactly what `multi-session` recall (0.067 on LongMemEval) needs.
 | 4 | IN-4 | Metadata-as-fields (dates) surfaced at assembly | recovers the date-noise recall regression | S |
 | 5 | IN-5 | Re-run stratified LongMemEval with the graph ON | harness ✅; substrate-only **0.411** recorded; graph-on run confounded by `fake` extractor → **HX-1b** | — |
 | 6 | HX-1b | Legitimate graph-on LongMemEval (real extractor + reranker) | the *real* product number → DESIGN §23 + README | S |
+| 7 | IN-6 | Batch entity resolution (the read loop IN-2 left unbatched) | graph-on ingest minutes→seconds; unblocks haiku rung + prod graph | M |
 
 **Recommended sequence: IN-1 → IN-3 → IN-2 → IN-4 → IN-5 → HX-1b.** IN-1 removes the reason
 `extract=False` exists; IN-3 is small and lifts graph quality; IN-2 makes the graph affordable
@@ -242,6 +243,45 @@ and the clearest signal of whether the graph earns its cost here.
 
 **Success.** A recorded, un-confounded graph-on table + a one-line verdict: does the real entity
 graph raise LongMemEval accuracy over the fusion substrate, and on which question-types.
+
+### IN-6 — Batch entity resolution (the unbatched read loop IN-2 left behind)
+
+**Problem — found during the HX-1b spacy run.** With a real extractor, graph-on ingestion is back
+near the pre-IN wall: **~7.5 min/question** (≈11 h for the stratified-90, local ArangoDB, CPU-bound).
+IN-1/IN-2 batched the graph *writes* (bulk upsert/insert/relate) but **not** the entity *resolution
+reads*. In `write_entities_many` (`ingest/entities.py` step 3, ~L511) resolution is still **one lookup
+per distinct entity**:
+- **ANN path:** a `_NEAREST_ENTITIES` AQL query is issued *inside the loop*, once per distinct entity
+  → N round trips per batch.
+- **Scan path:** `_best_match` cosines each new entity against *every* existing entity in Python
+  → O(N·M) per batch.
+
+Both scale with **entity cardinality**, which is exactly what a real extractor explodes: the `fake`
+extractor emits few distinct entities (capitalized spans, heavy repeats) so this loop was invisible;
+spaCy emits hundreds–thousands per question, so it dominates. This is why the fake-graph run was fast
+and the real-graph run is not — the cost was hiding in the read loop, not the writes.
+
+**Design.**
+1. **Batch the ANN resolution into one round trip.** Replace the per-entity `_candidates()` calls with
+   a single AQL that takes the whole array of query vectors and returns top-k per vector (`FOR qvec IN
+   @qvecs …`), so N entities cost 1 request, not N.
+2. **Vectorize the scan path.** Fetch the tenant's existing entity matrix once, then a single
+   `numpy` matmul (N×D · D×M) + per-row argmax to pick best matches — replacing the Python triple loop.
+   Falls back cleanly at small M. (numpy is already a transitive dep via faiss/embeddings.)
+3. **Dedup names before embedding** (L468 flattens *every* mention; embed the distinct set — the cache
+   masks most of it but not all).
+4. Keep the math identical: resolution only *chooses* merge targets; belief/corroboration still fold by
+   sum (the IN-2 equality property), so batched-resolve == per-entity-resolve. Reuse the
+   `test_write_entities_many` equality harness to prove it.
+
+**Files.** `core/src/arango_memory/ingest/entities.py` (step 3 + the `_NEAREST_ENTITIES` AQL),
+`core/tests/test_write_entities_many.py` (equality still holds + a cardinality/perf smoke),
+DESIGN §8/§23 (note the resolution batching alongside IN-2).
+
+**Success.** Graph-on ingestion drops from ~minutes/question to seconds; the HX-1b spacy run finishes
+in well under an hour; `test_write_entities_many` still shows batched == per-item. Unblocks the `haiku`
+rung (the LLM-extraction cost stays, but the resolution wall is gone) and makes graph-on viable in
+production, not just benchmarks.
 
 ---
 
