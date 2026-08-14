@@ -69,6 +69,19 @@ FOR e IN entities
   RETURN { key: e._key, name: e.name, label: e.label, embedding: e.embedding }
 """
 
+# IN-6: the union of top-k nearest existing entities across a whole batch of query vectors, in
+# ONE round trip (vs one `_NEAREST_ENTITIES` call per entity). The union is a superset of each
+# vector's own top-k, so the per-entity best match is unchanged; DISTINCT dedups the overlap.
+_NEAREST_ENTITIES_BATCH = """
+FOR qvec IN @qvecs
+  FOR e IN entities
+    FILTER e.tenant_id == @tenant_id
+    LET score = APPROX_NEAR_COSINE(e.embedding, qvec)
+    SORT score DESC
+    LIMIT @topk
+    RETURN DISTINCT { key: e._key, name: e.name, label: e.label, embedding: e.embedding }
+"""
+
 _INCREMENT = """
 FOR e IN entities
   FILTER e._key == @key
@@ -122,6 +135,68 @@ def _best_match(
         if sim > best_sim:
             best_sim, best = sim, row
     return best, best_sim
+
+
+def _best_match_many(
+    qvecs: list[list[float]],
+    pool: list[dict[str, Any]],
+    *,
+    exclude: list[tuple[str, str]],
+) -> list[tuple[dict[str, Any] | None, float]]:
+    """Vectorized `_best_match` (IN-6): the best cosine match in `pool` for every query vector
+    at once, excluding each query's own (name, label). One numpy matmul replaces the N × M
+    Python cosine loop that made graph-on ingest O(cardinality²). Result order matches `qvecs`;
+    an empty pool or an all-excluded row yields (None, -1.0) — identical to `_best_match`."""
+    import numpy as np
+
+    n = len(qvecs)
+    if n == 0:
+        return []
+    if not pool:
+        return [(None, -1.0)] * n
+
+    def _unit(mat: Any) -> Any:  # L2-normalize rows; a zero row stays zero → cosine 0.0 (as _cos)
+        norms = np.linalg.norm(mat, axis=1, keepdims=True)
+        return np.divide(mat, norms, out=np.zeros_like(mat), where=norms != 0)
+
+    dim = len(qvecs[0])
+    q = _unit(np.asarray(qvecs, dtype=np.float64))
+    p = _unit(np.asarray([row.get("embedding") or [0.0] * dim for row in pool], dtype=np.float64))
+    sims = q @ p.T  # (N, M) cosine
+
+    # Exclude a query's own (name, label). Map tuples → dense ids for exact (collision-free)
+    # equality, then mask those cells to -inf so they can't win.
+    ids: dict[tuple[str, str], int] = {}
+    q_ids = np.asarray([ids.setdefault(nl, len(ids)) for nl in exclude])
+    p_ids = np.asarray([ids.setdefault((r["name"], r["label"]), len(ids)) for r in pool])
+    sims[q_ids[:, None] == p_ids[None, :]] = -np.inf
+
+    best_j = np.argmax(sims, axis=1)
+    out: list[tuple[dict[str, Any] | None, float]] = []
+    for i in range(n):
+        s = float(sims[i, best_j[i]])
+        out.append((None, -1.0) if s == float("-inf") else (pool[int(best_j[i])], s))
+    return out
+
+
+def _resolution_pool(
+    db: StandardDatabase, tenant_id: str, qvecs: list[list[float]], *, use_ann: bool
+) -> list[dict[str, Any]]:
+    """Candidate existing-entity rows to resolve this batch against, in ONE round trip (IN-6).
+    ANN warm → the union of every query vector's top-k nearest (a superset of the old per-entity
+    ANN candidates, so best-match is unchanged); otherwise a single full tenant scan. Any ANN
+    fault falls back to the scan — never breaks ingest."""
+    if use_ann and qvecs:
+        try:
+            bind: dict[str, Any] = {
+                "tenant_id": tenant_id, "qvecs": qvecs,
+                "topk": settings.entity_resolution_top_k,
+            }
+            return list(cast(Cursor, db.aql.execute(_NEAREST_ENTITIES_BATCH, bind_vars=bind)))
+        except Exception as exc:  # noqa: BLE001 — ANN fault → scan, never break ingest
+            logger.warning("entity ANN resolution failed; scanning",
+                           extra={"reason": type(exc).__name__, "detail": str(exc)})
+    return list(cast(Cursor, db.aql.execute(_FETCH_EXISTING, bind_vars={"tenant_id": tenant_id})))
 
 
 def _edge_doc(key: str, from_id: str, to_id: str, now: str, **extra: Any) -> dict[str, Any]:
@@ -482,34 +557,26 @@ def write_entities_many(
             a.rel_sum += mem.source_reliability
             a.mem_refs.append((mem.memory_key, mem.episode_key))
 
-    # 3. resolve distinct entities against existing DB entities (ANN, or one cached scan).
+    # 3. resolve distinct entities against existing DB entities — one candidate-pool fetch +
+    #    one vectorized (numpy) match, instead of a lookup + a Python cosine per entity (IN-6).
+    #    The per-entity ANN query / O(cardinality²) scan loop was the graph-on ingest wall a
+    #    real (high-cardinality) extractor exposed; folding it into a batch keeps it ~O(N·M)
+    #    matmul in C. Belief/corroboration still fold by sum, so the result is unchanged.
     use_ann = ensure_vector_index(
         db, dimensions=embedder.dimensions, n_lists=settings.entity_vector_n_lists,
         train_factor=settings.entity_vector_train_factor, collection="entities",
     )
-    scan_cache: list[dict[str, Any]] | None = None
-
-    def _candidates(qvec: list[float]) -> list[dict[str, Any]]:
-        nonlocal scan_cache
-        if use_ann and qvec:
-            try:
-                bind: dict[str, Any] = {"tenant_id": tenant_id, "qvec": qvec,
-                                        "topk": settings.entity_resolution_top_k}
-                return list(cast(Cursor, db.aql.execute(_NEAREST_ENTITIES, bind_vars=bind)))
-            except Exception as exc:  # noqa: BLE001 — ANN fault → scan, never break ingest
-                logger.warning("entity ANN resolution failed; scanning",
-                               extra={"reason": type(exc).__name__, "detail": str(exc)})
-        if scan_cache is None:
-            scan_cache = list(cast(Cursor, db.aql.execute(
-                _FETCH_EXISTING, bind_vars={"tenant_id": tenant_id})))
-        return scan_cache
+    nls = list(accum.keys())
+    qvecs = [accum[nl].vec for nl in nls]
+    pool = _resolution_pool(db, tenant_id, qvecs, use_ann=use_ann)
+    matches = _best_match_many(qvecs, pool, exclude=nls)
 
     key_by_nl: dict[tuple[str, str], str] = {}
     increments: dict[str, list[float]] = {}  # existing key -> [count, rel_sum]
     own: dict[tuple[str, str], tuple[_EntityAccum, dict[str, Any] | None, bool]] = {}
     detected = 0
-    for nl, a in accum.items():
-        match, sim = _best_match(a.vec, _candidates(a.vec), exclude=nl)
+    for nl, (match, sim) in zip(nls, matches, strict=True):
+        a = accum[nl]
         if match is not None and sim >= settings.entity_merge_threshold:
             key_by_nl[nl] = cast(str, match["key"])
             inc = increments.setdefault(cast(str, match["key"]), [0.0, 0.0])
