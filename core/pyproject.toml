@@ -25,6 +25,7 @@ dependencies = [
     "openai>=1.54.0",
     "anthropic>=0.39.0",
     "tiktoken>=0.8.0",
+    "numpy>=1.26.0",  # vectorized entity resolution on the store path (IN-6)
     "opentelemetry-api>=1.28.0",
     "opentelemetry-sdk>=1.28.0",
     "pyjwt[crypto]>=2.9.0",
