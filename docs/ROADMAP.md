@@ -113,7 +113,7 @@ which is exactly what `multi-session` recall (0.067 on LongMemEval) needs.
 | 4 | IN-4 | Metadata-as-fields (dates) surfaced at assembly | recovers the date-noise recall regression | S |
 | 5 | IN-5 | Re-run stratified LongMemEval with the graph ON | harness ✅; substrate-only **0.411** recorded; graph-on run confounded by `fake` extractor → **HX-1b** | — |
 | 6 | HX-1b | Legitimate graph-on LongMemEval (real extractor + reranker) | the *real* product number → DESIGN §23 + README | S |
-| 7 | IN-6 | Batch entity resolution (the read loop IN-2 left unbatched) | graph-on ingest minutes→seconds; unblocks haiku rung + prod graph | M |
+| 7 | IN-6 | Batch entity resolution (the read loop IN-2 left unbatched) ✅ | graph-on ingest minutes→seconds; unblocks haiku rung + prod graph | M |
 
 **Recommended sequence: IN-1 → IN-3 → IN-2 → IN-4 → IN-5 → HX-1b.** IN-1 removes the reason
 `extract=False` exists; IN-3 is small and lifts graph quality; IN-2 makes the graph affordable
@@ -244,7 +244,15 @@ and the clearest signal of whether the graph earns its cost here.
 **Success.** A recorded, un-confounded graph-on table + a one-line verdict: does the real entity
 graph raise LongMemEval accuracy over the fusion substrate, and on which question-types.
 
-### IN-6 — Batch entity resolution (the unbatched read loop IN-2 left behind)
+### IN-6 — Batch entity resolution (the unbatched read loop IN-2 left behind)  ✅ (#208)
+
+**Done (2026-08-14).** Shipped in [#208](https://github.com/mikefons/arango-agentic-memory/pull/208):
+resolution now folds into the batch — one candidate-pool fetch (`_resolution_pool`: a single
+batched-ANN AQL over all query vectors, or one full scan) + one numpy matmul (`_best_match_many`)
+for the whole batch, replacing the per-entity ANN query / O(cardinality²) Python cosine. Belief
+folds by sum so batched == per-item (proven by the existing `test_write_entities_many` equality
+harness in CI, plus a new pure-function `test_best_match_many`). numpy promoted to a core dep.
+Speeds up *future* graph-on runs only — an in-flight run on the old code is unaffected.
 
 **Problem — found during the HX-1b spacy run.** With a real extractor, graph-on ingestion is back
 near the pre-IN wall: **~7.5 min/question** (≈11 h for the stratified-90, local ArangoDB, CPU-bound).
