@@ -1,7 +1,7 @@
 # ArangoDB Agentic Memory System — Design Specification
 
 > **Status:** ✅ **v1 build sequence complete (Steps 0–7).** v2: all §21 adapters shipped (MCP, LangChain/LangGraph, CrewAI) + full §19 entity API + **Step 3e heavy extraction tier done**, hardened into a deployable service. Authoritative reference.
-> **Last updated:** 2026-07-21 (rev 87 — SC-1d proven: profiler re-run shows retrieve p50 flat ~685ms across 500→3000 (was 798→5080ms); both arms bounded, single-large-tenant wall closed; §23)
+> **Last updated:** 2026-08-13 (rev 88 — LongMemEval first scored run: substrate-only (graph OFF) stratified-90 = **0.411** overall; graph-on deferred to a real extractor (fake-extractor run is a confound); HX-1b; §23)
 >
 > The **rev-by-rev build log** lives in [`HISTORY.md`](HISTORY.md); user-visible changes are in
 > [`CHANGELOG.md`](../CHANGELOG.md); the doc map is [`docs/README.md`](README.md). This file is
@@ -1033,9 +1033,35 @@ Reports QA accuracy only (LongMemEval scores answers, not evidence) — a caveat
 number partly reflects the answerer/judge model, so report the model + keep retrieval recall
 (LoCoMo/MuSiQue) as the companion metric that isolates the memory layer's contribution.
 
-**Status:** harness built + CI-gated keyless; the scored run is a bring-your-own dataset run
-(pending). Run: `make longmemeval LME_DATASET=lme.json MODE=lite RERANK=--rerank` after
-`longmemeval_convert`. Record the accuracy table here when the run lands (HX-1 in ROADMAP).
+**Status:** harness built + CI-gated keyless; first scored run landed (bring-your-own dataset).
+Run: `make longmemeval LME_DATASET=lme.json MODE=lite RERANK=--rerank` after `longmemeval_convert`.
+
+**First scored run — substrate-only (rev 88).** Stratified-90 slice (15 per question-type),
+`--mode lite --k 10`, real `openai` embeddings + `anthropic` answerer/judge, **entity graph OFF**
+(the fusion substrate: BM25 + vector, no extraction):
+
+| question-type | accuracy | n |
+|---|---|---|
+| **overall** | **0.411** | 90 |
+| single-session-assistant | 0.800 | 15 |
+| knowledge-update | 0.533 | 15 |
+| temporal-reasoning | 0.533 | 15 |
+| single-session-user | 0.467 | 15 |
+| multi-session | 0.067 | 15 |
+| single-session-preference | 0.067 | 15 |
+
+This is the honest **retrieval-substrate** number — what fusion retrieval alone answers, no graph.
+`multi-session` (cross-session fact-linking) and `single-session-preference` are the weak axes, and
+`multi-session` is exactly where a *real* entity graph should earn its keep. A `--extract` (graph-on)
+run is **not** recorded here: the only graph-on run so far used the default `EXTRACTION_PROVIDER=fake`
+(every capitalized span → a `Concept` node), which injects a junk graph and *lowers* accuracy to 0.367
+— a confound, not a measurement. A legitimate graph-on test needs a real extractor (`spacy`/`gliner`/
+`haiku`); tracked as **HX-1b in ROADMAP**.
+
+A caveat on the absolute number (above): it partly reflects the answerer/judge model, so it's reported
+with the model and paired with retrieval recall (LoCoMo/MuSiQue) as the metric that isolates the memory
+layer. `--rerank` was a no-op in this run (`RERANKER_PROVIDER` defaulted to `fake`); a real-reranker
+pass is part of HX-1b.
 
 ### Recall vs corpus size — the fusion-holds curve (HX-2)
 

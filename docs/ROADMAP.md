@@ -111,11 +111,14 @@ which is exactly what `multi-session` recall (0.067 on LongMemEval) needs.
 | 2 | IN-2 | Batched graph pass (Phase 2) + memoized index probe | graph ON at benchmark scale | M |
 | 3 | IN-3 | Cap co-occurrence fan-out | speed **+ graph quality** (revisit `RRF_GRAPH_WEIGHT`) | S |
 | 4 | IN-4 | Metadata-as-fields (dates) surfaced at assembly | recovers the date-noise recall regression | S |
-| 5 | IN-5 | Re-run stratified LongMemEval with the graph ON | the *real* number → DESIGN §23 + README | — |
+| 5 | IN-5 | Re-run stratified LongMemEval with the graph ON | harness ✅; substrate-only **0.411** recorded; graph-on run confounded by `fake` extractor → **HX-1b** | — |
+| 6 | HX-1b | Legitimate graph-on LongMemEval (real extractor + reranker) | the *real* product number → DESIGN §23 + README | S |
 
-**Recommended sequence: IN-1 → IN-3 → IN-2 → IN-4 → IN-5.** IN-1 removes the reason
+**Recommended sequence: IN-1 → IN-3 → IN-2 → IN-4 → IN-5 → HX-1b.** IN-1 removes the reason
 `extract=False` exists; IN-3 is small and lifts graph quality; IN-2 makes the graph affordable
-at scale; IN-4 fixes the date-encoding regression; IN-5 produces the number worth publishing.
+at scale; IN-4 fixes the date-encoding regression; IN-5 wired + ran it (substrate-only 0.411 recorded,
+but the graph-on run was confounded by the `fake` extractor); **HX-1b** produces the real graph-on
+number worth publishing, with a real extractor + reranker.
 
 ### IN-1 — `store_many()` bulk record path
 
@@ -188,12 +191,42 @@ converter sets the field instead of mangling the text.
 `eval/longmemeval_convert.py`, tests, DESIGN §9.
 **Acceptance.** Temporal keeps its gain; single-session-user recovers; dates visible in context.
 
-### IN-5 — Re-run LongMemEval with the graph ON
+### IN-5 — Re-run LongMemEval with the graph ON  ✅ (harness) / ⚠️ result confounded
 
 After IN-1..4, re-run the stratified-90 with `extract=True` (now affordable) and record the
 per-type table in DESIGN §23 + a README callout — the number that reflects the *product*, not
 the substrate. Compare graph-on vs graph-off to quantify what supersession/entities buy on
 `knowledge-update` and `multi-session`.
+
+**Outcome (2026-08-13).** Harness wiring shipped (`store_many(extract=True)`, batched graph pass).
+The substrate-only number is recorded: **0.411** overall (DESIGN §23). The graph-**on** run,
+however, is **not** a valid measurement: `EXTRACTION_PROVIDER` defaulted to `fake`, so `--extract`
+built the graph with the FakeExtractor (every capitalized span → a `Concept` node). That junk graph
+*lowered* accuracy to 0.367 — a confound, not the product number. The real graph-on test moves to
+**HX-1b** (needs a real extractor). IN-5's affordability + wiring goal is done; the measurement isn't.
+
+### HX-1b — Legitimate graph-on LongMemEval (real extractor + real reranker)
+
+**Why.** The graph-on number is the one that reflects the *product* (entities + supersession +
+belief), but it can only be measured with a **real** extractor. The IN-5 run used the default
+`fake` extractor and is meaningless; the substrate-only 0.411 is the current honest headline.
+
+**Plan.**
+1. Set a real `EXTRACTION_PROVIDER`. Recommended ladder: **`spacy`** first (local, ~ms/turn, real
+   typed NER — cheap, needs the `extraction` extra), then **`haiku`** for the headline if spacy shows
+   lift (LLM extraction is per-memory: ~550×90 ≈ 50k calls → slow + real $). Note the batched graph
+   pass (IN-2) bulk-ed the *DB round-trips*, not the LLM extraction calls — so haiku is still costly.
+2. Also set `RERANKER_PROVIDER=local` (+ the `rerank` extra) so `--rerank` is real — it was a no-op
+   `fake` reranker in the IN-5 run, so neither recorded number reflects the reranker.
+3. Re-run the stratified-90 (`--mode lite --k 10 --rerank --extract`) and record graph-on vs the
+   0.411 graph-off baseline in DESIGN §23 + a README callout.
+
+**Watch.** `multi-session` (0.067) and `knowledge-update` (0.533) — cross-session fact-linking and
+supersession are exactly what the entity graph is meant to buy; `multi-session` is the biggest gap
+and the clearest signal of whether the graph earns its cost here.
+
+**Success.** A recorded, un-confounded graph-on table + a one-line verdict: does the real entity
+graph raise LongMemEval accuracy over the fusion substrate, and on which question-types.
 
 ---
 
