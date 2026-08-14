@@ -114,6 +114,7 @@ which is exactly what `multi-session` recall (0.067 on LongMemEval) needs.
 | 5 | IN-5 | Re-run stratified LongMemEval with the graph ON | harness ✅; substrate-only **0.411** recorded; graph-on run confounded by `fake` extractor → **HX-1b** | — |
 | 6 | HX-1b | Legitimate graph-on LongMemEval (real extractor + reranker) ✅ | **0.522 vs 0.411 substrate (+0.111)**; multi-session 0.067→0.267; every type up | S |
 | 7 | IN-6 | Batch entity resolution (the read loop IN-2 left unbatched) ✅ | graph-on ingest minutes→seconds; unblocks haiku rung + prod graph | M |
+| 8 | HX-1c | Isolate graph vs reranker (graph-OFF + real reranker run) | attributes the HX-1b +0.111 across the two levers | S |
 
 **Recommended sequence: IN-1 → IN-3 → IN-2 → IN-4 → IN-5 → HX-1b.** IN-1 removes the reason
 `extract=False` exists; IN-3 is small and lifts graph quality; IN-2 makes the graph affordable
@@ -251,6 +252,22 @@ and the clearest signal of whether the graph earns its cost here.
 
 **Success.** A recorded, un-confounded graph-on table + a one-line verdict: does the real entity
 graph raise LongMemEval accuracy over the fusion substrate, and on which question-types.
+
+### HX-1c — Isolate graph vs reranker (attribution run)
+
+**Why.** The HX-1b product number (0.522 vs 0.411, +0.111) flips **two** switches at once — the
+entity graph *and* a real reranker (the substrate baseline's `--rerank` was a no-op `fake`). So the
++0.111 is the combined product gain; we can't yet say how much is the graph vs the cross-encoder.
+
+**Plan — one cheap run.** Graph **OFF** + real reranker: `RERANKER_PROVIDER=local`, `--rerank`, **no**
+`--extract`. No extraction means substrate-speed ingestion (minutes, not hours — and IN-6 makes even
+the graph-on rung fast now), so this is a quick add. Same stratified-90 slice/model.
+- reranker-only Δ = (this run) − 0.411 substrate.
+- graph-only Δ ≈ 0.522 product − (this run).
+Record both deltas in DESIGN §23 next to the HX-1b table.
+
+**Success.** A three-row picture — substrate / +reranker / +reranker+graph — that attributes the
++0.111 across the two levers, closing the one open caveat on the HX-1b result.
 
 ### IN-6 — Batch entity resolution (the unbatched read loop IN-2 left behind)  ✅ (#208)
 
