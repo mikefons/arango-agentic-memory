@@ -114,7 +114,7 @@ which is exactly what `multi-session` recall (0.067 on LongMemEval) needs.
 | 5 | IN-5 | Re-run stratified LongMemEval with the graph ON | harness ✅; substrate-only **0.411** recorded; graph-on run confounded by `fake` extractor → **HX-1b** | — |
 | 6 | HX-1b | Legitimate graph-on LongMemEval (real extractor + reranker) ✅ | **0.522 vs 0.411 substrate (+0.111)**; multi-session 0.067→0.267; every type up | S |
 | 7 | IN-6 | Batch entity resolution (the read loop IN-2 left unbatched) ✅ | graph-on ingest minutes→seconds; unblocks haiku rung + prod graph | M |
-| 8 | HX-1c | Isolate graph vs reranker (graph-OFF + real reranker run) | attributes the HX-1b +0.111 across the two levers | S |
+| 8 | HX-1c | Isolate graph vs reranker (graph-OFF + real reranker run) ✅ | split the +0.111: **graph +0.089, reranker +0.022** (0.411→0.433→0.522) | S |
 
 **Recommended sequence: IN-1 → IN-3 → IN-2 → IN-4 → IN-5 → HX-1b.** IN-1 removes the reason
 `extract=False` exists; IN-3 is small and lifts graph quality; IN-2 makes the graph affordable
@@ -253,7 +253,12 @@ and the clearest signal of whether the graph earns its cost here.
 **Success.** A recorded, un-confounded graph-on table + a one-line verdict: does the real entity
 graph raise LongMemEval accuracy over the fusion substrate, and on which question-types.
 
-### HX-1c — Isolate graph vs reranker (attribution run)
+### HX-1c — Isolate graph vs reranker (attribution run)  ✅
+
+**Result (2026-08-14, DESIGN §23).** One graph-OFF + real-reranker run splits the +0.111:
+substrate 0.411 → **+reranker 0.433** → **+graph 0.522**. **The graph is the dominant lever: +0.089
+(~80%) is the entity graph, +0.022 (~20%) is the reranker** — the differentiator does the heavy lifting,
+not the off-the-shelf cross-encoder. (Overall split is robust; per-type n=15 deltas are noisy.)
 
 **Why.** The HX-1b product number (0.522 vs 0.411, +0.111) flips **two** switches at once — the
 entity graph *and* a real reranker (the substrate baseline's `--rerank` was a no-op `fake`). So the

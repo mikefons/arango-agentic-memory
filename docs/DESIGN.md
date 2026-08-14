@@ -1,7 +1,7 @@
 # ArangoDB Agentic Memory System — Design Specification
 
 > **Status:** ✅ **v1 build sequence complete (Steps 0–7).** v2: all §21 adapters shipped (MCP, LangChain/LangGraph, CrewAI) + full §19 entity API + **Step 3e heavy extraction tier done**, hardened into a deployable service. Authoritative reference.
-> **Last updated:** 2026-08-14 (rev 89 — HX-1b: LongMemEval graph-ON + real reranker (spacy) = **0.522** overall vs 0.411 substrate (+0.111); every type up, multi-session 0.067→0.267; §23)
+> **Last updated:** 2026-08-14 (rev 90 — HX-1c attribution: split the +0.111 → graph **+0.089**, reranker **+0.022** (substrate 0.411 → +rerank 0.433 → product 0.522); the entity graph is the dominant lever; §23)
 >
 > The **rev-by-rev build log** lives in [`HISTORY.md`](HISTORY.md); user-visible changes are in
 > [`CHANGELOG.md`](../CHANGELOG.md); the doc map is [`docs/README.md`](README.md). This file is
@@ -1075,12 +1075,26 @@ long-term-memory benchmark. (Contrast the earlier confounded run with the defaul
 which built a junk `Concept`-per-capitalized-span graph and *lowered* accuracy to 0.367 — why HX-1b
 required a real extractor.)
 
-**Two caveats, kept honest.** (1) The absolute number partly reflects the answerer/judge model, so it's
-reported with the model and paired with retrieval recall (LoCoMo/MuSiQue) as the metric that isolates the
-memory layer. (2) The product run flips **two** switches vs the substrate baseline — graph ON *and* a real
-reranker (the substrate run's `--rerank` was a no-op `fake`) — so +0.111 is the combined product gain, not
-graph-alone. A cheap isolation run to split them (graph OFF + real reranker; no `--extract`, so it's
-fast) is the obvious follow-up.
+**Attribution — graph vs reranker (HX-1c, rev 90).** The product run flips two switches vs substrate
+(graph ON *and* a real reranker — the substrate run's `--rerank` was a no-op `fake`). One isolation run —
+graph **OFF** + **real** reranker (`RERANKER_PROVIDER=local`, no `--extract`, fresh DB so no residual
+graph) — splits the +0.111:
+
+| configuration | overall | attribution |
+|---|---|---|
+| substrate — graph OFF, no reranker | 0.411 | — |
+| **+ reranker only** — graph OFF, real reranker | **0.433** | reranker: **+0.022** |
+| **+ reranker + graph** — the product | **0.522** | graph: **+0.089** |
+
+**The entity graph is the dominant lever: ~80% of the +0.111 gain (+0.089) is the graph; ~20% (+0.022)
+is the reranker.** The project's differentiator — the graph + supersession — does the heavy lifting, not
+an off-the-shelf cross-encoder. (Per-type numbers at n=15 are noisy — the non-deterministic answerer/judge
+moves a category by ±1–2 questions = ±0.07–0.13 — so read the *overall* three-row split as the robust
+result, not per-type deltas; e.g. reranker-only `multi-session` reads 0.400 vs product 0.267, a small-n
+artifact, not a real inversion.)
+
+A remaining caveat: the absolute number partly reflects the answerer/judge model, so it's reported with the
+model and paired with retrieval recall (LoCoMo/MuSiQue) as the metric that isolates the memory layer.
 
 ### Recall vs corpus size — the fusion-holds curve (HX-2)
 
