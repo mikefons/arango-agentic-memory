@@ -221,6 +221,21 @@ belief), but it can only be measured with a **real** extractor. The IN-5 run use
 3. Re-run the stratified-90 (`--mode lite --k 10 --rerank --extract`) and record graph-on vs the
    0.411 graph-off baseline in DESIGN §23 + a README callout.
 
+**Run (spacy rung — wired).**
+```bash
+cd core
+# 1. install the lightweight spacy-only extractor extra + its NER model (one-time)
+uv sync --extra dev --extra extraction-spacy --extra rerank
+make spacy-model                       # python -m spacy download en_core_web_sm
+# 2. real providers for the graph + the real reranker (in core/.env or the shell)
+#    EXTRACTION_PROVIDER=spacy   RERANKER_PROVIDER=local
+#    EMBEDDING_PROVIDER=openai   GENERATION_PROVIDER=anthropic   (+ keys)
+# 3. convert the stratified-90 (skip if lme.json already exists) and run graph-ON
+uv run --no-sync python -m arango_memory.eval.longmemeval_convert longmemeval_s.json lme.json --stratified --limit 90
+make longmemeval LME_DATASET=lme.json MODE=lite K=10 RERANK=--rerank EXTRACT=--extract
+```
+The `haiku` rung is the same run with `EXTRACTION_PROVIDER=haiku` (no model download; costs $ + time).
+
 **Watch.** `multi-session` (0.067) and `knowledge-update` (0.533) — cross-session fact-linking and
 supersession are exactly what the entity graph is meant to buy; `multi-session` is the biggest gap
 and the clearest signal of whether the graph earns its cost here.
