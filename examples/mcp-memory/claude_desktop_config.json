@@ -1,0 +1,21 @@
+{
+  "//": "Paste this into Claude Desktop's config (Settings → Developer → Edit Config, or ~/Library/Application Support/Claude/claude_desktop_config.json on macOS), then fully quit and reopen Claude Desktop. The 'arango-memory' tools appear under the 🔌 icon.",
+  "//2": "This runs the server from a local checkout via uv. Replace ABS/PATH/TO with the absolute path to this repo. If you've pip-installed arango-memory instead, use command: 'python', args: ['-m','arango_memory.mcp'].",
+  "//3": "The server is a thin stdio→HTTP wrapper, so a core must be running (docker compose up). Point at it with ARANGO_MEMORY_CORE_URL; set ARANGO_MEMORY_API_KEY only if the core enforces auth.",
+  "mcpServers": {
+    "arango-memory": {
+      "command": "uv",
+      "args": [
+        "run",
+        "--project",
+        "ABS/PATH/TO/arango-agentic-memory/core",
+        "python",
+        "-m",
+        "arango_memory.mcp"
+      ],
+      "env": {
+        "ARANGO_MEMORY_CORE_URL": "http://localhost:8080"
+      }
+    }
+  }
+}

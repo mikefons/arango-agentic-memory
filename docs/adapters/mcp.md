@@ -5,6 +5,10 @@ server that exposes the core's `/v1` HTTP API as 11 tools, so MCP clients (Claud
 Desktop, Cursor, Windsurf) get agentic memory — including multi-agent handoff — without
 writing code.
 
+> **Worked example:** [`examples/mcp-memory/`](../../examples/mcp-memory/) — a runnable demo
+> (headless `scenario.py` + Claude Desktop / Cursor configs) showing persistent memory recalled
+> across separate sessions.
+
 ## Install & run
 ```bash
 pip install "arango-memory[mcp]"

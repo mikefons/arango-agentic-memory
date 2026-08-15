@@ -86,3 +86,33 @@ async def test_server_registers_expected_tools() -> None:
         "store", "search", "prime", "flush", "record_step", "list_steps", "forget",
         "stats", "get_entity", "list_entities", "seed",
     }
+
+
+def test_personal_assistant_recall_across_sessions(api: TestClient) -> None:
+    """Smoke-guards the `examples/mcp-memory` scenario: facts stored in one 'session' are
+    recalled in another over the memory backend (persistence). Uses the same store→search tool
+    path the MCP server exposes. The example's live demo uses natural-language queries + real
+    embeddings; here the queries share a keyword so retrieval is deterministic under the keyless
+    FakeEmbedder (BM25 carries it)."""
+    tenant = "mcp-demo"
+    facts = [
+        "I'm allergic to shellfish.",
+        "My sister Mira is visiting next week.",
+        "I moved from Munich to Berlin in March.",
+    ]
+    for fact in facts:
+        tools.store_memory(api, content=fact, tenant_id=tenant, agent_id="assistant")
+
+    def recall(query: str) -> list[dict[str, object]]:
+        for _ in range(20):
+            hits = tools.search_memory(
+                api, query=query, tenant_id=tenant, agent_id="assistant"
+            )["hits"]
+            if hits:
+                return hits  # type: ignore[no-any-return]
+            time.sleep(0.25)
+        return []
+
+    assert any("shellfish" in h["text"] for h in recall("shellfish allergy"))
+    assert any("Mira" in h["text"] for h in recall("who is Mira"))
+    assert any("Berlin" in h["text"] for h in recall("Berlin move"))
