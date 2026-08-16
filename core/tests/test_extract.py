@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 from arango_memory.config import Settings
+from arango_memory.generation import FakeGenerator
 from arango_memory.ingest.extract import (
     ExtractedEntity,
     FakeExtractor,
+    HaikuExtractor,
     cooccurring_pairs,
     get_extractor,
 )
@@ -40,3 +42,27 @@ def test_cooccurring_pairs_cap_bounds_dense_turns() -> None:
 
 def test_get_extractor_fake_from_config() -> None:
     assert get_extractor(Settings(extraction_provider="fake")).name == "fake-caps"
+
+
+def test_haiku_extractor_caches_per_text(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    # IN-7: the cache is a per-text dict (not a single slot) so `extract` + `extract_relations`
+    # for one memory share ONE (paid) LLM call, and an earlier text stays cached when a later
+    # one is processed — the property that keeps concurrent extraction from doubling calls.
+    calls: list[str] = []
+
+    def handler(prompt: str, system: str | None) -> str:
+        calls.append(prompt)
+        return '{"entities": [{"name": "Mira", "label": "Person"}], "relations": []}'
+
+    ex = HaikuExtractor(generator=FakeGenerator(handler=handler))
+
+    ents = ex.extract("Mira is my sister")
+    ex.extract_relations("Mira is my sister", ents)  # same text → cache hit, no 2nd call
+    assert [e.name for e in ents] == ["Mira"]
+    assert len(calls) == 1
+
+    ex.extract("I moved to Berlin")                  # new text → 2nd call
+    assert len(calls) == 2
+
+    ex.extract("Mira is my sister")                  # first text still cached (dict, not a slot)
+    assert len(calls) == 2
