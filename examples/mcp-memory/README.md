@@ -30,10 +30,23 @@ For a real semantic demo, give the core real embeddings (`EMBEDDING_PROVIDER=ope
 `OPENAI_API_KEY` in `core/.env`). The recall queries share no keywords with the facts, so
 retrieval has to match by *meaning* — that needs real embeddings.
 
-**2. Run the scenario** (from this directory):
+**2. Install `arango-memory` locally** (into a venv). `scenario.py` is an MCP *client* that
+**spawns a local `python -m arango_memory.mcp` server process** (see the diagram below), so the
+package must be importable in the environment that runs the script — even though the core itself
+runs in Docker:
 
 ```bash
-python scenario.py
+# from the repo root
+python -m venv .venv && source .venv/bin/activate
+pip install -e "./core[mcp]"          # brings in mcp + httpx too
+# (or, with uv:  uv sync --project core --extra mcp)
+```
+
+**3. Run the scenario** (from this directory, with that env active):
+
+```bash
+python scenario.py                    # talks to the core at http://localhost:8080
+# point elsewhere:  ARANGO_MEMORY_CORE_URL=http://host:8080 python scenario.py
 ```
 
 It drives the **real MCP server over stdio** — the same way Claude Desktop does — as two separate
@@ -103,3 +116,7 @@ so the example can't rot.
   deleted. (Explicit bi-temporal `Supersedes` edges + Dream State consolidation are a core
   feature — see DESIGN §13 — but aren't exposed as an MCP tool.)
 - **Auth.** The core runs open by default; set `ARANGO_MEMORY_API_KEY` only if you've enabled it.
+- **Troubleshooting.** `ModuleNotFoundError: mcp` / `httpx` / `arango_memory` → step 2 was skipped
+  or the wrong environment is active (the script and the server subprocess it spawns both need
+  `arango-memory[mcp]`). `✗ core not reachable` → the core from step 1 isn't up, or
+  `ARANGO_MEMORY_CORE_URL` points at the wrong host.
