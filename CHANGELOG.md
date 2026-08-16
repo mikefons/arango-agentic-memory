@@ -160,5 +160,8 @@ it has not yet been tagged or published to a registry.
 - Memory Dungeon — the `talk` tool's memory writes are parallelized and batched: an NPC's
   testimony is enqueued concurrently and all claim subjects are minted in one `/v1/seed` call
   (was a serial store→seed round trip per claim), so the turn no longer blocks on ~2N core hops.
+- Reference agent (`examples/vercel-agent`) — reviewed for the same batching/parallelism and
+  intentionally left unchanged: a minimal single-turn loop with no per-item fan-out, and its two
+  demo turns are sequential by design (turn 2 recalls turn 1's memory).
 
 [Unreleased]: https://github.com/mikefons/arango-agentic-memory/commits/main
