@@ -167,4 +167,12 @@ it has not yet been tagged or published to a registry.
   per-tool calls would misrepresent how MCP hosts drive tools (one at a time per turn) and gain
   little (stores are queued; the flush dominates), and the linear flow is clearer for a teaching demo.
 
+### Fixed — examples
+
+- MCP memory (`examples/mcp-memory`) — the demo now recalls reliably on a **cold core** (fresh
+  tenant, `vector: deferred`, BM25-only retrieval). Each recall query carries a light lexical anchor
+  that also appears in its target memory (`allergic`, `Mira`, `Munich`), so BM25 alone surfaces the
+  right memory even before the vector index trains; real embeddings add semantic matching on top.
+  Verified 3/3 against a genuinely cold DB (was 2/3, missing the one pure-semantic query).
+
 [Unreleased]: https://github.com/mikefons/arango-agentic-memory/commits/main
