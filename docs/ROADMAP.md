@@ -1046,6 +1046,61 @@ byte-identical to today; docs explain the tuning. Size S.
 
 ---
 
+## OBS — Obsidian adapter (the vault as a memory surface)
+
+**Why.** Obsidian users already hand-build a personal knowledge graph: notes are nodes,
+`[[wikilinks]]` are edges. That is *exactly* the shape this core produces automatically
+(memories → entities → typed relations). An Obsidian adapter closes the loop both ways — a
+vault becomes durable agentic memory, and the agent's memory becomes browsable in Obsidian's
+native graph view. It's also the first adapter aimed at an **end user's** knowledge base rather
+than an agent framework (Vercel/MCP/LangChain/CrewAI), widening who the core is for. The core
+API is adapter-neutral, so this is additive — no core changes required for the MVP.
+
+Phased, each independently shippable:
+
+### OBS-1 — Vault → memory ingestion (markdown + wikilinks → graph)
+
+**Scope.** A markdown ingestion path that maps a vault onto the core cleanly:
+- Each note (or heading-delimited block) → a memory via `/v1/store`; note path/title + frontmatter
+  → provenance/metadata; `tenant_id` = vault (per-vault brain).
+- `[[wikilinks]]` and `#tags` → **explicit entity relations** (not just co-occurrence) — the link
+  graph the user already curated becomes first-class edges, so the graph arm starts strong.
+- Frontmatter dates (`created`/`modified`) → `event_time` / `valid_time` (bi-temporal, IN-4).
+- Idempotent + incremental: re-ingest only changed notes (hash/mtime), so a vault re-sync is
+  cheap and safe (matches the idempotency-key store path).
+
+**Files.** A converter/importer (`core/src/arango_memory/obsidian/` or an `eval`-style CLI), tests
+on a fixture vault. **Open question to decide first:** core-side importer vs. plugin-side parsing
+(lean plugin-side so the core stays vault-agnostic; the importer is a thin convenience).
+
+### OBS-2 — The Obsidian plugin (`packages/obsidian/`)
+
+**Scope.** A TypeScript community plugin (mirrors `packages/vercel`'s thin-client stance — no
+memory logic, just calls `/v1`). Commands + a settings pane (core URL, API key, tenant):
+- **Ingest vault / changed notes** → memory (OBS-1 path).
+- **Recall**: semantic `/v1/retrieve` over the vault's memory from a command or side panel,
+  insert results at the cursor or open a results view — retrieval that spans what plain search
+  can't (fusion + graph).
+- **Surface the graph** (stretch): render the core's entities/relations back as notes/canvas so
+  Obsidian's graph view visualizes memory the agent added beyond the hand-authored links.
+- Shares the brain with the MCP server (same core, same `tenant_id`): what an agent writes via
+  Claude Desktop shows up in the vault, and vice-versa — the shared-brain story, made tangible.
+
+**Files.** `packages/obsidian/` (plugin manifest + build), a typed core client (reuse the pattern
+in `packages/vercel/src`), vitest.
+
+### OBS-3 — Example vault + docs
+
+**Scope.** A small worked example vault under `examples/obsidian-memory/` + a README (ingest →
+recall storyboard, à la `examples/mcp-memory`), `docs/adapters/obsidian.md`, and links from the
+top-level README adapter list. CI smoke on the OBS-1 ingestion against the fixture vault (keyless).
+
+**Success.** Point the plugin at a vault + a running core → notes ingest, `[[links]]` become graph
+edges, and a natural-language recall surfaces the right notes; the agent (via MCP) and the user (via
+Obsidian) read/write one brain. Decide OBS-1's core-vs-plugin split before building.
+
+---
+
 ## Explicitly out of scope (decided, with reasons)
 
 - **Job/task queue semantics** (claim, status, schedule, retry): the orchestrator's job
