@@ -110,12 +110,14 @@ export function makeTools(ctx: Ctx, state: GameState) {
         if (!person) {
           return { ok: false as const, reason: `There is no one called ${npc} in the ${here.name}.` };
         }
-        // Persist each statement as testimony, and mint a claim entity per claim
-        // so a later `confront` has a real key to supersede (best-effort, §15).
-        for (const c of person.claims) {
-          await remember(`${person.name} the ${person.role} claims: ${c.text}`, ctx);
-          await core.seedEntity(c.subject, ctx).catch(() => undefined);
-        }
+        // Persist each statement as testimony, and mint a claim-subject entity so a later
+        // `confront` has a real key to supersede (best-effort, §15). The writes are independent,
+        // so enqueue every testimony concurrently and mint all subjects in ONE seed call, rather
+        // than a serial store→seed round trip per claim (which blocked `talk` on ~2N hops).
+        await Promise.all(
+          person.claims.map((c) => remember(`${person.name} the ${person.role} claims: ${c.text}`, ctx)),
+        );
+        await core.seedEntities([...new Set(person.claims.map((c) => c.subject))], ctx);
         return {
           ok: true as const,
           npc: person.name,
