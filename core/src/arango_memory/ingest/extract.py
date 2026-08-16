@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import json
 import re
+import threading
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
 from typing import Any, Protocol, runtime_checkable
@@ -201,24 +202,32 @@ class HaikuExtractor:
         ]
         self.relation_labels = list(relation_labels) or list(RELATION_LABELS)
         self.max_tokens = max_tokens
-        self._cache: tuple[str, dict[str, Any]] | None = None
+        # Per-text cache so `extract` + `extract_relations` for one memory share a single LLM
+        # call. A dict (not a single slot) + a lock so concurrent extraction (IN-7) can't clobber
+        # one text's result with another's — that would silently double the (paid) LLM calls.
+        self._cache: dict[str, dict[str, Any]] = {}
+        self._lock = threading.Lock()
 
     def _generator(self) -> Any:
-        if self._gen is None:
-            from ..generation import get_generator
+        with self._lock:
+            if self._gen is None:
+                from ..generation import get_generator
 
-            self._gen = get_generator()
-        return self._gen
+                self._gen = get_generator()
+            return self._gen
 
     def _call(self, text: str) -> dict[str, Any]:
-        if self._cache and self._cache[0] == text:
-            return self._cache[1]
+        with self._lock:
+            cached = self._cache.get(text)
+        if cached is not None:
+            return cached
         system = _HAIKU_SYSTEM.format(
             labels=", ".join(self.entity_labels), relations=", ".join(self.relation_labels)
         )
         raw = self._generator().complete(text, system=system, max_tokens=self.max_tokens)
         data = _parse_json_object(raw)
-        self._cache = (text, data)
+        with self._lock:
+            self._cache[text] = data
         return data
 
     def extract(self, text: str) -> list[ExtractedEntity]:

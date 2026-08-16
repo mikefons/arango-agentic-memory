@@ -115,6 +115,8 @@ which is exactly what `multi-session` recall (0.067 on LongMemEval) needs.
 | 6 | HX-1b | Legitimate graph-on LongMemEval (real extractor + reranker) ✅ | **0.522 vs 0.411 substrate (+0.111)**; multi-session 0.067→0.267; every type up | S |
 | 7 | IN-6 | Batch entity resolution (the read loop IN-2 left unbatched) ✅ | graph-on ingest minutes→seconds; unblocks haiku rung + prod graph | M |
 | 8 | HX-1c | Isolate graph vs reranker (graph-OFF + real reranker run) ✅ | split the +0.111: **graph +0.089, reranker +0.022** (0.411→0.433→0.522) | S |
+| 9 | IN-7 | Concurrent per-memory extraction (thread pool) ✅ | LLM-extraction wall gone: haiku ingest overnight→~1h; prod-viable | S |
+| 10 | HX-1d | The haiku extractor rung (does extractor quality beat spaCy 0.522?) | verdict: LLM extraction pays, or spaCy is the default | S |
 
 **Recommended sequence: IN-1 → IN-3 → IN-2 → IN-4 → IN-5 → HX-1b.** IN-1 removes the reason
 `extract=False` exists; IN-3 is small and lifts graph quality; IN-2 makes the graph affordable
@@ -273,6 +275,47 @@ Record both deltas in DESIGN §23 next to the HX-1b table.
 
 **Success.** A three-row picture — substrate / +reranker / +reranker+graph — that attributes the
 +0.111 across the two levers, closing the one open caveat on the HX-1b result.
+
+### IN-7 — Concurrent per-memory extraction  ✅
+
+**Done (2026-08-14).** The batched graph pass (IN-2) bulk-ed the DB round trips, but per-memory
+**extraction** still ran in a sequential loop — the wall for an LLM extractor (`haiku` = one LLM
+call per turn → ~O(turns) blocking calls per question). Extraction is independent per memory, so it
+now runs under a bounded thread pool (`ThreadPoolExecutor`, `EXTRACTION_CONCURRENCY`, default 8);
+`map` preserves order so the downstream accumulation is byte-identical (the IN-2 equality property
+holds — verified by `test_write_entities_many` in CI). `HaikuExtractor`'s cache upgraded to a
+thread-safe per-text dict so concurrent `extract`/`extract_relations` can't clobber and double the
+(paid) LLM calls (`test_extract.py`). Neutral for `fake`/`spaCy` (CPU-bound); collapses wall-time for
+LLM tiers — turns the HX-1d haiku run from an overnight job into ~an hour, and makes `haiku` viable
+in production, not just benchmarks.
+
+**Files.** `core/src/arango_memory/ingest/entities.py` (pooled step 1),
+`core/src/arango_memory/ingest/extract.py` (thread-safe Haiku cache), `core/src/arango_memory/config.py`
+(`extraction_concurrency`), `docs/ops.md`.
+
+### HX-1d — The haiku extractor rung (does extractor quality beat spaCy's 0.522?)
+
+**Why.** spaCy gave the graph +0.089 (→ 0.522). `haiku` extraction is richer — **typed entities +
+typed relations** (spaCy emits none, falling back to co-occurrence) + better entity recall — so a
+higher-quality graph *may* lift the graph-sensitive types further: `knowledge-update` (typed
+conflict/"moved-to" relations feed supersession) and `multi-session` (cleaner cross-session entity
+linking). The rung answers: **does extractor quality justify LLM cost, or is spaCy the default?**
+
+**Cost (why it needs IN-7).** One LLM call per memory: ~49,500 calls on stratified-90. Sequential
+that's ~10–20 h / ~$50–70; with IN-7's concurrency it drops to ~1 h. IN-7 is the prerequisite.
+
+**Plan.**
+1. **Pre-flight:** confirm `HaikuExtractor` routes to a *Haiku-class* model (it uses `get_generator()`
+   — verify it's not the pricier main generation model, or add an extraction-model split), and set
+   a healthy `EXTRACTION_CONCURRENCY` (e.g. 16–32).
+2. Isolated DB (à la HX-1c) + `RERANKER_PROVIDER=local`, stratified-90, `--k 10 --rerank --extract`,
+   `EXTRACTION_PROVIDER=haiku`.
+3. Record haiku-graph-on vs the 0.522 spaCy product number in DESIGN §23; watch `knowledge-update`
+   / `multi-session`.
+
+**Success.** A clear verdict: **types up → extractor quality pays** (make `haiku`/`layered` the
+recommended graph tier); **flat → spaCy is the cost-effective default**, documented as such. Either
+outcome is publishable.
 
 ### IN-6 — Batch entity resolution (the unbatched read loop IN-2 left behind)  ✅ (#208)
 

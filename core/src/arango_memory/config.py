@@ -89,6 +89,10 @@ class Settings(BaseSettings):
     # `extraction` extra), "gliner" (GLiNER NER + GLiREL typed relations, torch),
     # "haiku" (LLM via the generator), "layered" (spaCy→GLiNER→Haiku chain).
     extraction_provider: Literal["fake", "spacy", "gliner", "haiku", "layered"] = "fake"
+    # Per-memory extraction in the batched graph pass runs under a bounded thread pool (IN-7):
+    # independent LLM/NER calls, so concurrency collapses the wall for an I/O-bound extractor
+    # (haiku = one LLM call per turn). Helps LLM tiers most; neutral for fake/spaCy.
+    extraction_concurrency: int = Field(default=8, ge=1)
     spacy_model: str = "en_core_web_sm"
     gliner_model: str = "urchade/gliner_mediumv2.1"
     # Candidate entity labels GLiNER scores against, and the relation labels

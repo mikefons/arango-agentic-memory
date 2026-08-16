@@ -20,6 +20,7 @@ full scan (fine at small N). The merge/flag decision itself is unchanged.
 from __future__ import annotations
 
 import math
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from typing import Any, cast
 
@@ -531,14 +532,21 @@ def write_entities_many(
     base = settings.corroboration_base
     result: dict[str, list[str]] = {mem.memory_key: [] for mem in memories}
 
-    # 1. extract per memory (model calls are inherent; DB round trips are what we batch).
-    per_mem: list[_PerMem] = []
-    for mem in memories:
+    # 1. extract per memory. The model calls are inherent, but they're independent per memory,
+    #    so run them under a bounded thread pool (IN-7) — the sequential loop was the graph-on
+    #    wall for an I/O-bound extractor (haiku: one LLM call per turn, ~O(turns) round trips).
+    #    `map` preserves order, so the downstream accumulation is byte-identical to the loop.
+    def _extract_one(mem: GraphMemory) -> _PerMem:
         ents = extractor.extract(mem.content)
-        per_mem.append(
-            (mem, ents, extractor.extract_relations(mem.content, ents),
-             parse_explicit_time(mem.content))
-        )
+        return (mem, ents, extractor.extract_relations(mem.content, ents),
+                parse_explicit_time(mem.content))
+
+    workers = min(settings.extraction_concurrency, len(memories))
+    if workers <= 1:
+        per_mem = [_extract_one(mem) for mem in memories]
+    else:
+        with ThreadPoolExecutor(max_workers=workers) as executor:
+            per_mem = list(executor.map(_extract_one, memories))
 
     names = [e.name for _, ents, _, _ in per_mem for e in ents]
     if not names:
