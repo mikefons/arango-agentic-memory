@@ -147,4 +147,15 @@ it has not yet been tagged or published to a registry.
 - **`workflow` → `5.0.0-beta.42`** in the Diligence Room example (was `beta.37`) — newest v5 beta;
   `next build` + typecheck + tests verified.
 
+### Changed — examples
+
+- **Diligence Room — "why shared memory" spotlight.** The memo's closing takeaway (the point of the
+  demo) is rebuilt from a flat list into a card grid that separates each capability's **value**
+  (why, always shown) from its **mechanism** (how — `read_agent_ids`/`/v1/flush`,
+  `valid_time`/`Supersedes`, corroboration-weighted belief, source provenance — behind a "How it
+  works" disclosure), plus a compact "Why this worked" teaser pinned to the War Room. The verdict,
+  Risks, and Strengths are unchanged.
+- Diligence Room — per-document claim extraction within a specialist now runs concurrently
+  (bounded, `DILIGENCE_EXTRACT_CONCURRENCY`), cutting a live run's slow phase.
+
 [Unreleased]: https://github.com/mikefons/arango-agentic-memory/commits/main
