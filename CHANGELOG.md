@@ -163,5 +163,8 @@ it has not yet been tagged or published to a registry.
 - Reference agent (`examples/vercel-agent`) — reviewed for the same batching/parallelism and
   intentionally left unchanged: a minimal single-turn loop with no per-item fan-out, and its two
   demo turns are sequential by design (turn 2 recalls turn 1's memory).
+- MCP memory (`examples/mcp-memory`) — reviewed and intentionally left sequential: parallelizing its
+  per-tool calls would misrepresent how MCP hosts drive tools (one at a time per turn) and gain
+  little (stores are queued; the flush dominates), and the linear flow is clearer for a teaching demo.
 
 [Unreleased]: https://github.com/mikefons/arango-agentic-memory/commits/main
