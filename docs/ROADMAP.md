@@ -293,6 +293,24 @@ in production, not just benchmarks.
 `core/src/arango_memory/ingest/extract.py` (thread-safe Haiku cache), `core/src/arango_memory/config.py`
 (`extraction_concurrency`), `docs/ops.md`.
 
+### Examples — concurrency review  ✅ (complete)
+
+**Done (2026-08).** Swept every example for the app-level version of the IN-6/IN-7 lesson
+(independent per-item core calls run in a sequential loop). The core-side batching (`store_many`)
+isn't reachable from the examples — they all write via single `/v1/store` — so the lever is
+client-side parallelism/batching. Outcome per example:
+
+- **`examples/diligence-room`** ✅ changed (#216) — per-document claim extraction within a specialist
+  now runs under a bounded, order-preserving `mapLimit` (`DILIGENCE_EXTRACT_CONCURRENCY`).
+- **`examples/dungeon`** ✅ changed (#221) — the `talk` tool's per-claim writes are parallelized and
+  the entity seeds batched into one `/v1/seed` (~2N core hops → ~2).
+- **`examples/vercel-agent`** — reviewed, **left unchanged**: a minimal single-turn reference with no
+  per-item fan-out; its two demo turns are sequential by design (turn 2 recalls turn 1).
+- **`examples/mcp-memory`** — reviewed, **left sequential**: parallelizing per-tool calls would
+  misrepresent how MCP hosts drive tools (one at a time per turn) and gain little (flush-dominated).
+
+No further work scheduled; the sweep is closed. (All four outcomes recorded in CHANGELOG.)
+
 ### HX-1d — The haiku extractor rung (does extractor quality beat spaCy's 0.522?)
 
 **Why.** spaCy gave the graph +0.089 (→ 0.522). `haiku` extraction is richer — **typed entities +
