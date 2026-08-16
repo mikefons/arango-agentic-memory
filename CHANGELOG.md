@@ -157,5 +157,8 @@ it has not yet been tagged or published to a registry.
   Risks, and Strengths are unchanged.
 - Diligence Room — per-document claim extraction within a specialist now runs concurrently
   (bounded, `DILIGENCE_EXTRACT_CONCURRENCY`), cutting a live run's slow phase.
+- Memory Dungeon — the `talk` tool's memory writes are parallelized and batched: an NPC's
+  testimony is enqueued concurrently and all claim subjects are minted in one `/v1/seed` call
+  (was a serial store→seed round trip per claim), so the turn no longer blocks on ~2N core hops.
 
 [Unreleased]: https://github.com/mikefons/arango-agentic-memory/commits/main
