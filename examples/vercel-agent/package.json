@@ -10,7 +10,7 @@
   "dependencies": {
     "@ai-sdk/anthropic": "^2.0.0",
     "@arango-memory/vercel": "file:../../packages/vercel",
-    "ai": "^5.0.0",
+    "ai": "^5.0.237",
     "zod": "^3.23.0"
   },
   "devDependencies": {
