@@ -2,11 +2,12 @@ import { describe, expect, it } from "vitest";
 import { PANEL_CAPTIONS, WHY_SHARED_MEMORY } from "../lib/callouts";
 
 describe("WHY_SHARED_MEMORY", () => {
-  it("lists the memory capabilities, each with a title and a blurb", () => {
+  it("lists the memory capabilities, each with a title, a why (value) and a how (mechanism)", () => {
     expect(WHY_SHARED_MEMORY.length).toBeGreaterThanOrEqual(3);
     for (const c of WHY_SHARED_MEMORY) {
       expect(c.title.length).toBeGreaterThan(0);
-      expect(c.blurb.length).toBeGreaterThan(20);
+      expect(c.why.length).toBeGreaterThan(20);
+      expect(c.how.length).toBeGreaterThan(20);
     }
   });
 
