@@ -3,7 +3,7 @@
 import { useState } from "react";
 import type { Memo } from "@/lib/agents/synthesis";
 import { RECOMMENDATION, findingTally, memoFilename, memoToMarkdown } from "@/lib/memo-export";
-import { WHY_SHARED_MEMORY } from "@/lib/callouts";
+import { Takeaway } from "@/components/WhySharedMemory";
 
 /**
  * The investment memo (DR-3e) — the deliverable. A slide-over that shows the recommendation,
@@ -66,17 +66,7 @@ export function MemoPanel({ memo, onClose }: { memo: Memo; onClose: () => void }
         <Section title="Risks" kind="risk" memo={memo} />
         <Section title="Strengths" kind="strength" memo={memo} />
 
-        <section className="why">
-          <h3 className="why-title">Why this needed shared memory</h3>
-          <ul className="why-list">
-            {WHY_SHARED_MEMORY.map((c) => (
-              <li key={c.title} className="why-item">
-                <span className="why-item-title">{c.title}</span>
-                <span className="why-item-blurb">{c.blurb}</span>
-              </li>
-            ))}
-          </ul>
-        </section>
+        <Takeaway />
       </aside>
     </div>
   );

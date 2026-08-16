@@ -791,43 +791,146 @@ body {
   background: var(--accent);
 }
 
-/* ── "Why this needed shared memory" (DR-3g closing argument) ── */
-.why {
-  margin-top: 1.6rem;
-  padding-top: 1.1rem;
+/* ── "Why this needed shared memory" — the takeaway spotlight (DR-3g closing argument) ── */
+.takeaway {
+  margin-top: 1.8rem;
+  padding: 1.2rem 1.1rem 1.15rem;
+  border-radius: 12px;
+  border: 1px solid color-mix(in srgb, var(--accent) 30%, var(--line));
+  background:
+    radial-gradient(130% 100% at 0% 0%, color-mix(in srgb, var(--accent) 11%, transparent), transparent 62%),
+    var(--panel-2);
+}
+.takeaway-title {
+  font-size: 0.92rem;
+  font-weight: 700;
+  color: var(--fg);
+  margin: 0 0 0.3rem;
+}
+.takeaway-lede {
+  font-size: 0.8rem;
+  line-height: 1.5;
+  color: var(--muted);
+  margin: 0 0 0.95rem;
+}
+.takeaway-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.7rem;
+}
+.cap-card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  padding: 0.75rem 0.8rem;
+  border-radius: 9px;
+  border: 1px solid var(--line);
+  background: var(--panel);
+}
+.cap-title {
+  margin: 0;
+  font-size: 0.82rem;
+  font-weight: 650;
+  color: var(--fg);
+}
+.cap-why {
+  margin: 0;
+  font-size: 0.76rem;
+  line-height: 1.5;
+  color: var(--muted);
+}
+.cap-how {
+  margin-top: 0.1rem;
+  padding-top: 0.45rem;
   border-top: 1px solid var(--line);
 }
-.why-title {
-  font-size: 0.72rem;
-  letter-spacing: 0.14em;
+.cap-how-summary {
+  cursor: pointer;
+  list-style: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.67rem;
+  letter-spacing: 0.09em;
   text-transform: uppercase;
   font-family: ui-monospace, Menlo, monospace;
   color: var(--accent);
-  margin: 0 0 0.7rem;
 }
-.why-list {
+.cap-how-summary::-webkit-details-marker {
+  display: none;
+}
+.cap-how-summary::before {
+  content: "▸";
+  font-size: 0.7rem;
+  transition: transform 0.15s ease;
+}
+.cap-how[open] .cap-how-summary::before {
+  transform: rotate(90deg);
+}
+.cap-how-body {
+  margin: 0.45rem 0 0;
+  font-size: 0.73rem;
+  line-height: 1.55;
+  color: var(--faint);
+}
+
+/* ── Main-screen teaser: pinned to the War Room after a run (reach beyond the memo) ── */
+.why-strip {
+  margin: 0.9rem 0 0;
+  padding: 0.7rem 0.95rem;
+  border-radius: 10px;
+  border: 1px solid color-mix(in srgb, var(--accent) 26%, var(--line));
+  background: color-mix(in srgb, var(--accent) 7%, var(--panel));
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.55rem 1.1rem;
+}
+.why-strip-head {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+}
+.why-strip-label {
+  font-size: 0.72rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  font-family: ui-monospace, Menlo, monospace;
+  color: var(--accent);
+}
+.why-strip-sub {
+  font-size: 0.72rem;
+  color: var(--muted);
+}
+.why-strip-list {
   list-style: none;
   margin: 0;
   padding: 0;
   display: flex;
-  flex-direction: column;
-  gap: 0.6rem;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  flex: 1;
 }
-.why-item {
-  display: flex;
-  flex-direction: column;
-  gap: 0.15rem;
-  padding-left: 0.8rem;
-  border-left: 2px solid color-mix(in srgb, var(--accent) 40%, var(--line));
+.why-strip-item {
+  font-size: 0.72rem;
+  color: var(--fg);
+  padding: 0.2rem 0.55rem;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: var(--panel-2);
+  white-space: nowrap;
 }
-.why-item-title {
-  font-size: 0.82rem;
-  font-weight: 600;
-}
-.why-item-blurb {
+.why-strip-link {
   font-size: 0.76rem;
-  line-height: 1.45;
-  color: var(--muted);
+  font-weight: 600;
+  color: var(--accent);
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.why-strip-link:hover {
+  text-decoration: underline;
 }
 
 /* ── Responsive: stack the war room on narrow screens (tablet + phone) ── */
@@ -836,6 +939,11 @@ body {
   .war-room {
     height: auto;
     min-height: 100vh;
+  }
+
+  /* Takeaway cards stack to a single column when the memo narrows. */
+  .takeaway-grid {
+    grid-template-columns: 1fr;
   }
 
   /* Header wraps; the case controls drop to their own full-width row. */

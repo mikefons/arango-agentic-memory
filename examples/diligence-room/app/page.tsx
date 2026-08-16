@@ -7,6 +7,7 @@ import { Pipeline } from "@/components/Pipeline";
 import { ContradictionFeed } from "@/components/ContradictionFeed";
 import { Narration } from "@/components/Narration";
 import { MemoPanel } from "@/components/MemoPanel";
+import { WhyStrip } from "@/components/WhySharedMemory";
 import { RECOMMENDATION } from "@/lib/memo-export";
 import { useCampaign } from "@/components/useCampaign";
 
@@ -151,6 +152,8 @@ export default function WarRoom() {
           />
         </aside>
       </section>
+
+      {state.run === "done" && state.memo && <WhyStrip onOpen={() => setMemoOpen(true)} />}
 
       {memoOpen && state.memo && <MemoPanel memo={state.memo} onClose={() => setMemoOpen(false)} />}
     </main>
