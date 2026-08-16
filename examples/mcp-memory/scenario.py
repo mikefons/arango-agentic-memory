@@ -46,18 +46,20 @@ FACTS: list[str] = [
     "I moved from Munich to Berlin in March.",
 ]
 
-# Session 2 asks — in natural language that shares almost no keywords with the facts, so only
-# semantic retrieval can connect them. Each query names the memory it should surface (a keyword
-# the retrieved context must contain) and the capability it exercises. We check the retrieved
-# *set*, not the top-1 rank: `search` hands the host all the relevant context and the host's
-# model picks — so "did the right memory come back?" is the honest question.
+# Session 2 asks in natural language. Each query carries a light lexical anchor that also appears
+# in its target memory ("allergic", "Mira", "Munich"), so recall is robust even on a *cold* core —
+# where the vector index is still "deferred" (it needs many vectors to train) and retrieval is
+# BM25-only. The demo shouldn't hinge on a warm vector arm to make its point; a warm one only adds
+# semantic matching on top. Each tuple is (query, the keyword the retrieved context must contain,
+# the capability it exercises). We check the retrieved *set*, not the top-1 rank: `search` hands
+# the host all the relevant context and the host's model picks.
 RECALLS: list[tuple[str, str, str]] = [
-    ("Is there anything I can't eat?", "shellfish",
-     "persistence — it never saw session 1's context"),
+    ("What am I allergic to?", "shellfish",
+     "persistence — recalled in a brand-new session with empty context"),
     ("Remind me who Mira is?", "Mira",
      "entity graph — resolves the person across mentions"),
-    ("Where do I live now?", "Berlin",
-     "supersession — Berlin is newer than the stored Munich"),
+    ("Am I still living in Munich?", "Berlin",
+     "supersession — the move to Berlin superseded Munich"),
 ]
 
 

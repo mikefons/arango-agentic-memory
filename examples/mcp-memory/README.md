@@ -10,9 +10,9 @@ It proves the three capabilities the [LongMemEval benchmark](../../docs/DESIGN.m
 
 | you say (session 1) | you ask later (session 2, empty context) | capability |
 |---|---|---|
-| "I'm allergic to shellfish." | "Is there anything I can't eat?" → *shellfish* | **persistence** |
-| "My sister Mira is visiting." | "Who is Mira?" → *your sister* | **entity graph** |
-| "I moved from Munich to Berlin in March." | "Where do I live now?" → **Berlin** | **supersession** |
+| "I'm allergic to shellfish." | "What am I allergic to?" → *shellfish* | **persistence** |
+| "My sister Mira is visiting." | "Remind me who Mira is?" → *your sister* | **entity graph** |
+| "I moved from Munich to Berlin in March." | "Am I still living in Munich?" → **Berlin** | **supersession** |
 
 The money moment is the last one: both "Munich" and "Berlin" are stored, so a naive vector store
 can surface the stale answer. This one says **Berlin** — the newer memory, ranked over the old one
@@ -26,9 +26,10 @@ by the graph (exactly the `knowledge-update` gain the benchmark isolates).
 docker compose up
 ```
 
-For a real semantic demo, give the core real embeddings (`EMBEDDING_PROVIDER=openai` +
-`OPENAI_API_KEY` in `core/.env`). The recall queries share no keywords with the facts, so
-retrieval has to match by *meaning* — that needs real embeddings.
+Real embeddings (`EMBEDDING_PROVIDER=openai` + `OPENAI_API_KEY` in `core/.env`) make retrieval
+semantic. They're recommended but **not required** for this demo: each recall query carries a
+light lexical anchor that also appears in its target memory, so BM25 alone surfaces the right
+memory even on a cold core whose vector index hasn't trained yet (see the note below).
 
 **2. Install `arango-memory` locally** (into a venv). `scenario.py` is an MCP *client* that
 **spawns a local `python -m arango_memory.mcp` server process** (see the diagram below), so the
@@ -60,15 +61,15 @@ sessions, each spawning its own server process:
   ✓ committed + flushed
 
 ── Session 2 · a DIFFERENT server process, empty context — RECALL ──
-  » "Is there anything I can't eat?"
+  » "What am I allergic to?"
      ✓ recalled: I'm allergic to shellfish.
-       └ persistence — it never saw session 1's context
+       └ persistence — recalled in a brand-new session with empty context
   » "Remind me who Mira is?"
      ✓ recalled: My sister Mira is visiting next week.
        └ entity graph — resolves the person across mentions
-  » "Where do I live now?"
+  » "Am I still living in Munich?"
      ✓ recalled: I moved from Munich to Berlin in March.
-       └ supersession — Berlin is newer than the stored Munich
+       └ supersession — the move to Berlin superseded Munich
 
 ✓ session 2 recalled 3/3 with zero shared context
 ```
@@ -108,9 +109,12 @@ so the example can't rot.
 
 ## Honest notes
 
-- **Real embeddings for the live demo.** Under the keyless `FakeEmbedder`, retrieval is lexical,
-  so the natural-language queries won't connect. The CI smoke test uses keyword-overlapping
-  queries for determinism; the demo uses natural language + `openai` embeddings.
+- **Robust to a cold vector index.** On a fresh core the vector index reports `deferred` in
+  `/health` — the IVF index only trains once a tenant has many vectors, far more than these three,
+  so retrieval is **BM25-only** until it warms. The recall queries each share an anchor word with
+  their target memory (`allergic`, `Mira`, `Munich`), so BM25 alone surfaces the right memory even
+  cold; real `openai` embeddings then add semantic matching on top. (The CI smoke test likewise uses
+  keyword-overlapping queries so it's deterministic under the keyless `FakeEmbedder`.)
 - **Supersession is ranking, not a hard edge here.** "Berlin" wins because it's the newer memory
   and the graph ranks it above the stale "Munich" mention; the older fact is retained, not
   deleted. (Explicit bi-temporal `Supersedes` edges + Dream State consolidation are a core
