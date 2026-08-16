@@ -137,6 +137,16 @@ export async function seedEntity(name: string, ctx: Ctx): Promise<string | undef
   return res.entity_ids[0];
 }
 
+/** Mint several named entities in ONE `/v1/seed` call (preferences → one entity each), instead
+ * of a round trip per name. Best-effort + idempotent — used where the keys aren't needed back. */
+export async function seedEntities(names: string[], ctx: Ctx): Promise<void> {
+  if (names.length === 0) return;
+  await coreFetch("/v1/seed", {
+    method: "POST",
+    body: JSON.stringify({ profile: { preferences: names }, ctx: { access_level: "write", ...ctx } }),
+  }).catch(() => undefined);
+}
+
 /** Run Dream State consolidation for the tenant (§13) — the "dungeon dreams". */
 export function dream(tenantId: string, agentId: string): Promise<DreamResult> {
   return coreFetch("/v1/dream", {
