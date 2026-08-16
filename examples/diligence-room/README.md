@@ -66,6 +66,7 @@ mid-flight, it falls back to canned automatically, so the demo always completes.
 | `CORE_API_KEY` | if core enforces auth | Bearer key mapped to the Room's tenant + write scope. |
 | `AI_GATEWAY_API_KEY` *or* `ANTHROPIC_API_KEY` | live only | LLM for the agents. Neither → canned replay. |
 | `DILIGENCE_MODEL` | no | Model override (default `claude-haiku-4-5`). |
+| `DILIGENCE_EXTRACT_CONCURRENCY` | no | Documents a specialist extracts in parallel (default `5`). Each doc is an independent LLM call, so this is the main lever on a live run's wall time; lower it if you hit provider rate limits. |
 | `NEXT_PUBLIC_DILIGENCE_ROOM` | no | Room id the **live** toggle writes to (default `northwind`). Must match the core key's `room:<id>` tenant when the core enforces auth. |
 
 ## What to look for (the demo)
