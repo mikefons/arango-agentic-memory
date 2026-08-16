@@ -77,4 +77,30 @@ describe("runSpecialist (orchestration, LLM + core injected)", () => {
     expect(run.claimsWritten).toBe(0);
     expect(writes).toBe(0);
   });
+
+  it("extracts documents concurrently but stores claims in deterministic doc order", async () => {
+    // The financial specialist reads >1 doc, so a serial loop would never have >1 extraction
+    // in flight. Track peak concurrency to prove the slice runs in parallel now.
+    const fin = specialist("financial")!;
+    let inFlight = 0;
+    let peak = 0;
+    const extract: ExtractFn = async (doc): Promise<Triple[]> => {
+      inFlight += 1;
+      peak = Math.max(peak, inFlight);
+      await new Promise((r) => setTimeout(r, 5)); // hold the slot so overlap is observable
+      inFlight -= 1;
+      return [{ subject: `${doc.id}-s`, predicate: "reported", value: "v" }];
+    };
+    const storedOrder: string[] = [];
+    const store: StoreClaimFn = async (_agent, doc) => {
+      storedOrder.push(doc.id);
+    };
+
+    const run = await runSpecialist(fin, { extract, store });
+
+    expect(peak).toBeGreaterThan(1); // ran in parallel, not one-at-a-time
+    // …yet output is deterministic: stored in the config's document order (mapLimit preserves it)
+    expect(storedOrder).toEqual(fin.docs.map((d) => d.id));
+    expect(run.claimsWritten).toBe(fin.docs.length);
+  });
 });
