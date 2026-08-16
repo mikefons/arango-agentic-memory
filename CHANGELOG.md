@@ -139,4 +139,12 @@ it has not yet been tagged or published to a registry.
 - **Hardened container** — digest-pinned base, non-root user, `HEALTHCHECK`; a CI image
   build-smoke runs on every PR.
 
+### Changed — dependencies
+
+- **Vercel AI SDK (`ai`) → `5.0.237`** across the `@arango-memory/vercel` adapter and all example
+  apps (was `5.0.220`). Latest v5; no breaking changes to `LanguageModelV2Middleware` /
+  `@ai-sdk/provider@2`. The adapter's `peerDependency` stays `^5.0.0` (broad consumer compat).
+- **`workflow` → `5.0.0-beta.42`** in the Diligence Room example (was `beta.37`) — newest v5 beta;
+  `next build` + typecheck + tests verified.
+
 [Unreleased]: https://github.com/mikefons/arango-agentic-memory/commits/main
