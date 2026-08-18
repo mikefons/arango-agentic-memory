@@ -56,6 +56,9 @@ async function phase(
     step = { name, status: "ok", detail: detail ?? undefined };
     ok = true;
   } catch (err) {
+    // Surface the real error server-side (Vercel logs) — the step only carries `message` to the
+    // UI, so without this a failed phase is a black box in production. Log the whole error.
+    console.error(`[campaign] phase "${name}" failed:`, err);
     step = { name, status: "error", detail: err instanceof Error ? err.message : String(err) };
     ok = false;
   }

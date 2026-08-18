@@ -87,14 +87,26 @@ export function makeDisputeFinder(model: LanguageModel): DisputeFinder {
     const rendered = claims
       .map((c, i) => `${i + 1}. [${c.agent_id ?? "?"}] ${c.text}`)
       .join("\n");
-    const { object } = await generateObject({
-      model,
-      schema: DisputeSchema,
-      system: SYSTEM,
-      abortSignal: agentSignal(),
-      prompt: `Claims in shared memory:\n${rendered}\n\nFind the disputes.`,
-    });
-    return object.disputes;
+    try {
+      const { object } = await generateObject({
+        model,
+        schema: DisputeSchema,
+        system: SYSTEM,
+        abortSignal: agentSignal(),
+        // Cap the structured output so a long disputes list can't truncate mid-JSON — a truncated
+        // response makes generateObject throw NoObjectGeneratedError and fail the whole phase.
+        maxOutputTokens: 4096,
+        prompt: `Claims in shared memory:\n${rendered}\n\nFind the disputes.`,
+      });
+      return object.disputes;
+    } catch (err) {
+      // The red-team is one big structured-output call (small model, whole claim pool, 60s abort) —
+      // the campaign's most fragile step. Degrade instead of hard-failing: log the real cause
+      // (schema/truncation vs timeout vs provider) to the server so it's visible in the platform
+      // logs, and return no disputes so the run still reaches synthesis and produces a memo.
+      console.error("[red-team] dispute finder failed:", err);
+      return [];
+    }
   };
 }
 
