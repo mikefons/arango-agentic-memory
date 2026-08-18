@@ -174,5 +174,12 @@ it has not yet been tagged or published to a registry.
   that also appears in its target memory (`allergic`, `Mira`, `Munich`), so BM25 alone surfaces the
   right memory even before the vector index trains; real embeddings add semantic matching on top.
   Verified 3/3 against a genuinely cold DB (was 2/3, missing the one pure-semantic query).
+- Diligence Room (`examples/diligence-room`) — fixed a red-team phase failure and made failures
+  diagnosable. The dispute finder is one large structured-output (`generateObject`) call; without an
+  output cap its JSON could **truncate mid-response** and throw, failing the phase (which also
+  skipped synthesis and lost the memo). Cap `maxOutputTokens`, and on any failure log the real cause
+  and degrade to zero disputes so the run still reaches synthesis. The campaign's `phase()` wrapper
+  now also `console.error`s caught errors, so a failed phase shows its cause in the platform logs
+  instead of being a black box. Confirmed fixed against the live deployment.
 
 [Unreleased]: https://github.com/mikefons/arango-agentic-memory/commits/main
