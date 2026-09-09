@@ -161,15 +161,17 @@ export interface ResetResult {
 }
 
 /**
- * Reset a Room's shared memory so a live run starts clean (soft-delete every claim + entity
- * under the Room's tenant, via the core's tenant-scoped `/v1/forget`). Only ever touches
- * `room:<id>` — never another demo's tenant, never drops a collection. Requires the write scope
- * the storeClaim key already has.
+ * Reset a Room's shared memory so a live run starts truly clean — a HARD purge (`hard: true`)
+ * of every claim + entity under the Room's tenant, via the core's tenant-scoped `/v1/forget`.
+ * Hard (not soft) is deliberate: a soft-delete leaves each claim's idempotency key behind, so the
+ * next live run re-stores the same deterministic claims, they're skipped as duplicates, and the
+ * Room stays empty. Only ever touches `room:<id>` — never another demo's tenant, never drops a
+ * collection. Requires the write scope the storeClaim key already has.
  */
 export function resetRoom(roomId: string): Promise<ResetResult> {
   return coreFetch<ResetResult>("/v1/forget", {
     method: "POST",
-    body: JSON.stringify({ tenant_id: roomTenant(roomId), access_level: "write" }),
+    body: JSON.stringify({ tenant_id: roomTenant(roomId), access_level: "write", hard: true }),
   });
 }
 
