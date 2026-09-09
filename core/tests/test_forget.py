@@ -95,3 +95,33 @@ def test_forget_endpoint_requires_write(api: TestClient) -> None:
     ok = api.post("/v1/forget", json={"tenant_id": "t_abac", "access_level": "write"})
     assert ok.status_code == 200
     assert ok.json()["status"] == "forgotten"
+
+
+def test_forget_endpoint_hard_purges(api: TestClient) -> None:
+    api.post("/v1/store", json={"content": "gamma roster", "ctx": _ctx("write")})
+    ok = api.post(
+        "/v1/forget", json={"tenant_id": "t_abac", "access_level": "write", "hard": True}
+    )
+    assert ok.status_code == 200 and ok.json()["status"] == "purged"
+
+
+# ── the reset+rerun bug: soft-delete leaves the idempotency key ──────────────
+def test_hard_purge_lets_identical_content_restore(
+    db: StandardDatabase,
+    wait_for_searchable: Callable[..., RetrieveResult],
+) -> None:
+    # A soft-delete keeps each doc's idempotency key, so re-storing identical content is skipped
+    # by `overwrite_mode="ignore"` and the tenant stays empty (the diligence "reset then re-run"
+    # failure). A hard purge removes the key, so the same content re-stores and is retrievable.
+    ctx = {"tenant_id": "t_reset", "agent_id": "x"}
+    store(db, content="quarterly revenue was 12M", **ctx)
+    wait_for_searchable(db, query="revenue", **ctx)
+
+    forget(db, tenant_id="t_reset")                              # soft-delete
+    assert _eventually_empty(db, "revenue", ctx)
+    store(db, content="quarterly revenue was 12M", **ctx)        # same key → ignored
+    assert _eventually_empty(db, "revenue", ctx)                 # still gone (the bug)
+
+    purge(db, tenant_id="t_reset")                               # hard-delete → key removed
+    store(db, content="quarterly revenue was 12M", **ctx)        # now it lands
+    assert wait_for_searchable(db, query="revenue", **ctx).hits

@@ -44,7 +44,7 @@ from ..retrieve.prime import Include, prime
 from ..retrieve.search import force_view_sync, retrieve
 from ..schema.collections import ensure_schema, vector_index_state
 from ..security.auth import agent_allowed, require_principal
-from ..security.forget import forget
+from ..security.forget import forget, purge
 from ..stats import stats
 from ..telemetry import latency
 from ..telemetry.logging import RequestLogMiddleware, configure_logging, logger, tenant_var
@@ -257,10 +257,14 @@ class ForgetRequest(BaseModel):
     tenant_id: str
     agent_id: str | None = None  # None → whole tenant
     access_level: Literal["read", "write"] = "read"
+    # Soft-delete (set `invalid_at`, keep docs for audit) by default. `hard=True` physically
+    # purges the subject — removing the idempotency keys too, so re-storing identical content
+    # afterwards actually lands (a soft-delete leaves the keys, and the re-store is ignored).
+    hard: bool = False
 
 
 class ForgetResponse(BaseModel):
-    status: Literal["forgotten"] = "forgotten"
+    status: Literal["forgotten", "purged"] = "forgotten"
     counts: dict[str, int] = Field(default_factory=dict)
 
 
@@ -515,10 +519,15 @@ async def forget_endpoint(
     req: ForgetRequest,
     client: ArangoMemoryClient = Depends(get_client),
 ) -> ForgetResponse:
-    # Right to be forgotten (§17) — destructive, so requires write access.
+    # Right to be forgotten (§17) — destructive, so requires write access. `hard` hard-deletes
+    # (purge) instead of soft-deleting, so a subsequent re-store of the same content isn't
+    # skipped by idempotency (the keys are gone, not just flagged).
     _authorize(request, tenant_id=req.tenant_id, access_level=req.access_level, write=True)
+    if req.hard:
+        counts = purge(client.db, tenant_id=req.tenant_id, agent_id=req.agent_id)
+        return ForgetResponse(status="purged", counts=counts)
     counts = forget(client.db, tenant_id=req.tenant_id, agent_id=req.agent_id)
-    return ForgetResponse(counts=counts)
+    return ForgetResponse(status="forgotten", counts=counts)
 
 
 async def stats_endpoint(
