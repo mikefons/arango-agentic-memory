@@ -167,6 +167,22 @@ def test_min_accuracy_gates(db: StandardDatabase) -> None:
     assert report.passed is False and report.failures
 
 
+def test_concurrency_matches_serial(db: StandardDatabase) -> None:
+    # Cross-question parallelism: each question is an isolated tenant, so running them concurrently
+    # must produce the same aggregate as the serial path. db_factory reuses the fixture connection
+    # (the workers would otherwise open their own, off the test's settings).
+    samples = load_dataset(_SMOKE)
+    gen = _mixed({"currently live": "CORRECT", "sister": "INCORRECT"})
+    serial = run_longmemeval(db, samples, generator=gen, judge=gen, k=10)
+    parallel = run_longmemeval(
+        db, samples, generator=gen, judge=gen, k=10,
+        concurrency=2, db_factory=lambda: db,
+    )
+    assert parallel.n_questions == serial.n_questions
+    assert parallel.accuracy == serial.accuracy
+    assert parallel.per_type == serial.per_type
+
+
 def test_extract_true_builds_graph_via_store_many(db: StandardDatabase) -> None:
     # IN-5: the harness ingests each history through store_many(extract=True), so the entity
     # graph is built (batched) — affordable now that the record + graph passes are bulk.

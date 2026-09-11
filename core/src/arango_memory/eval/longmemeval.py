@@ -19,15 +19,18 @@ wall) — the dominant cost of a real run — while the entity graph adds ~nothi
 accuracy. Skipping it turns a many-hour run into a tractable one.
 
 CLI: `python -m arango_memory.eval.longmemeval <lme.json> [--mode] [--k] [--rerank] [--extract]
-[--min-accuracy X]` (exits nonzero below a gate, so a nightly run can fail the build).
+[--concurrency N] [--min-accuracy X]` (exits nonzero below a gate, so a nightly run can fail the
+build). `--concurrency N` processes N questions at once — each is an isolated tenant, so the
+overlap hides per-question LLM latency (the wall of a graph-on/haiku run).
 """
 
 from __future__ import annotations
 
 import argparse
 import sys
-import time
-from collections.abc import Sequence
+import threading
+from collections.abc import Callable, Sequence
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 
 from arango.database import StandardDatabase
@@ -35,7 +38,7 @@ from arango.database import StandardDatabase
 from ..client import ArangoMemoryClient
 from ..generation import Generator, get_generator
 from ..ingest.store import StoreItem, store_many
-from ..retrieve.search import retrieve
+from ..retrieve.search import force_view_sync, retrieve
 from ..schema.collections import ensure_schema
 from ..telemetry.logging import configure_logging
 from .halu import generate_answer
@@ -96,17 +99,20 @@ class LongMemReport:
 
 
 def _ingest_sample(
-    db: StandardDatabase, sample: Sample, agent_id: str, *, attempts: int, delay: float,
-    extract: bool,
+    db: StandardDatabase, sample: Sample, agent_id: str, *, extract: bool,
 ) -> None:
-    """Ingest a question's whole history in one batched `store_many` call (IN-5), then wait for
-    search visibility.
+    """Ingest a question's whole history in one batched `store_many` call (IN-5), then force the
+    search view consistent so retrieval sees the writes.
 
     One bulk call replaces the per-turn `store()` loop + the old embedding pre-warm: `store_many`
     batch-embeds and bulk-inserts the record (IN-1), and — when `extract=True` — runs the batched
     graph pass (IN-2), which makes the entity graph affordable at LongMemEval's 500-turn histories
     (per-turn `extract=True` was the ~O(n²) BX-2 wall). Each turn's session date rides as
-    `event_time` (IN-4), surfaced in the retrieved context without diluting the matched text."""
+    `event_time` (IN-4), surfaced in the retrieved context without diluting the matched text.
+
+    `store_many` writes synchronously; the only gap to retrieval is the ArangoSearch view's
+    eventual consistency, so one `force_view_sync` makes the batch visible deterministically —
+    versus the old sleep-poll that cost up to attempts×delay per question of pure waiting."""
     items = [
         StoreItem(content=f"{turn.speaker}: {turn.text}", turn_index=i,
                   event_time=turn.event_time)
@@ -114,13 +120,45 @@ def _ingest_sample(
     ]
     if items:
         store_many(db, items, tenant_id=sample.sample_id, agent_id=agent_id, extract=extract)
-    if not sample.qa:
-        return
-    probe = sample.qa[0].question
-    for _ in range(attempts):
-        if retrieve(db, query=probe, tenant_id=sample.sample_id, agent_id=agent_id).hits:
-            return
-        time.sleep(delay)
+        force_view_sync(db, sample.sample_id)
+
+
+def _process_sample(
+    db: StandardDatabase,
+    sample: Sample,
+    *,
+    gen: Generator,
+    jdg: Generator,
+    agent_id: str,
+    mode: str,
+    k: int,
+    rerank: bool,
+    extract: bool,
+) -> list[LongMemScore]:
+    """Ingest one question's history, then answer + judge each of its QAs. Self-contained on the
+    given `db` and the question's own tenant (`sample.sample_id`), so distinct samples never touch
+    shared state — the unit of cross-question parallelism (`concurrency`)."""
+    _ingest_sample(db, sample, agent_id, extract=extract)
+    out: list[LongMemScore] = []
+    for qa in sample.qa:
+        retrieved = retrieve(
+            db, query=qa.question, tenant_id=sample.sample_id,
+            agent_id=agent_id, mode=mode, k=k, rerank=rerank,
+        )
+        answer = generate_answer(qa.question, retrieved.context, generator=gen)
+        correct = judge_correct(
+            qa.question, qa.answer, answer, judge=jdg, abstention=qa.abstention
+        )
+        out.append(
+            LongMemScore(
+                question_id=sample.sample_id,
+                question_type=qa.category or "unknown",
+                correct=correct,
+                abstention=qa.abstention,
+                answer=answer,
+            )
+        )
+    return out
 
 
 def run_longmemeval(
@@ -135,56 +173,78 @@ def run_longmemeval(
     rerank: bool = False,
     extract: bool = False,
     min_accuracy: float | None = None,
-    consistency_attempts: int = 30,
-    consistency_delay: float = 0.25,
+    concurrency: int = 1,
+    db_factory: Callable[[], StandardDatabase] | None = None,
     progress: bool = False,
 ) -> LongMemReport:
     """Ingest each question's history, answer from memory, judge accuracy; aggregate.
 
     `extract=False` (default) skips the ~O(n²) entity resolution over each question's long
-    history — the dominant cost of a real run (see `_ingest_sample`)."""
+    history — the dominant cost of a real run (see `_ingest_sample`).
+
+    `concurrency` > 1 runs that many questions at once. Each question is a fully isolated tenant,
+    so they're embarrassingly parallel and the overlap hides the per-question LLM latency (the
+    real wall of a graph-on / haiku run). Each worker thread gets its OWN DB connection from
+    `db_factory` (default: a fresh `ArangoMemoryClient`), because a python-arango handle is not
+    safe to share across threads. `concurrency=1` (default) keeps the exact serial path on the
+    passed `db` — byte-identical results, and what CI/tests use."""
     gen = generator or get_generator()
     jdg = judge or gen
-    scores: list[LongMemScore] = []
     total = len(samples)
-    for i, sample in enumerate(samples, 1):
-        turns = sum(len(session) for session in sample.sessions)
-        if progress:
-            print(
-                f"[{i}/{total}] {sample.sample_id}: ingesting {turns} turns "
-                f"({len(sample.sessions)} sessions)…",
-                file=sys.stderr, flush=True,
-            )
-        _ingest_sample(
-            db, sample, agent_id, attempts=consistency_attempts, delay=consistency_delay,
-            extract=extract,
-        )
-        for qa in sample.qa:
-            retrieved = retrieve(
-                db, query=qa.question, tenant_id=sample.sample_id,
-                agent_id=agent_id, mode=mode, k=k, rerank=rerank,
-            )
-            answer = generate_answer(qa.question, retrieved.context, generator=gen)
-            correct = judge_correct(
-                qa.question, qa.answer, answer, judge=jdg, abstention=qa.abstention
-            )
-            scores.append(
-                LongMemScore(
-                    question_id=sample.sample_id,
-                    question_type=qa.category or "unknown",
-                    correct=correct,
-                    abstention=qa.abstention,
-                    answer=answer,
-                )
-            )
-        if progress:
-            running = sum(s.correct for s in scores) / len(scores)
-            print(
-                f"[{i}/{total}] {sample.sample_id}: done — "
-                f"accuracy={running:.2f} ({len(scores)} scored so far)",
-                file=sys.stderr, flush=True,
-            )
 
+    def _turns(sample: Sample) -> int:
+        return sum(len(session) for session in sample.sessions)
+
+    if concurrency <= 1:
+        scores: list[LongMemScore] = []
+        for i, sample in enumerate(samples, 1):
+            if progress:
+                print(
+                    f"[{i}/{total}] {sample.sample_id}: ingesting {_turns(sample)} turns "
+                    f"({len(sample.sessions)} sessions)…",
+                    file=sys.stderr, flush=True,
+                )
+            scores.extend(_process_sample(
+                db, sample, gen=gen, jdg=jdg, agent_id=agent_id,
+                mode=mode, k=k, rerank=rerank, extract=extract,
+            ))
+            if progress:
+                running = sum(s.correct for s in scores) / len(scores)
+                print(
+                    f"[{i}/{total}] {sample.sample_id}: done — "
+                    f"accuracy={running:.2f} ({len(scores)} scored so far)",
+                    file=sys.stderr, flush=True,
+                )
+        return _aggregate(scores, min_accuracy=min_accuracy)
+
+    # Parallel: one DB connection per worker thread (a python-arango handle isn't thread-safe).
+    factory = db_factory or (lambda: ArangoMemoryClient().connect())
+    local = threading.local()
+
+    def _task(sample: Sample) -> list[LongMemScore]:
+        conn = getattr(local, "db", None)
+        if conn is None:
+            conn = local.db = factory()
+        return _process_sample(
+            conn, sample, gen=gen, jdg=jdg, agent_id=agent_id,
+            mode=mode, k=k, rerank=rerank, extract=extract,
+        )
+
+    scores = []
+    done = 0
+    with ThreadPoolExecutor(max_workers=concurrency) as executor:
+        futures = {executor.submit(_task, sample): sample for sample in samples}
+        for future in as_completed(futures):
+            sample = futures[future]
+            scores.extend(future.result())
+            done += 1
+            if progress:
+                running = sum(s.correct for s in scores) / len(scores)
+                print(
+                    f"[{done}/{total}] {sample.sample_id}: done — "
+                    f"accuracy={running:.2f} ({len(scores)} scored so far)",
+                    file=sys.stderr, flush=True,
+                )
     return _aggregate(scores, min_accuracy=min_accuracy)
 
 
@@ -250,6 +310,11 @@ def _build_parser() -> argparse.ArgumentParser:
                         help="build the entity graph while ingesting (default off). LongMemEval "
                              "scores answers, so the graph adds little here and per-turn "
                              "resolution over a long history is ~O(n²) — leave off unless testing")
+    parser.add_argument("--concurrency", type=int, default=1,
+                        help="questions to process at once (default 1). Each is an isolated "
+                             "tenant, so >1 overlaps per-question LLM latency — the wall of a "
+                             "graph-on/haiku run. Each worker opens its own DB connection; raise "
+                             "with the API rate limit in mind")
     return parser
 
 
@@ -261,7 +326,8 @@ def main(argv: list[str] | None = None) -> int:
     ensure_schema(db)
     report = run_longmemeval(
         db, load_dataset(args.dataset), mode=args.mode, k=args.k,
-        rerank=args.rerank, extract=args.extract, min_accuracy=args.min_accuracy, progress=True,
+        rerank=args.rerank, extract=args.extract, min_accuracy=args.min_accuracy,
+        concurrency=args.concurrency, progress=True,
     )
     print(_format(report, gated=args.min_accuracy is not None))
     return 0 if report.passed else 1
