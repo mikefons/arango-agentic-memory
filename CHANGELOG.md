@@ -120,6 +120,12 @@ it has not yet been tagged or published to a registry.
 - Hardening: concurrency / multi-tenant isolation tests, failure-injection +
   graceful-degradation tests, authz-breadth tests, and a deterministic
   perf-regression gate.
+- **LongMemEval end-to-end validation** (`eval/longmemeval.py`, stratified-90, real
+  `openai` embeddings + `anthropic` answerer/judge): the graph earns its keep — substrate
+  (BM25+vector) **0.411** → product (graph ON + reranker) **0.522**, of which the entity
+  graph is +0.089 and the reranker +0.022. Extractor rung (HX-1d): the **haiku LLM
+  extractor** lifts it further to **0.589** (+0.067 over spaCy), so `haiku` is the
+  accuracy-max extractor while spaCy stays the keyless default. See DESIGN §23.
 
 ### Added — scaling (optional)
 
