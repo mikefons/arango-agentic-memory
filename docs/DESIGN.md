@@ -1096,6 +1096,31 @@ artifact, not a real inversion.)
 A remaining caveat: the absolute number partly reflects the answerer/judge model, so it's reported with the
 model and paired with retrieval recall (LoCoMo/MuSiQue) as the metric that isolates the memory layer.
 
+**Extractor rung — haiku LLM extraction vs spaCy (HX-1d, rev 91).** Same slice/model/reranker as the
+product run, but the entity graph is built by the **LLM extractor** (`EXTRACTION_PROVIDER=haiku`,
+`background_model=claude-haiku-4-5`) instead of spaCy's typed NER — the question of whether LLM extraction
+beats a fast local NER on end-to-end accuracy. Graph ON + real reranker, `--k 10 --rerank --extract`, fresh
+DB (`hx1d_haiku`), `EXTRACTION_CONCURRENCY=16`:
+
+| question-type | spaCy (HX-1b/1c) | **haiku (HX-1d)** | Δ |
+|---|---|---|---|
+| **overall** | 0.522 | **0.589** | **+0.067** |
+| single-session-assistant | 0.867 | **1.000** | +0.133 |
+| single-session-preference | 0.133 | **0.267** | +0.134 |
+| temporal-reasoning | 0.667 | 0.733 | +0.066 |
+| knowledge-update | 0.600 | 0.667 | +0.067 |
+| multi-session | 0.267 | 0.333 | +0.066 |
+| single-session-user | 0.600 | 0.533 | −0.067 |
+
+**Haiku extraction beats spaCy by +0.067 overall (0.522 → 0.589, +13% relative)** — six of seven categories
+up, only `single-session-user` down one question (−0.067, within the ±1–2-question n=15 noise band). The
+biggest lifts are `single-session-preference` (doubled, 0.133 → 0.267) and `single-session-assistant`
+(0.867 → 1.000): richer LLM-extracted entities/relations link preference and assistant facts the flat spaCy
+spans miss. So the graph's contribution (HX-1c: +0.089 of the product gain) grows further with a better
+extractor — but at a real cost (~$45 / 1h wall vs spaCy's keyless seconds), so spaCy stays the default and
+haiku is the accuracy-max option. The run also exercised the #231 fail-soft path (rode through transient
+Anthropic 5xx to 90/90 with no crash). Same answerer/judge-model caveat as above.
+
 ### Recall vs corpus size — the fusion-holds curve (HX-2)
 
 The project's thesis as a chart: on an **open corpus that grows**, graph+vector+BM25 fusion
