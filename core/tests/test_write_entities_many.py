@@ -3,8 +3,11 @@ SAME graph as the per-item `store(extract=True)` path — belief/corroboration f
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+
 from arango.database import StandardDatabase
 
+from arango_memory.ingest.extract import ExtractedEntity, ExtractedRelation, FakeExtractor
 from arango_memory.ingest.store import StoreItem, store, store_many
 
 # Capitalized spans → entities (FakeExtractor). Acme appears in two memories (accumulation);
@@ -94,3 +97,36 @@ def test_store_many_extract_false_builds_no_graph(db: StandardDatabase) -> None:
         tenant_id="norec", agent_id="a", extract=False,
     )
     assert _entities(db, "norec") == {}  # record-only path mints no entities
+
+
+class _FlakyExtractor:
+    """FakeExtractor that raises on one target content — simulates a transient LLM 5xx mid-batch."""
+
+    def __init__(self, fail_on: str) -> None:
+        self.name = "flaky"
+        self._fake = FakeExtractor()
+        self._fail_on = fail_on
+
+    def extract(self, text: str) -> list[ExtractedEntity]:
+        if self._fail_on in text:
+            raise RuntimeError("simulated transient extraction failure")
+        return self._fake.extract(text)
+
+    def extract_relations(
+        self, text: str, entities: Sequence[ExtractedEntity]
+    ) -> list[ExtractedRelation]:
+        return self._fake.extract_relations(text, entities)
+
+
+def test_extraction_is_fail_soft(db: StandardDatabase) -> None:
+    # One memory's extraction failing must not crash the whole batch (a transient 5xx over a long
+    # graph-on run): the other memories' entities still land, the failed one just contributes none.
+    store_many(
+        db,
+        [StoreItem(content=t, turn_index=i) for i, t in enumerate(_TURNS)],
+        tenant_id="failsoft", agent_id="a", extract=True,
+        extractor=_FlakyExtractor(fail_on="Carol"),  # _TURNS[1] "Carol joined Acme."
+    )
+    ents = _entities(db, "failsoft")
+    assert {"Alice", "Bob", "Dave"} <= set(ents)  # good memories extracted, batch survived
+    assert "Carol" not in ents                    # the failed memory contributed no entities

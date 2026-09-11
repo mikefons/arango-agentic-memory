@@ -537,9 +537,17 @@ def write_entities_many(
     #    wall for an I/O-bound extractor (haiku: one LLM call per turn, ~O(turns) round trips).
     #    `map` preserves order, so the downstream accumulation is byte-identical to the loop.
     def _extract_one(mem: GraphMemory) -> _PerMem:
-        ents = extractor.extract(mem.content)
-        return (mem, ents, extractor.extract_relations(mem.content, ents),
-                parse_explicit_time(mem.content))
+        # Fail-soft: one memory's extraction failing (e.g. a transient LLM 5xx partway through a
+        # long batch) must not crash the whole batch — log it and contribute no entities for that
+        # memory. The record (memory + embedding) is already stored; it just misses the graph.
+        try:
+            ents = extractor.extract(mem.content)
+            rels = extractor.extract_relations(mem.content, ents)
+        except Exception as exc:  # noqa: BLE001 — degrade on any extractor fault, never break ingest
+            logger.warning("entity extraction failed; skipping this memory's entities",
+                           extra={"reason": type(exc).__name__, "detail": str(exc)})
+            ents, rels = [], []
+        return (mem, ents, rels, parse_explicit_time(mem.content))
 
     workers = min(settings.extraction_concurrency, len(memories))
     if workers <= 1:
