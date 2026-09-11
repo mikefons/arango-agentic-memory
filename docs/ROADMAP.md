@@ -116,7 +116,7 @@ which is exactly what `multi-session` recall (0.067 on LongMemEval) needs.
 | 7 | IN-6 | Batch entity resolution (the read loop IN-2 left unbatched) ✅ | graph-on ingest minutes→seconds; unblocks haiku rung + prod graph | M |
 | 8 | HX-1c | Isolate graph vs reranker (graph-OFF + real reranker run) ✅ | split the +0.111: **graph +0.089, reranker +0.022** (0.411→0.433→0.522) | S |
 | 9 | IN-7 | Concurrent per-memory extraction (thread pool) ✅ | LLM-extraction wall gone: haiku ingest overnight→~1h; prod-viable | S |
-| 10 | HX-1d | The haiku extractor rung (does extractor quality beat spaCy 0.522?) | verdict: LLM extraction pays, or spaCy is the default | S |
+| 10 | HX-1d | The haiku extractor rung (does extractor quality beat spaCy 0.522?) ✅ | **haiku 0.589 vs spaCy 0.522 (+0.067)**; verdict: LLM extraction pays on accuracy, spaCy stays the default (~$45/1h vs keyless secs) | S |
 
 **Recommended sequence: IN-1 → IN-3 → IN-2 → IN-4 → IN-5 → HX-1b.** IN-1 removes the reason
 `extract=False` exists; IN-3 is small and lifts graph quality; IN-2 makes the graph affordable
@@ -311,29 +311,24 @@ client-side parallelism/batching. Outcome per example:
 
 No further work scheduled; the sweep is closed. (All four outcomes recorded in CHANGELOG.)
 
-### HX-1d — The haiku extractor rung (does extractor quality beat spaCy's 0.522?)
+### HX-1d — The haiku extractor rung (does extractor quality beat spaCy's 0.522?)  ✅ (#232)
 
-**Why.** spaCy gave the graph +0.089 (→ 0.522). `haiku` extraction is richer — **typed entities +
-typed relations** (spaCy emits none, falling back to co-occurrence) + better entity recall — so a
-higher-quality graph *may* lift the graph-sensitive types further: `knowledge-update` (typed
-conflict/"moved-to" relations feed supersession) and `multi-session` (cleaner cross-session entity
-linking). The rung answers: **does extractor quality justify LLM cost, or is spaCy the default?**
+**Done (2026-09-11).** Result recorded in DESIGN §23 (rev 91): **haiku 0.589 vs spaCy 0.522 —
++0.067 (+13% relative).** Six of seven types up; only `single-session-user` down one question
+(0.600→0.533, within the n=15 ±1–2-Q noise band). Biggest lifts: `single-session-preference` doubled
+(0.133→0.267), `single-session-assistant` 0.867→1.000. Config: fresh `ARANGO_DB=hx1d_haiku`,
+`RERANKER_PROVIDER=local`, `EXTRACTION_CONCURRENCY=16`, `--k 10 --rerank --extract`,
+`EXTRACTION_PROVIDER=haiku` (`background_model=claude-haiku-4-5`); ~$45 / ~1h wall. The run also
+exercised the #231 fail-soft path — rode through a transient Anthropic 5xx to 90/90 (an earlier
+attempt crashed at 38/90 on an unhandled 500).
 
-**Cost (why it needs IN-7).** One LLM call per memory: ~49,500 calls on stratified-90. Sequential
-that's ~10–20 h / ~$50–70; with IN-7's concurrency it drops to ~1 h. IN-7 is the prerequisite.
+**Verdict:** extractor quality pays on accuracy, but **spaCy stays the default** — keyless and seconds
+vs haiku's ~$45/1h. `haiku` is the accuracy-max option, documented as such.
 
-**Plan.**
-1. **Pre-flight:** confirm `HaikuExtractor` routes to a *Haiku-class* model (it uses `get_generator()`
-   — verify it's not the pricier main generation model, or add an extraction-model split), and set
-   a healthy `EXTRACTION_CONCURRENCY` (e.g. 16–32).
-2. Isolated DB (à la HX-1c) + `RERANKER_PROVIDER=local`, stratified-90, `--k 10 --rerank --extract`,
-   `EXTRACTION_PROVIDER=haiku`.
-3. Record haiku-graph-on vs the 0.522 spaCy product number in DESIGN §23; watch `knowledge-update`
-   / `multi-session`.
-
-**Success.** A clear verdict: **types up → extractor quality pays** (make `haiku`/`layered` the
-recommended graph tier); **flat → spaCy is the cost-effective default**, documented as such. Either
-outcome is publishable.
+**Why (hypothesis, confirmed).** spaCy gave the graph +0.089 (→ 0.522). `haiku` extraction is richer —
+**typed entities + typed relations** (spaCy emits none, falling back to co-occurrence) + better entity
+recall — so a higher-quality graph lifts the graph-sensitive types further. IN-7's concurrency was the
+prerequisite (one LLM call per memory, ~49,500 on stratified-90 → ~1h instead of ~10–20h sequential).
 
 ### IN-6 — Batch entity resolution (the unbatched read loop IN-2 left behind)  ✅ (#208)
 
