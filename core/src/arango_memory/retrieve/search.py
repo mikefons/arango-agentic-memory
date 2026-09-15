@@ -83,7 +83,10 @@ FOR doc IN memories
   FILTER doc.tenant_id == @tenant_id
      AND doc.agent_id IN @agent_ids
      AND doc.invalid_at == null
-  LET score = APPROX_NEAR_COSINE(doc.embedding, @qvec)
+  // nProbe = IVF cells searched (§7). ArangoDB defaults to 1 when omitted, which loses
+  // recall badly once the index trains (HX-2 found ~30% vs the exact pre-train scan); pass
+  // settings.n_probe so more of the trained index is searched. Higher = better recall, slower.
+  LET score = APPROX_NEAR_COSINE(doc.embedding, @qvec, {nProbe: @nprobe})
   SORT score DESC
   LIMIT @pool
   RETURN { key: doc._key, text: doc.text, score: score, agent_id: doc.agent_id,
@@ -468,7 +471,9 @@ def _gather_fused(
         train_factor=settings.vector_train_factor,
     )
     if vector_ready and query_vec:  # query_vec empty → embedder degraded, BM25-only (§15)
-        vector_rows = _run(db, _VECTOR_QUERY, {"qvec": query_vec, **scope})
+        vector_rows = _run(
+            db, _VECTOR_QUERY, {"qvec": query_vec, "nprobe": settings.n_probe, **scope}
+        )
         ranked_lists.append(vector_rows)
         names.append("vector")
 
