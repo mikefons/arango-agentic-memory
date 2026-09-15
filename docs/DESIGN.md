@@ -1139,10 +1139,30 @@ vector-vs-fusion contrast (a graph-on figure on a capped corpus is a separate ex
 **pooled** MuSiQue file (`musique_convert --pooled`).
 
 **Status:** harness built + CI-gated keyless (FakeEmbedder proves the plumbing; the *shape* needs
-real embeddings). The plotted curve is a bring-your-own real-embedding run (pending):
-`make recall-curve CURVE_DATASET=pooled.json` then `plot_recall_curve`. Record the figure here +
-in the README when it lands (HX-2 in the competitive roadmap). Companion to the SC-1 scalability
-work, which is what keeps ingestion tractable at the sizes this curve sweeps.
+real embeddings). **First real-embedding run (rev 92, pooled MuSiQue, 3,075 paragraphs / 50 probes,
+`openai` embeddings): the scale-degradation chart is NOT demonstrable at this corpus size — and the
+run surfaced a retrieval bug instead.** The honest findings:
+
+- **Below the IVF training threshold (`n_lists 64 × train_factor 40 = 2,560` docs) the vector index
+  is deferred**, so all three arms are BM25 (identical lines) — the left half of the curve is not a
+  three-arm comparison.
+- **A latent bug — `settings.n_probe` was never threaded into `APPROX_NEAR_COSINE`** — so once the
+  IVF trained, retrieval searched ArangoDB's default **1 cell** and the vector arm collapsed to
+  recall-frac **0.40** (below BM25's 0.58), dragging equal-weight fusion to 0.49. This read as
+  "vector degrades with scale" but was pure under-probing. **Fixed:** the query now passes
+  `{nProbe: settings.n_probe}`. Recovery on the trained 3,075-doc corpus: nProbe 1→0.41, 4→0.55,
+  8→0.61, 16→0.63, 64→0.65 (latency is embedding-round-trip-bound, so nProbe is nearly free; recall
+  plateaus by ~16, and the shipped default of 10 recovers the bulk).
+- **Properly probed (nProbe 64), the vector arm *leads*** at 3,075 docs — vector-only **0.69** >
+  fused 0.64 > BM25 0.58. It does not degrade; at this scale the exhaustive-probe search is
+  effectively exact. **So the "pure-vector degrades while fusion holds" chart cannot be earned
+  here** — showing genuine ANN recall decay needs a corpus large enough (10k–100k+) that a fixed
+  reasonable nProbe can't keep up as N grows. That larger-corpus run is **deferred as a future
+  item**; publishing the 3,075-doc curve as the thesis figure would be misleading.
+
+The durable win from HX-2 is the **`n_probe` retrieval fix** (every trained tenant was under-probing
+by ~30% recall). Companion to the SC-1 scalability work, which is what would keep ingestion tractable
+at the corpus sizes the real degradation chart needs.
 
 ### RQ-1 multi-hop decomposition — benchmark-dependent (rev 82)
 

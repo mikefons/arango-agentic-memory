@@ -385,6 +385,13 @@ Distractors ingest with `extract=False` (no entity resolution, graph off — the
 sweep runs in minutes; "fused" here is BM25+vector. Tune `--probes` (fixed scored set) and `--step`
 (distractors per checkpoint). The CSV (`corpus_size,arm,recall_frac,recall_hit`) is the durable
 artifact; the plot just draws it.
+
+**Interpreting the curve (rev 92).** Two caveats the first real run exposed: (1) below the IVF
+training threshold (`vector_n_lists × vector_train_factor`, default 2,560 docs) the vector index is
+deferred, so all three arms read as BM25 — the size-degradation signal only exists past that point;
+(2) a 3,075-doc single-tenant corpus is **not** large enough to show pure-vector ANN decay — properly
+probed, the vector arm leads there. The thesis chart needs a much larger corpus (10k–100k+); the
+smaller sweep is a plumbing/tuning check, not the competitive figure. See DESIGN §23 (HX-2).
 With `RERANKER_PROVIDER=fake` the run uses the keyless token-overlap stand-in (CI/plumbing
 only, not a real quality signal).
 

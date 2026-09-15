@@ -173,6 +173,15 @@ it has not yet been tagged or published to a registry.
   per-tool calls would misrepresent how MCP hosts drive tools (one at a time per turn) and gain
   little (stores are queued; the flush dominates), and the linear flow is clearer for a teaching demo.
 
+### Fixed — core
+
+- **Vector retrieval under-probed the trained index.** `settings.n_probe` was defined but never
+  passed to `APPROX_NEAR_COSINE`, so once a tenant's Faiss IVF index trained it searched ArangoDB's
+  default of a single cell — losing ~30% recall versus the exact pre-training scan (surfaced by the
+  HX-2 recall-vs-corpus sweep: the vector arm collapsed to 0.40 recall-frac at 3,075 docs). The
+  query now passes `{nProbe: settings.n_probe}`; recovery is ~0.41 → ~0.61 recall-frac at the
+  default (`n_probe=10`), and nProbe is nearly free (retrieval latency is embedding-round-trip-bound).
+
 ### Fixed — examples
 
 - MCP memory (`examples/mcp-memory`) — the demo now recalls reliably on a **cold core** (fresh

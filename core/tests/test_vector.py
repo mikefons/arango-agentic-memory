@@ -77,6 +77,15 @@ def test_vector_index_deferred_until_warm_then_fuses(db: StandardDatabase) -> No
     assert any("vector" in h.source for h in result.hits)
 
 
+def test_vector_query_threads_nprobe() -> None:
+    # Regression (HX-2): settings.n_probe was defined but never passed to APPROX_NEAR_COSINE, so
+    # the trained IVF searched ArangoDB's default 1 cell and lost ~30% recall vs the exact
+    # pre-train scan. Guard that the query template carries the nProbe option + its bind var.
+    from arango_memory.retrieve.search import _VECTOR_QUERY
+
+    assert "nProbe: @nprobe" in _VECTOR_QUERY
+
+
 def test_bm25_fallback_when_index_cold(
     db: StandardDatabase,
     wait_for_searchable: Callable[..., RetrieveResult],
