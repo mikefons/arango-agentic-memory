@@ -2,7 +2,7 @@
   "name": "@arango-memory/vercel",
   "version": "0.1.0",
   "description": "Thin Vercel AI SDK middleware client for the ArangoDB agentic memory core",
-  "license": "MIT",
+  "license": "Apache-2.0",
   "author": "Michael Fonseca",
   "homepage": "https://github.com/mikefons/arango-agentic-memory#readme",
   "repository": {
@@ -22,7 +22,7 @@
       "import": "./dist/index.js"
     }
   },
-  "files": ["dist"],
+  "files": ["dist", "LICENSE", "NOTICE"],
   "scripts": {
     "build": "tsc",
     "typecheck": "tsc --noEmit",

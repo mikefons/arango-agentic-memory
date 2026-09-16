@@ -4,7 +4,8 @@ version = "0.1.0"
 description = "Agentic memory core for ArangoDB — ingestion, retrieval, consolidation, decay"
 readme = "README.md"
 requires-python = ">=3.11"
-license = "MIT"
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE"]
 authors = [{ name = "Michael Fonseca" }]
 keywords = ["arangodb", "agentic-memory", "llm", "rag", "retrieval", "knowledge-graph"]
 classifiers = [
