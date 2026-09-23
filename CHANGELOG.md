@@ -41,6 +41,12 @@ from the `v0.1.0` tag.
   (RQ-2a). Composable with lite/multihop; off the hot path; degrades to the fused order on
   failure. A retrieval-miss diagnostic (`eval.pool_diag`) reports the ranking-vs-recall
   split that motivates it.
+- Rerank scoring modes (RQ-3): `RERANK_SCORING` picks how the reranked block is scored —
+  `replace` (default, unchanged: cross-encoder only), `rrf` (rank-blend of cross-encoder and
+  fused rank, restoring arm consensus/recency), or `event_time` (sigmoid of the cross-encoder
+  score + `RERANK_TIME_WEIGHT` × content-time newness, so an updated statement of a fact
+  outranks the stale one). `retrieve()` takes per-call `rerank_scoring` / `rerank_time_weight`
+  overrides and a `record_access=False` read-only probe (skips the spaced-repetition refresh).
 - Per-request candidate pool (RT-1): `CANDIDATE_POOL` (default 100) is the per-arm candidate
   count before fusion/rerank/MMR, also overridable per call via `opts.candidate_pool`. Raise it
   (e.g. 500) **with rerank** on an open/large corpus to recover tail-reachable evidence, at more
@@ -127,6 +133,12 @@ from the `v0.1.0` tag.
   graph is +0.089 and the reranker +0.022. Extractor rung (HX-1d): the **haiku LLM
   extractor** lifts it further to **0.589** (+0.067 over spaCy), so `haiku` is the
   accuracy-max extractor while spaCy stays the keyless default. See DESIGN §23.
+- **Paired rerank-scoring evaluation** (RQ-3) in the LongMemEval harness:
+  `--rerank-scoring replace,rrf,event_time:0.2` scores every variant against one ingest with an
+  exact McNemar test vs the first; `longmemeval_convert --evidence` carries the `has_answer`
+  turns + session dates, adding deterministic **evidence recall@k** and knowledge-update
+  **newest-above-stale** metrics; `--retrieval-only` reports just those (no LLM spend);
+  `--types` / `--offset` carve disjoint dev/test splits.
 
 ### Added — scaling (optional)
 

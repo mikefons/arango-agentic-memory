@@ -76,6 +76,12 @@ class Settings(BaseSettings):
     # fused order below the reranked block (re-scored under the head's minimum, since RRF
     # scores and cross-encoder logits aren't on the same scale).
     rerank_top_n: int = Field(default=50, ge=1)
+    # How the reranked head is scored (RQ-3). "replace" = cross-encoder score only (RQ-2b);
+    # "rrf" = rank-blend of cross-encoder rank + fused rank (restores arm consensus/recency);
+    # "event_time" = sigmoid(cross-encoder) + rerank_time_weight × newness of the memory's
+    # content time (event_time), so a newer statement of the same fact outranks a stale one.
+    rerank_scoring: Literal["replace", "rrf", "event_time"] = "replace"
+    rerank_time_weight: float = Field(default=0.1, ge=0.0)
 
     # Core service
     core_host: str = "0.0.0.0"

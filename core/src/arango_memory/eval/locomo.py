@@ -61,6 +61,10 @@ class QA:
     abstention: bool = False  # question unanswerable from memory — the model should decline
                               # (LongMemEval, HX-1). Default False leaves all other datasets
                               # unchanged; retrieval-recall scoring ignores it.
+    # LongMemEval evidence turns (`longmemeval_convert --evidence`, RQ-3): each
+    # {"text", "event_time", "session_id"} for a `has_answer` turn. Kept apart from `gold_facts`
+    # so LongMemEval stays answer-scored unless a harness opts into evidence metrics.
+    evidence: list[dict[str, str]] = field(default_factory=list)
 
     def support(self) -> list[str]:
         """The evidence set retrieval is scored against (multi-evidence or single-fact)."""

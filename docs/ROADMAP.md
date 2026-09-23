@@ -1105,7 +1105,11 @@ byte-identical to today; docs explain the tuning. Size S.
 
 ## RQ-3 — Rerank scoring: replace vs blend (does the reranker throw away time?)
 
-*Scoped, not started.*
+*Tooling built (build plan steps 1–3 below); runs pending.* Two findings from building it: variants
+must be scored with **read-only** retrieval probes (`record_access=False`) — a normal retrieve
+refreshes `accessed_at`, which feeds decay and would let one variant perturb the next; and
+`parse_explicit_time` can't order LongMemEval session dates (it reads `2023/05/20 (Sat) 02:21` as a
+bare year), so `event_time` scoring uses its own date+time sort key.
 
 **Why.** RQ-2b's locked decision *replaces* `fused_score` with the cross-encoder score for the
 reranked top-N (clean measurement of the reranker's lift; the two scores aren't on a common scale —

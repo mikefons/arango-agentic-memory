@@ -11,8 +11,11 @@ Step 2b; graph expansion (needs entities/edges) lands in Step 3.
 from __future__ import annotations
 
 import math
+import re
 import time
+from collections.abc import Sequence
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Any, cast
 
 import tiktoken
@@ -390,13 +393,20 @@ def retrieve(
     cache: QueryCache | None = None,
     rerank: bool | None = None,
     reranker: Reranker | None = None,
+    rerank_scoring: str | None = None,
+    rerank_time_weight: float | None = None,
+    record_access: bool = True,
 ) -> RetrieveResult:
     """Instrumented retrieval (DESIGN.md §18): span + metrics + §15 degradation.
 
     `read_agent_ids` (MA-2) widens the read across multiple agents in one fused pass
     (e.g. own + shared crew tiers); `None` reads just `agent_id`. Writes are unaffected.
-    `candidate_pool=None` uses `settings.candidate_pool` (RT-1). Any failure degrades to an
-    empty (memory-less) result and a `degraded` event, so a memory fault never breaks the turn.
+    `candidate_pool=None` uses `settings.candidate_pool` (RT-1); `rerank_scoring=None` /
+    `rerank_time_weight=None` use their settings (RQ-3 — per-call overrides, so concurrent
+    callers never mutate the shared settings). `record_access=False` skips the spaced-repetition
+    access refresh — a read-only probe for evals that must not perturb the decay state the next
+    query sees. Any failure degrades to an empty (memory-less) result and a `degraded` event, so
+    a memory fault never breaks the turn.
     """
     pool = candidate_pool if candidate_pool is not None else settings.candidate_pool
     started = time.perf_counter()
@@ -419,6 +429,9 @@ def retrieve(
                 cache=cache,
                 rerank=rerank,
                 reranker=reranker,
+                rerank_scoring=rerank_scoring,
+                rerank_time_weight=rerank_time_weight,
+                record_access=record_access,
             )
     except Exception as exc:  # noqa: BLE001 — §15: memory failures never break the turn
         metrics.emit("degraded", op="retrieve", reason=type(exc).__name__)
@@ -548,17 +561,84 @@ def _fuse_candidate_lists(lists: list[list[_Candidate]]) -> list[_Candidate]:
     return sorted(by_key.values(), key=lambda c: c.fused_score, reverse=True)
 
 
+_EVENT_TIME = re.compile(r"(\d{4})[/-](\d{1,2})[/-](\d{1,2})(?:\D{1,12}?(\d{1,2}):(\d{2}))?")
+
+
+def _event_sort_key(event_time: str | None) -> datetime | None:
+    """Sortable content time from an `event_time` string (IN-4), else None. Handles ISO and
+    LongMemEval's `2023/05/20 (Sat) 02:21` (date + optional time); `parse_explicit_time` can't be
+    used here — it reads that format as a bare year, collapsing a whole year of sessions."""
+    if not event_time:
+        return None
+    m = _EVENT_TIME.search(event_time)
+    if not m:
+        return None
+    year, month, day, hour, minute = m.groups()
+    try:
+        return datetime(int(year), int(month), int(day), int(hour or 0), int(minute or 0))
+    except ValueError:
+        return None
+
+
+def _newness(event_times: Sequence[str | None]) -> list[float]:
+    """Rank-scaled content-time newness in [0, 1] (oldest distinct time 0, newest 1). Rank-based
+    so no time-scale knob is needed; equal times share a value. Unparseable/missing times, or a
+    head with fewer than two distinct times, get the neutral 0.5 (no push either way)."""
+    keys = [_event_sort_key(t) for t in event_times]
+    distinct = sorted({k for k in keys if k is not None})
+    if len(distinct) < 2:
+        return [0.5] * len(keys)
+    pos = {k: i / (len(distinct) - 1) for i, k in enumerate(distinct)}
+    return [pos[k] if k is not None else 0.5 for k in keys]
+
+
+def _sigmoid(x: float) -> float:
+    """Numerically stable logistic — maps cross-encoder logits (unbounded) into (0, 1)."""
+    if x >= 0:
+        return 1.0 / (1.0 + math.exp(-x))
+    z = math.exp(x)
+    return z / (1.0 + z)
+
+
+def _head_scores(
+    head: list[_Candidate], ce: list[float], *, scoring: str, time_weight: float
+) -> list[float]:
+    """Final score per head candidate under an RQ-3 scoring mode. `head` arrives in fused order,
+    so a candidate's position is its fused rank."""
+    if scoring == "replace":
+        return ce
+    if scoring == "rrf":
+        # Rank-level blend: no calibration between RRF scores and logits is needed, and the fused
+        # rank carries back the arm consensus + recency that "replace" discards. Stable sort →
+        # cross-encoder ties keep fused order.
+        ce_rank = [0] * len(ce)
+        for r, i in enumerate(sorted(range(len(ce)), key=lambda i: -ce[i]), 1):
+            ce_rank[i] = r
+        return [1.0 / (_RRF_K + ce_rank[i]) + 1.0 / (_RRF_K + i + 1) for i in range(len(ce))]
+    if scoring == "event_time":
+        newness = _newness([c.event_time for c in head])
+        return [_sigmoid(s) + time_weight * n for s, n in zip(ce, newness, strict=True)]
+    raise ValueError(f"unknown rerank_scoring {scoring!r}")
+
+
 def _rerank(
-    candidates: list[_Candidate], query: str, *, reranker: Reranker | None, top_n: int
+    candidates: list[_Candidate],
+    query: str,
+    *,
+    reranker: Reranker | None,
+    top_n: int,
+    scoring: str = "replace",
+    time_weight: float = 0.0,
 ) -> list[_Candidate]:
-    """Cross-encoder rerank of the top-N fused candidates (RQ-2b). Replaces `fused_score`
-    with the reranker's joint (query, text) relevance and reorders, so MMR then selects by
-    relevance rather than fusion rank — the fix for in-pool-but-unranked golds (§23).
+    """Cross-encoder rerank of the top-N fused candidates (RQ-2b), scored per `scoring` (RQ-3):
+    "replace" (the RQ-2b default) sets `fused_score` to the reranker's joint (query, text)
+    relevance, so MMR selects by relevance rather than fusion rank — the fix for
+    in-pool-but-unranked golds (§23); "rrf" and "event_time" blend fused rank / content time
+    back in (see `_head_scores`).
 
     Only the top-N are re-scored; the rest follow *below* the reranked block in their fused
-    order, so `k > top_n` still returns k hits instead of silently truncating. The
-    recency-decayed fused score is intentionally *replaced* per the RQ-2b decision. Any
-    reranker error degrades to the fused order (§15) — memory never breaks.
+    order, so `k > top_n` still returns k hits instead of silently truncating. Any reranker
+    error degrades to the fused order (§15) — memory never breaks.
     """
     head, tail = candidates[:top_n], candidates[top_n:]
     if not head:
@@ -568,13 +648,16 @@ def _rerank(
         scores = rk.score(query, [c.text for c in head])
         if len(scores) != len(head):
             raise ValueError(f"reranker returned {len(scores)} scores for {len(head)} texts")
+        final = _head_scores(
+            head, [float(s) for s in scores], scoring=scoring, time_weight=time_weight
+        )
     except Exception as exc:  # noqa: BLE001 — §15: a rerank fault falls back, never breaks
         metrics.emit("degraded", op="rerank", reason=type(exc).__name__)
         logger.warning("rerank failed; using fused order",
                        extra={"reason": type(exc).__name__, "detail": str(exc)})
         return candidates
-    for cand, score in zip(head, scores, strict=True):
-        cand.fused_score = float(score)
+    for cand, score in zip(head, final, strict=True):
+        cand.fused_score = score
     head.sort(key=lambda c: c.fused_score, reverse=True)
     # The tail's RRF scores (~0.01–0.05) aren't comparable to cross-encoder logits (often
     # negative), so appending them raw could rank a tail item above the reranked head.
@@ -604,6 +687,9 @@ def _retrieve_impl(
     cache: QueryCache | None = None,
     rerank: bool | None = None,
     reranker: Reranker | None = None,
+    rerank_scoring: str | None = None,
+    rerank_time_weight: float | None = None,
+    record_access: bool = True,
 ) -> RetrieveResult:
     """BM25 (+ vector when trained) → RRF → (rerank) → MMR → tiered token-budget assembly.
 
@@ -678,14 +764,20 @@ def _retrieve_impl(
     # before MMR. Opt-in via the `rerank` flag or `settings.rerank_enabled`; off the lite
     # default. Degrades to the fused order on any reranker error (handled in `_rerank`).
     if settings.rerank_enabled if rerank is None else rerank:
-        fused = _rerank(fused, query, reranker=reranker, top_n=settings.rerank_top_n)
+        fused = _rerank(
+            fused, query, reranker=reranker, top_n=settings.rerank_top_n,
+            scoring=rerank_scoring or settings.rerank_scoring,
+            time_weight=(settings.rerank_time_weight if rerank_time_weight is None
+                         else rerank_time_weight),
+        )
 
     selected = _mmr(fused, k)
     selected.sort(key=lambda c: -c.fused_score)
     context, tokens = _assemble_tiered(selected, max_memory_tokens)
 
     # Spaced repetition (§11): refresh the memories actually surfaced (Δt → 0).
-    reset_access(db, [c.key for c in selected])
+    if record_access:
+        reset_access(db, [c.key for c in selected])
 
     hits = [
         MemoryHit(text=c.text, score=round(c.fused_score, 6),

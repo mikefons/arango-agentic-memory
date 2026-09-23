@@ -367,6 +367,18 @@ abstention (`_abs`) questions. `--min-accuracy X` makes the run exit nonzero bel
 Note the accuracy partly reflects the answerer/judge model, so record which model was used and
 read it alongside the LoCoMo/MuSiQue retrieval-recall numbers (which isolate the memory layer).
 
+**Comparing rerank scorings (RQ-3).** `--rerank-scoring replace,rrf,event_time:0.2` evaluates
+each variant against **one** ingest per question (read-only retrieval probes, so variants see
+identical state) and adds an exact **McNemar** paired test of each variant against the first.
+Convert with **`--evidence`** to carry the `has_answer` turns + session dates; the report then
+adds **evidence recall@k** and, for `knowledge-update`, **newest-above-stale** — is the updated
+statement of a fact ranked above the stale one — scored deterministically, no LLM judge.
+**`--retrieval-only`** skips the answerer + judge (no LLM spend) and reports only those evidence
+metrics — cheap enough to sweep `event_time` weights. `--types` / `--offset` / `--limit` carve
+disjoint dev/test splits, e.g. tune on `--types knowledge-update --limit 26` and report on
+`--types knowledge-update --offset 26`. Don't re-run a variant into an existing `ARANGO_DB` with
+`--extract`: `store_many` would re-count graph beliefs — use a fresh DB per ingest.
+
 ### Recall vs corpus size (HX-2)
 
 The chart of the project's thesis: does fusion hold recall as an open corpus grows while
