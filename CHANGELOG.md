@@ -181,6 +181,13 @@ it has not yet been tagged or published to a registry.
   HX-2 recall-vs-corpus sweep: the vector arm collapsed to 0.40 recall-frac at 3,075 docs). The
   query now passes `{nProbe: settings.n_probe}`; recovery is ~0.41 → ~0.61 recall-frac at the
   default (`n_probe=10`), and nProbe is nearly free (retrieval latency is embedding-round-trip-bound).
+- **Rerank silently truncated results when `k > RERANK_TOP_N`.** `_rerank` returned only the
+  reranked head, dropping every fused candidate past `rerank_top_n` — contrary to the documented
+  "the rest keep their fused order below the reranked block". The tail is now kept below the head
+  in its fused order, re-scored just under the head's minimum (RRF scores and cross-encoder logits
+  aren't on a common scale, so appending raw scores could rank a tail item above the head). No
+  change at the defaults (`k=10`, `rerank_top_n=50`, `MMR_LAMBDA=1.0`); with `MMR_LAMBDA < 1`,
+  MMR's diversity term can now also draw from the tail.
 
 ### Fixed — examples
 

@@ -2,10 +2,34 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+
 import pytest
 
 from arango_memory.config import Settings
 from arango_memory.retrieve.rerank import FakeReranker, Reranker, get_reranker
+from arango_memory.retrieve.search import _Candidate, _rerank
+
+
+class _LogitReranker:
+    """Scores by a fixed per-text table — lets a test return cross-encoder-style negative
+    logits, which are below any RRF score."""
+
+    model = "logit-test"
+
+    def __init__(self, table: dict[str, float]) -> None:
+        self._table = table
+
+    def score(self, query: str, texts: Sequence[str]) -> list[float]:
+        return [self._table[t] for t in texts]
+
+
+def _fused(*texts: str) -> list[_Candidate]:
+    """Candidates in descending fused (RRF-scale) order, as `_gather_fused` returns them."""
+    return [
+        _Candidate(key=t, text=t, embedding=[], type="episodic", fused_score=0.05 - i * 0.01)
+        for i, t in enumerate(texts)
+    ]
 
 
 def test_fake_reranker_scores_by_query_coverage() -> None:
@@ -32,6 +56,25 @@ def test_fake_reranker_reorders_a_candidate_to_the_top() -> None:
 def test_fake_reranker_handles_empty() -> None:
     assert FakeReranker().score("q", []) == []
     assert FakeReranker().score("", ["anything"]) == [0.0]
+
+
+def test_rerank_keeps_the_tail_below_the_reranked_head() -> None:
+    # top_n=2 re-scores only a,b; c,d,e must follow in their fused order — not be dropped
+    # (dropping silently truncated results whenever k > rerank_top_n).
+    reranker = _LogitReranker({"a": 0.1, "b": 0.9})
+    out = _rerank(_fused("a", "b", "c", "d", "e"), "q", reranker=reranker, top_n=2)
+    assert [c.text for c in out] == ["b", "a", "c", "d", "e"]
+
+
+def test_rerank_tail_stays_below_negative_logits() -> None:
+    # Cross-encoder logits are often negative; the tail's raw RRF scores (~0.03) would then
+    # outrank the reranked head if appended as-is. Every tail score must sit under the head.
+    reranker = _LogitReranker({"a": -4.0, "b": -2.5})
+    out = _rerank(_fused("a", "b", "c", "d"), "q", reranker=reranker, top_n=2)
+    head, tail = out[:2], out[2:]
+    assert [c.text for c in head] == ["b", "a"]
+    assert max(c.fused_score for c in tail) < min(c.fused_score for c in head)
+    assert [c.text for c in sorted(out, key=lambda c: -c.fused_score)] == ["b", "a", "c", "d"]
 
 
 def test_get_reranker_defaults_to_fake() -> None:
