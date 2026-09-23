@@ -157,6 +157,8 @@ _ENCODER = tiktoken.get_encoding("cl100k_base")
 
 _RRF_K = 60
 _GRAPH_SEED_COUNT = 10
+# Score gap between successive un-reranked tail candidates placed below the reranked head.
+_RERANK_TAIL_STEP = 1e-6
 
 # Tier token budget as fractions of max_memory_tokens (§9: 400/700/300/100 of 1500).
 _TIER_FRACTIONS = {"working": 0.267, "episodic": 0.467, "semantic": 0.20, "reasoning": 0.067}
@@ -553,11 +555,12 @@ def _rerank(
     with the reranker's joint (query, text) relevance and reorders, so MMR then selects by
     relevance rather than fusion rank — the fix for in-pool-but-unranked golds (§23).
 
-    Only the top-N are considered (the rest ranked below the pool cutoff can't reach top-k
-    anyway); the recency-decayed fused score is intentionally *replaced* per the RQ-2b
-    decision. Any reranker error degrades to the fused order (§15) — memory never breaks.
+    Only the top-N are re-scored; the rest follow *below* the reranked block in their fused
+    order, so `k > top_n` still returns k hits instead of silently truncating. The
+    recency-decayed fused score is intentionally *replaced* per the RQ-2b decision. Any
+    reranker error degrades to the fused order (§15) — memory never breaks.
     """
-    head = candidates[:top_n]
+    head, tail = candidates[:top_n], candidates[top_n:]
     if not head:
         return candidates
     try:
@@ -573,7 +576,14 @@ def _rerank(
     for cand, score in zip(head, scores, strict=True):
         cand.fused_score = float(score)
     head.sort(key=lambda c: c.fused_score, reverse=True)
-    return head
+    # The tail's RRF scores (~0.01–0.05) aren't comparable to cross-encoder logits (often
+    # negative), so appending them raw could rank a tail item above the reranked head.
+    # Re-score the tail just under the head's minimum instead: a tiny step keeps its fused
+    # order without stretching the min-max span MMR normalizes relevance over.
+    floor = head[-1].fused_score
+    for i, cand in enumerate(tail, 1):
+        cand.fused_score = floor - i * _RERANK_TAIL_STEP
+    return head + tail
 
 
 def _retrieve_impl(

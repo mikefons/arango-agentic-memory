@@ -73,7 +73,8 @@ class Settings(BaseSettings):
     reranker_provider: Literal["local", "fake"] = "fake"
     reranker_model: str = "BAAI/bge-reranker-base"
     # How many top fused candidates to re-score (cost scales with this); the rest keep their
-    # fused order below the reranked block.
+    # fused order below the reranked block (re-scored under the head's minimum, since RRF
+    # scores and cross-encoder logits aren't on the same scale).
     rerank_top_n: int = Field(default=50, ge=1)
 
     # Core service
