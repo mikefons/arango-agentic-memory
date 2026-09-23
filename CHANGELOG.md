@@ -138,7 +138,9 @@ from the `v0.1.0` tag.
   exact McNemar test vs the first; `longmemeval_convert --evidence` carries the `has_answer`
   turns + session dates, adding deterministic **evidence recall@k** and knowledge-update
   **newest-above-stale** metrics; `--retrieval-only` reports just those (no LLM spend);
-  `--types` / `--offset` carve disjoint dev/test splits.
+  `--types` / `--offset` carve disjoint dev/test splits; `--scores-out` dumps per-question scores
+  (to merge runs split across processes). A failed answer call no longer kills a long run — it's
+  counted, scored incorrect, and dropped from the paired accuracy test.
 
 ### Added — scaling (optional)
 

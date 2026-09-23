@@ -28,12 +28,14 @@ from __future__ import annotations
 
 import argparse
 import dataclasses
+import json
 import math
 import sys
 import threading
 from collections.abc import Callable, Sequence
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 from arango.database import StandardDatabase
@@ -45,7 +47,7 @@ from ..ingest.store import StoreItem, store_many
 from ..retrieve.search import _event_sort_key, force_view_sync, retrieve
 from ..schema.collections import ensure_schema
 from ..security.redact import redact
-from ..telemetry.logging import configure_logging
+from ..telemetry.logging import configure_logging, logger
 from .halu import generate_answer
 from .locomo import Sample, _normalize, load_dataset
 
@@ -98,6 +100,7 @@ class LongMemScore:
     evidence_recall: float | None = None  # fraction of evidence sessions with a turn in top-k
     newest_in_topk: bool | None = None  # KU: the newest evidence session reached top-k
     newest_above_stale: bool | None = None  # KU: …and ranks above every stale evidence session
+    answer_error: bool = False  # the answer LLM call failed (scored incorrect, unpaired)
 
 
 @dataclass
@@ -112,6 +115,7 @@ class LongMemReport:
     variant: str = ""
     judged: bool = True  # False for a --retrieval-only run: accuracy is not measured
     evidence: dict[str, float] = field(default_factory=dict)  # summary of the evidence metrics
+    answer_errors: int = 0  # answer calls that failed (transient LLM faults) — see LongMemScore
     by_variant: dict[str, LongMemReport] = field(default_factory=dict)  # RQ-3 multi-variant run
     paired: list[dict[str, Any]] = field(default_factory=list)  # each variant vs the first
 
@@ -253,13 +257,21 @@ def _process_sample(
                 )
                 if qa.evidence else _Evidence()
             )
+            answer, correct, answer_error = "", False, False
             if judge_answers:
-                answer = generate_answer(qa.question, retrieved.context, generator=gen)
-                correct = judge_correct(
-                    qa.question, qa.answer, answer, judge=jdg, abstention=qa.abstention
-                )
-            else:  # --retrieval-only: deterministic evidence metrics, no LLM calls
-                answer, correct = "", False
+                try:
+                    answer = generate_answer(qa.question, retrieved.context, generator=gen)
+                except Exception as exc:  # noqa: BLE001 — one transient LLM fault (a 5xx that
+                    # outlived the SDK's retries) must not kill an hour-long run whose scores are
+                    # only written at the end. Scored incorrect, counted, and dropped from the
+                    # paired tests so it can't read as a variant effect.
+                    answer_error = True
+                    logger.warning("answer generation failed; scoring this answer as an error",
+                                   extra={"reason": type(exc).__name__, "detail": str(exc)})
+                else:
+                    correct = judge_correct(
+                        qa.question, qa.answer, answer, judge=jdg, abstention=qa.abstention
+                    )
             out.append(
                 LongMemScore(
                     question_id=sample.sample_id,
@@ -271,6 +283,7 @@ def _process_sample(
                     evidence_recall=ev.recall,
                     newest_in_topk=ev.newest_in_topk,
                     newest_above_stale=ev.newest_above_stale,
+                    answer_error=answer_error,
                 )
             )
     return out
@@ -401,7 +414,7 @@ def _paired(
         ("newest_above_stale", lambda s: s.newest_above_stale),
     ]
     if judged:
-        metrics.insert(0, ("accuracy", lambda s: s.correct))
+        metrics.insert(0, ("accuracy", lambda s: None if s.answer_error else s.correct))
     for v in variants[1:]:
         for name, get in metrics:
             pairs = [
@@ -474,6 +487,7 @@ def _aggregate(
         variant=variant,
         judged=judged,
         evidence=_evidence_summary(scores),
+        answer_errors=sum(s.answer_error for s in scores),
     )
 
 
@@ -485,6 +499,8 @@ def _format_one(report: LongMemReport) -> list[str]:
             lines.append(f"abstention:  {report.abstention_accuracy:.3f}  (correct-decline rate)")
         for qtype, m in report.per_type.items():
             lines.append(f"  [{qtype}] accuracy={m['accuracy']:.3f} n={m['n']:.0f}")
+        if report.answer_errors:
+            lines.append(f"answer errors: {report.answer_errors}  (scored incorrect; unpaired)")
     ev = report.evidence
     if "evidence_recall" in ev:
         lines.append(
@@ -543,6 +559,9 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--retrieval-only", action="store_true",
                         help="skip answer + judge (no LLM calls): report only the deterministic "
                              "evidence metrics (needs a dataset converted with --evidence)")
+    parser.add_argument("--scores-out", default=None,
+                        help="also write every per-question, per-variant score as JSON — for "
+                             "re-analysis or merging runs split across processes")
     return parser
 
 
@@ -563,6 +582,10 @@ def main(argv: list[str] | None = None) -> int:
         judge_answers=not args.retrieval_only, progress=True,
     )
     print(_format(report, gated=args.min_accuracy is not None))
+    if args.scores_out:
+        subs = report.by_variant.values() if report.by_variant else [report]
+        rows = [dataclasses.asdict(s) for sub in subs for s in sub.scores]
+        Path(args.scores_out).write_text(json.dumps(rows, indent=1))
     return 0 if report.passed else 1
 
 

@@ -362,3 +362,19 @@ def test_single_configuration_report_is_unchanged(db: StandardDatabase) -> None:
     report = run_longmemeval(db, samples, generator=gen, judge=gen, k=10)
     assert report.by_variant == {} and report.paired == [] and report.variant == ""
     assert report.judged is True and report.accuracy == 0.5
+
+
+def test_answer_failure_is_counted_not_fatal(db: StandardDatabase) -> None:
+    # A transient LLM fault in the answer step must not kill a long run (scores are only written
+    # at the end). It's scored incorrect, counted, and dropped from the paired accuracy test.
+    def handler(prompt: str, system: str | None) -> str:
+        raise RuntimeError("simulated 500")
+
+    failing = FakeGenerator(handler=handler)
+    report = run_longmemeval(
+        db, load_dataset(_SMOKE), generator=failing, judge=failing, k=10,
+        rerank_scorings=["replace", "rrf"],
+    )
+    assert report.answer_errors == 2 and report.accuracy == 0.0
+    assert all(s.answer_error for s in report.scores)
+    assert not [r for r in report.paired if r["metric"] == "accuracy"]  # nothing left to pair
