@@ -130,3 +130,20 @@ def test_extraction_is_fail_soft(db: StandardDatabase) -> None:
     ents = _entities(db, "failsoft")
     assert {"Alice", "Bob", "Dave"} <= set(ents)  # good memories extracted, batch survived
     assert "Carol" not in ents                    # the failed memory contributed no entities
+
+
+def test_store_many_replay_does_not_double_count(db: StandardDatabase) -> None:
+    # Replaying the same batch (same idempotency keys) must leave the graph untouched (§8):
+    # the UPSERTs add to mention_count / reliability_sum / corroboration, so a replay that
+    # re-fed the graph pass would double every count.
+    items = [StoreItem(content=t, turn_index=i) for i, t in enumerate(_TURNS)]
+    first = store_many(db, items, tenant_id="replay", agent_id="a", extract=True)
+    ents, rels = _entities(db, "replay"), _relates(db, "replay")
+    assert ents["Acme"][0] == 2 and rels
+
+    second = store_many(db, items, tenant_id="replay", agent_id="a", extract=True)
+    assert _entities(db, "replay") == ents
+    assert _relates(db, "replay") == rels
+    # Record is unchanged; replayed items report no newly-written entities (like store()).
+    assert [r.memory_ids for r in second] == [r.memory_ids for r in first]
+    assert all(r.entity_ids == [] for r in second)
