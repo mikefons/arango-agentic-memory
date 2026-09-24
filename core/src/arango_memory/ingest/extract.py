@@ -69,6 +69,13 @@ class ExtractedRelation:
 
 @runtime_checkable
 class Extractor(Protocol):
+    """Optional attribute `io_bound: bool` — True when `extract` mostly waits on the network
+    (an LLM call), so the batched graph pass may run memories concurrently (IN-7). It is kept
+    off the Protocol's required members so extractors that predate it still satisfy
+    `isinstance`; read it via `is_io_bound`, which treats a missing attribute as I/O-bound
+    (the pre-flag behavior). CPU-bound extractors should declare False: under the GIL, threads
+    only contend (spaCy measured 3x slower at 8 threads than at 1)."""
+
     name: str
 
     def extract(self, text: str) -> list[ExtractedEntity]: ...
@@ -80,6 +87,8 @@ class Extractor(Protocol):
 
 class FakeExtractor:
     """Deterministic: capitalized spans → entities (label `Concept`). No models."""
+
+    io_bound = False
 
     def __init__(self) -> None:
         self.name = "fake-caps"
@@ -100,6 +109,8 @@ class FakeExtractor:
 
 class SpacyExtractor:
     """spaCy NER (tier A; behind the `extraction` extra). No typed relations."""
+
+    io_bound = False
 
     def __init__(self, model: str = "en_core_web_sm") -> None:
         try:
@@ -139,6 +150,8 @@ class GlinerExtractor:
     """Tier B — GLiNER zero-shot NER + GLiREL typed relations (the `extraction`
     extra; torch, kept out of CI). The NER model and relation function are
     injectable so the logic is testable with deterministic fakes."""
+
+    io_bound = False
 
     def __init__(
         self,
@@ -186,6 +199,8 @@ _HAIKU_SYSTEM = (
 class HaikuExtractor:
     """Tier C — LLM extraction via a `Generator` (keyless in CI via `FakeGenerator`).
     One LLM call per text serves both `extract` and `extract_relations` (cached)."""
+
+    io_bound = True
 
     def __init__(
         self,
@@ -272,6 +287,12 @@ class LayeredExtractor:
         self.haiku = haiku
         self.escalate_below = escalate_below
 
+    @property
+    def io_bound(self) -> bool:
+        # Any tier that may block on the network (normally the Haiku escalation) makes the chain
+        # worth threading; a spaCy/GLiNER-only chain is CPU-bound.
+        return any(is_io_bound(t) for t in (self.base, self.gliner, self.haiku) if t is not None)
+
     def _cheap_entities(self, text: str) -> list[ExtractedEntity]:
         ents = list(self.base.extract(text))
         if self.gliner is not None:
@@ -296,6 +317,11 @@ class LayeredExtractor:
         for r in rels:
             seen.setdefault((r.source, r.target, r.relationship), r)
         return list(seen.values())
+
+
+def is_io_bound(extractor: Extractor) -> bool:
+    """Whether `extractor` benefits from concurrent extraction (see `Extractor.io_bound`)."""
+    return bool(getattr(extractor, "io_bound", True))
 
 
 def _parse_json_object(raw: str) -> dict[str, Any]:

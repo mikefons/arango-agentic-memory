@@ -286,9 +286,19 @@ now runs under a bounded thread pool (`ThreadPoolExecutor`, `EXTRACTION_CONCURRE
 `map` preserves order so the downstream accumulation is byte-identical (the IN-2 equality property
 holds — verified by `test_write_entities_many` in CI). `HaikuExtractor`'s cache upgraded to a
 thread-safe per-text dict so concurrent `extract`/`extract_relations` can't clobber and double the
-(paid) LLM calls (`test_extract.py`). Neutral for `fake`/`spaCy` (CPU-bound); collapses wall-time for
-LLM tiers — turns the HX-1d haiku run from an overnight job into ~an hour, and makes `haiku` viable
-in production, not just benchmarks.
+(paid) LLM calls (`test_extract.py`). Collapses wall-time for LLM tiers — turns the HX-1d haiku run
+from an overnight job into ~an hour, and makes `haiku` viable in production, not just benchmarks.
+
+**Follow-up (2026-09): the pool is I/O-bound extractors only.** The original note claimed the pool
+was "neutral" for CPU-bound tiers; it isn't. spaCy's `nlp()` holds the GIL, so 8 threads convoy on
+it: one 413-turn LongMemEval knowledge-update question (`EXTRACTION_PROVIDER=spacy`, graph on, real
+openai embeddings + local bge-reranker, macOS) took **2m14s at `EXTRACTION_CONCURRENCY=8`** (≈356s
+*system* CPU, 300% cpu) vs **42s at 1** (≈2s system), identical outputs; capping BLAS/OpenMP threads
+didn't help, so it isn't BLAS oversubscription. Extractors now declare `io_bound` (True for
+`HaikuExtractor`, and for `LayeredExtractor` when a tier may escalate to Haiku; False for
+fake/spaCy/GLiNER) and `write_entities_many` threads only when it's True. A third-party extractor
+without the attribute is treated as I/O-bound — the pre-flag behavior, and custom extractors are
+most often API wrappers; a CPU-bound one should set `io_bound = False`.
 
 **Files.** `core/src/arango_memory/ingest/entities.py` (pooled step 1),
 `core/src/arango_memory/ingest/extract.py` (thread-safe Haiku cache), `core/src/arango_memory/config.py`

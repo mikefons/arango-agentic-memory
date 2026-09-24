@@ -3,11 +3,23 @@ SAME graph as the per-item `store(extract=True)` path — belief/corroboration f
 
 from __future__ import annotations
 
+import threading
 from collections.abc import Sequence
+from typing import Any
 
+import pytest
 from arango.database import StandardDatabase
 
-from arango_memory.ingest.extract import ExtractedEntity, ExtractedRelation, FakeExtractor
+from arango_memory.embedding import FakeEmbedder
+from arango_memory.ingest.entities import GraphMemory, write_entities_many
+from arango_memory.ingest.extract import (
+    ExtractedEntity,
+    ExtractedRelation,
+    FakeExtractor,
+    HaikuExtractor,
+    LayeredExtractor,
+    is_io_bound,
+)
 from arango_memory.ingest.store import StoreItem, store, store_many
 
 # Capitalized spans → entities (FakeExtractor). Acme appears in two memories (accumulation);
@@ -147,3 +159,60 @@ def test_store_many_replay_does_not_double_count(db: StandardDatabase) -> None:
     # Record is unchanged; replayed items report no newly-written entities (like store()).
     assert [r.memory_ids for r in second] == [r.memory_ids for r in first]
     assert all(r.entity_ids == [] for r in second)
+
+
+class _ThreadRecorder:
+    """Records which thread ran each `extract`; returns no entities, so `write_entities_many`
+    stops after step 1 and never touches the DB."""
+
+    def __init__(self, **attrs: Any) -> None:
+        self.name = "recorder"
+        self.__dict__.update(attrs)
+        self.idents: list[int] = []
+
+    def extract(self, text: str) -> list[ExtractedEntity]:
+        self.idents.append(threading.get_ident())
+        return []
+
+    def extract_relations(
+        self, text: str, entities: Sequence[ExtractedEntity]
+    ) -> list[ExtractedRelation]:
+        return []
+
+
+@pytest.mark.parametrize(
+    ("attrs", "threaded"),
+    [
+        ({"io_bound": True}, True),
+        ({"io_bound": False}, False),
+        ({}, True),  # no attribute (third-party, pre-flag) → I/O-bound, today's behavior
+    ],
+)
+def test_extraction_threads_only_io_bound_extractors(
+    attrs: dict[str, Any], threaded: bool
+) -> None:
+    # IN-7 concurrency helps an LLM extractor but GIL-convoys a CPU-bound one (spaCy: 3x slower
+    # at 8 threads), so only I/O-bound extractors take the pool; the rest run on the caller.
+    rec = _ThreadRecorder(**attrs)
+    mems = [GraphMemory(memory_key=f"m{i}", episode_key=f"e{i}", content=t)
+            for i, t in enumerate(_TURNS)]
+    out = write_entities_many(
+        None,  # type: ignore[arg-type]  # never reached: no entities extracted
+        mems, tenant_id="t", agent_id="a", extractor=rec, embedder=FakeEmbedder(),
+    )
+    assert out == {m.memory_key: [] for m in mems}
+    assert len(rec.idents) == len(_TURNS)
+    caller = threading.get_ident()
+    if threaded:
+        assert caller not in rec.idents  # pool workers, never the calling thread
+    else:
+        assert set(rec.idents) == {caller}
+
+
+def test_io_bound_declarations() -> None:
+    assert not is_io_bound(FakeExtractor())
+    assert is_io_bound(HaikuExtractor())  # generator loads lazily; no key needed
+    assert is_io_bound(_ThreadRecorder())  # missing attribute → I/O-bound
+    cheap = LayeredExtractor(base=FakeExtractor())
+    assert not is_io_bound(cheap)  # no LLM tier to escalate to
+    assert is_io_bound(LayeredExtractor(base=FakeExtractor(), haiku=HaikuExtractor()))

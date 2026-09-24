@@ -359,6 +359,9 @@ Stage 2: Entity Extraction (multi-stage, NOT LLM-only)
   B — GLiNER2 / GLiREL: zero-shot NER + relationship extraction
   C — claude-haiku-4-5: fallback for ambiguous cases only
   Also extracts valid_time when explicitly present in text (§4).
+  Batched (store_many): per-memory extraction runs on EXTRACTION_CONCURRENCY
+  threads only for an I/O-bound (LLM) extractor (IN-7); A/B are CPU-bound and
+  GIL-held, so they run sequentially — threads only contend.
   │
   ▼
 Stage 3: Write-Time Conflict Detection

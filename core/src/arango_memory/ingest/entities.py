@@ -34,7 +34,13 @@ from ..models import utcnow_iso
 from ..schema.collections import ensure_vector_index
 from ..telemetry import metrics
 from ..telemetry.logging import logger
-from .extract import ExtractedEntity, ExtractedRelation, Extractor, cooccurring_pairs
+from .extract import (
+    ExtractedEntity,
+    ExtractedRelation,
+    Extractor,
+    cooccurring_pairs,
+    is_io_bound,
+)
 from .temporal import parse_explicit_time
 
 # A corroborating mention bumps mention_count, accumulates the source's
@@ -533,8 +539,10 @@ def write_entities_many(
     result: dict[str, list[str]] = {mem.memory_key: [] for mem in memories}
 
     # 1. extract per memory. The model calls are inherent, but they're independent per memory,
-    #    so run them under a bounded thread pool (IN-7) — the sequential loop was the graph-on
-    #    wall for an I/O-bound extractor (haiku: one LLM call per turn, ~O(turns) round trips).
+    #    so an I/O-bound extractor runs them under a bounded thread pool (IN-7) — the sequential
+    #    loop was the graph-on wall for haiku (one LLM call per turn, ~O(turns) round trips).
+    #    CPU-bound extractors (spaCy/GLiNER/fake) stay sequential: they hold the GIL, so threads
+    #    only contend (spaCy: 42s at 1 thread vs 2m14s at 8, mostly system time).
     #    `map` preserves order, so the downstream accumulation is byte-identical to the loop.
     def _extract_one(mem: GraphMemory) -> _PerMem:
         # Fail-soft: one memory's extraction failing (e.g. a transient LLM 5xx partway through a
@@ -549,7 +557,7 @@ def write_entities_many(
             ents, rels = [], []
         return (mem, ents, rels, parse_explicit_time(mem.content))
 
-    workers = min(settings.extraction_concurrency, len(memories))
+    workers = min(settings.extraction_concurrency, len(memories)) if is_io_bound(extractor) else 1
     if workers <= 1:
         per_mem = [_extract_one(mem) for mem in memories]
     else:

@@ -65,7 +65,7 @@ need no API keys.
 | `EMBEDDING_PROVIDER` (+ `OPENAI_API_KEY`, `EMBEDDING_MODEL`) | `fake` | `openai` |
 | `GENERATION_PROVIDER` (+ `ANTHROPIC_API_KEY`, `BACKGROUND_MODEL`) | `fake` | `anthropic` (Haiku) |
 | `EXTRACTION_PROVIDER` | `fake` | `spacy` \| `gliner` \| `haiku` \| `layered` (need the `extraction` extra) |
-| `EXTRACTION_CONCURRENCY` | `8` | threads for per-memory extraction in the batched graph pass (IN-7); raise for an LLM extractor (`haiku`), it's the wall there |
+| `EXTRACTION_CONCURRENCY` | `8` | threads for per-memory extraction in the batched graph pass (IN-7) — **LLM extraction only** (`haiku`, or `layered` with its Haiku tier); raise it there, it's the wall. CPU-bound extractors (`fake`/`spacy`/`gliner`) ignore it and run sequentially: threads just contend for the GIL (spaCy, one 413-turn question: 2m14s at 8 vs 42s at 1). A custom extractor is threaded unless it sets `io_bound = False` |
 | `MEMORY_MODE` | `lite` | `full` (adds HyDE + adaptive gate + prospective indexing) |
 
 **Behavior knobs** — retrieval: `MAX_MEMORY_TOKENS` (1500), `K` (10), `GRAPH_HOPS`
