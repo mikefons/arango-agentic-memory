@@ -1304,8 +1304,27 @@ scoped to *conflicting statements of the same fact* (entity/supersession-aware),
 **Run notes.** Threading spaCy extraction (IN-7's pool) was a ~3× GIL-convoy slowdown (fixed
 separately: the pool now applies to I/O-bound extractors only), so runs used one process per slice;
 two ArangoDB OOM kills (8 GB Docker VM) from the batched ANN entity-resolution query growing with
-the shared `entities` collection motivated crash-safe `--checkpoint`/`--resume` (the OOM itself is a
-separate SC-1 follow-up). Total spend ≈ $4–5 (answer + judge + embeddings).
+the shared `entities` collection motivated crash-safe `--checkpoint`/`--resume` (the OOM itself was
+fixed in #243, below). Total spend ≈ $4–5 (answer + judge + embeddings).
+
+**Rerun after the entity-resolution fix (#243, rev 94).** #243 changed graph-on ingest: small tenants
+now resolve entities by an exact scan, and the batched ANN query's per-batch (not per-entity) LIMIT
+was fixed. So the whole experiment was rerun on the same question splits, with a fresh database per
+slice, to check that the result didn't depend on the old behaviour. **The conclusion is unchanged.**
+- Dev (26 KU, retrieval-only): newest-above-stale is `replace` 0.654, `event_time` 0.962 at β = 0.05,
+  0.1 and 0.2, 0.885 at 0.5, and `rrf` 0.462. β = 0.1 still ties for best.
+- Held-out KU newest-above-stale is identical: 0.568 → 0.773 (+9/−0, p=0.004).
+- TR accuracy collapses again under `event_time`: 0.639 → 0.331 (+6/−47, p<0.001).
+- Pooled accuracy: `replace` 0.649, `event_time` 0.438 (+13/−52, p<0.001), `rrf` 0.665 (+15/−12, ns).
+- KU accuracy under `event_time` is not significant either way: 0.673 → 0.712 (+7/−5) now, versus
+  0.692 → 0.635 before.
+- The SSU guardrail matches: evidence lost vs `replace` at β = 0.05 / 0.1 / 0.2 / 0.5 is −8 / −10 / −14 /
+  −33 of 64.
+
+Paired against its own pre-#243 run, each variant's evidence retrieval changed on 1 of 178 questions.
+Its answer correctness flipped 7–10 times in each direction (ns), which is consistent with
+answerer/judge variance. Both lanes (two concurrent run databases, ~2½ h) finished with no OOM; the
+`p1` slice (119 questions, ~1.5k entities each, in one database) is the one that was OOM-killed before #243.
 
 ### Open-corpus scalability finding (BX-2 pooled run)
 
