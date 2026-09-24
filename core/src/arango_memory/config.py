@@ -80,6 +80,8 @@ class Settings(BaseSettings):
     # "rrf" = rank-blend of cross-encoder rank + fused rank (restores arm consensus/recency);
     # "event_time" = sigmoid(cross-encoder) + rerank_time_weight × newness of the memory's
     # content time (event_time), so a newer statement of the same fact outranks a stale one.
+    # Measured in RQ-3 (DESIGN §23): keep "replace" — "event_time" fixes update ordering but
+    # costs temporal-reasoning accuracy and recall; "rrf" is neutral.
     rerank_scoring: Literal["replace", "rrf", "event_time"] = "replace"
     rerank_time_weight: float = Field(default=0.1, ge=0.0)
 

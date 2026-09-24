@@ -111,7 +111,9 @@ diagnosed fix for in-pool-but-unranked golds, §9/§23), `RERANKER_PROVIDER` (`f
 cost scales with it. Off the lite hot path; degrades to the fused order if the model is
 unavailable), `RERANK_SCORING` (`replace` — how the reranked block is scored, RQ-3: `replace`
 = cross-encoder only; `rrf` = rank-blend with the fused rank; `event_time` = cross-encoder +
-`RERANK_TIME_WEIGHT` × content-time newness, so an updated fact outranks its stale statement),
+`RERANK_TIME_WEIGHT` × content-time newness, so an updated fact outranks its stale statement.
+**Keep `replace`** — measured in RQ-3, `event_time` hurts temporal-reasoning accuracy and recall and
+`rrf` is neutral; DESIGN §23),
 `RERANK_TIME_WEIGHT` (0.1 — `event_time` only; the newness prior's weight);
 lifecycle: `DECAY_LAMBDA` (0.02),
 `DECAY_FLOOR` (0.1),

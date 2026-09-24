@@ -45,7 +45,8 @@ from the `v0.1.0` tag.
   `replace` (default, unchanged: cross-encoder only), `rrf` (rank-blend of cross-encoder and
   fused rank, restoring arm consensus/recency), or `event_time` (sigmoid of the cross-encoder
   score + `RERANK_TIME_WEIGHT` × content-time newness, so an updated statement of a fact
-  outranks the stale one). `retrieve()` takes per-call `rerank_scoring` / `rerank_time_weight`
+  outranks the stale one). **Measured (DESIGN §23): keep `replace`** — `event_time` fixes update
+  ordering but hurts temporal-reasoning accuracy (0.654 → 0.368) and recall; `rrf` is neutral. `retrieve()` takes per-call `rerank_scoring` / `rerank_time_weight`
   overrides and a `record_access=False` read-only probe (skips the spaced-repetition refresh).
 - Per-request candidate pool (RT-1): `CANDIDATE_POOL` (default 100) is the per-arm candidate
   count before fusion/rerank/MMR, also overridable per call via `opts.candidate_pool`. Raise it

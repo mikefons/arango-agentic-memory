@@ -1245,6 +1245,65 @@ Both are opt-in and off the lite hot path; the reranker does not reach the ~1.0 
 retrievals + cross-encoder, p50 ~9s/question) — the **recommended max-recall setting**
 (`MODE=multihop RERANK=--rerank`), traded against latency. See [ops.md](ops.md) for run steps.
 
+### RQ-3 rerank scoring — replace vs blend: `replace` stays (rev 93)
+
+RQ-2b *replaces* the fused score with the cross-encoder's, discarding recency and arm consensus
+inside the reranked block. RQ-3 tested whether blending them back helps a memory system: **`rrf`**
+(rank-blend of cross-encoder and fused rank) and **`event_time`** (`sigmoid(ce) + β × newness` of
+the memory's content time, IN-4). The fused score's own recency is *access* time, which is uniform
+within a LongMemEval ingest, so only a content-time prior can move knowledge-update.
+
+**Design.** LongMemEval-S, graph-on (spaCy) + local `bge-reranker-base` + `openai` embeddings +
+Haiku answerer/judge, `--k 10`. Every variant is scored on **one ingest** per question with
+**read-only** retrieval probes (so no variant perturbs another's decay state) and compared
+**paired** (exact McNemar). Evidence metrics are deterministic from LongMemEval's `has_answer`
+turns: **evidence-in-top-k**, and for knowledge-update — whose 78 questions each carry a stale and
+an updated evidence session — **newest-above-stale**. β was tuned on a 26-question KU dev split
+(retrieval-only) and reported only on held-out questions.
+
+**Dev sweep (26 KU, retrieval-only):** newest-above-stale `replace` 0.654 → `event_time` 0.923 /
+**0.962** / 0.962 / 0.885 at β = 0.05 / **0.1** / 0.2 / 0.5 (β=0.1: +9/−1, p=0.021); `rrf` 0.500.
+β = 0.1 chosen (best ordering, least recall cost; also the pre-set default).
+
+**Held-out, judged (52 KU + 133 temporal-reasoning):**
+
+| slice | metric | replace | event_time β=0.1 | rrf |
+|---|---|---|---|---|
+| KU (52) | newest-above-stale (n=44) | 0.568 | **0.773** (+9/−0, p=0.004) | 0.477 (+1/−5, p=0.22) |
+| KU (52) | answer accuracy | 0.692 | 0.635 (+5/−8, p=0.58) | 0.769 (+6/−2, p=0.29) |
+| TR (133) | answer accuracy | 0.654 | **0.368** (+8/−46, p<0.001) | 0.639 (+12/−14, p=0.85) |
+| TR (133) | evidence in top-k | — | +4/−24 vs replace (p<0.001) | +2/−5 (p=0.45) |
+| pooled (185) | answer accuracy | 0.665 | 0.443 (+13/−54, p<0.001) | 0.676 (+18/−16, p=0.86) |
+
+**Guardrail — single-session-user (70, retrieval-only), evidence in top-k vs `replace`:**
+`event_time` loses evidence at every β, dose-dependently — β 0.05: +0/−8 (p=0.008), 0.1: +0/−10
+(p=0.002), 0.2: +0/−14, 0.5: +0/−34 (recall 0.98 → 0.86 / 0.83 / 0.77 / 0.45); `rrf` +0/−1.
+
+**Findings.**
+- **`event_time` wins the metric it targets and loses the ones that matter.** It reliably puts the
+  updated statement above the stale one (replicated held-out, p=0.004), but KU *answers* don't
+  improve, and it collapses temporal-reasoning (−29 points) and costs single-session recall. The
+  newness prior is rank-scaled over the whole head, so it promotes *any* newer passage — not newer
+  versions of the same fact — and pushes out older evidence that date-arithmetic questions need.
+- **Why better ordering doesn't help KU:** IN-4 already surfaces each memory's date in the
+  assembled context (`- [2023/06/02] …`). Under `replace` the update is in top-k 93% of the time, so
+  the answerer sees both statements *with their dates* and resolves the supersession at read time.
+  Reordering adds nothing; dropping evidence removes information.
+- **`rrf` is neutral** on every slice (no significant gain or loss), so it doesn't earn a change.
+- **On LoCoMo/MuSiQue** (no `event_time` on any turn) `event_time` is *identical* to `replace` by
+  construction (constant newness → a monotone transform of the cross-encoder score), so the planned
+  guardrail runs there would only have tested `rrf` — skipped, as neither blend qualified.
+
+**Decision (pre-registered rule): `replace` stays the default.** Both modes remain opt-in knobs
+(`RERANK_SCORING`); `event_time` is **not recommended** — if a newness signal is revisited, it must be
+scoped to *conflicting statements of the same fact* (entity/supersession-aware), not global recency.
+
+**Run notes.** Threading spaCy extraction (IN-7's pool) was a ~3× GIL-convoy slowdown (fixed
+separately: the pool now applies to I/O-bound extractors only), so runs used one process per slice;
+two ArangoDB OOM kills (8 GB Docker VM) from the batched ANN entity-resolution query growing with
+the shared `entities` collection motivated crash-safe `--checkpoint`/`--resume` (the OOM itself is a
+separate SC-1 follow-up). Total spend ≈ $4–5 (answer + judge + embeddings).
+
 ### Open-corpus scalability finding (BX-2 pooled run)
 
 All results above are on **given-context** MuSiQue (per-question ~20-paragraph tenants). The
