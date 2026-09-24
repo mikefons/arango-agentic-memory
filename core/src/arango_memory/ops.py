@@ -11,16 +11,19 @@ Commands:
   replay             re-enqueue + commit dead-lettered writes (§15)
   explain            EXPLAIN the hot-path queries; flag full-collection scans (§6)
   vector-diag        probe the vector arm; print the raw failure reason (MA-8)
+  mem-sample         print arangod memory metrics as JSON lines, every --interval seconds
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import time
 from typing import Any, cast
 
 from arango.cursor import Cursor
 from arango.database import StandardDatabase
+from arango.exceptions import ArangoError
 
 from .client import ArangoMemoryClient
 from .config import settings
@@ -161,6 +164,69 @@ def replay_dead_letters(
     return replayed
 
 
+# Server-wide memory metrics (ArangoDB 3.12 names) sampled by `mem-sample`. `untracked` is RSS
+# minus the rest: heap the allocator kept after a peak, plus anything without a metric.
+_MEMORY_METRICS = {
+    "rss": "arangodb_process_statistics_resident_set_size",
+    "block_cache": "rocksdb_block_cache_usage",
+    "memtables": "rocksdb_size_all_mem_tables",
+    "cache": "rocksdb_cache_allocated",
+    "aql": "arangodb_aql_global_memory_usage",
+    "index_estimates": "arangodb_index_estimates_memory_usage",
+}
+
+
+def parse_metrics(text: str) -> dict[str, float]:
+    """Prometheus text → {metric name: value summed over its label sets}."""
+    out: dict[str, float] = {}
+    for line in text.splitlines():
+        if not line or line.startswith("#"):
+            continue
+        series, _, value = line.rpartition(" ")
+        name = series.split("{", 1)[0]
+        try:
+            out[name] = out.get(name, 0.0) + float(value)
+        except ValueError:
+            continue
+    return out
+
+
+def memory_sample(client: ArangoMemoryClient) -> dict[str, Any]:
+    """One snapshot of arangod memory (MiB) plus the entities/memories and vector indexes held
+    across every database — so a climb can be matched to what the workload had loaded."""
+    sys_db = client.database("_system")
+    metrics = parse_metrics(cast(str, sys_db.metrics()))
+    mib = {k: round(metrics.get(name, 0.0) / 2**20) for k, name in _MEMORY_METRICS.items()}
+    mib["untracked"] = mib["rss"] - sum(v for k, v in mib.items() if k != "rss")
+    held = {"entities": 0, "memories": 0, "vector_indexes": 0}
+    for name in cast("list[str]", sys_db.databases()):
+        try:  # a database can be dropped between listing and counting
+            db = client.database(name)
+            for coll in ("entities", "memories"):
+                if db.has_collection(coll):
+                    held[coll] += cast(int, db.collection(coll).count())
+                    indexes = cast("list[dict[str, Any]]", db.collection(coll).indexes())
+                    held["vector_indexes"] += sum(i.get("type") == "vector" for i in indexes)
+        except ArangoError:
+            continue
+    return {"ts": utcnow_iso(), **{f"{k}_mib": v for k, v in mib.items()}, **held}
+
+
+def _sample_memory(interval: float, count: int) -> None:
+    client = ArangoMemoryClient()
+    taken = 0
+    while True:
+        try:
+            row = memory_sample(client)
+        except Exception as exc:  # keep sampling through an outage — the OOM is the event
+            row = {"ts": utcnow_iso(), "error": f"{type(exc).__name__}: {exc}"}
+        print(json.dumps(row), flush=True)
+        taken += 1
+        if count and taken >= count:
+            return
+        time.sleep(interval)
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="arango_memory.ops")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -169,6 +235,9 @@ def _build_parser() -> argparse.ArgumentParser:
     sub.add_parser("replay", help="re-enqueue + commit dead-lettered writes")
     sub.add_parser("explain", help="EXPLAIN hot-path queries; flag full-collection scans")
     sub.add_parser("vector-diag", help="probe the vector arm; print the raw failure reason")
+    mem = sub.add_parser("mem-sample", help="print arangod memory metrics as JSON lines")
+    mem.add_argument("--interval", type=float, default=30.0, help="seconds between samples")
+    mem.add_argument("--count", type=int, default=0, help="stop after N samples (0 = forever)")
     return parser
 
 
@@ -177,6 +246,9 @@ def main(argv: list[str] | None = None) -> int:
     # class name (MA-8) — the opacity that stalled the P1 benchmark.
     configure_logging()
     args = _build_parser().parse_args(argv)
+    if args.command == "mem-sample":  # server-wide and read-only: don't create ARANGO_DB
+        _sample_memory(args.interval, args.count)
+        return 0
     db = ArangoMemoryClient().connect()
     embedder = get_embedder()
 

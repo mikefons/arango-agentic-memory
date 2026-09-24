@@ -95,7 +95,10 @@ from the `v0.1.0` tag.
 - Durable write path: pluggable `WriteQueue` (in-memory default, ArangoDB-backed
   for production) with claim/ack leasing, dead-letter (`failed_writes`), and
   `ops replay`. Multi-instance via a shared `arango` queue.
-- `ops` CLI: `vector-rebuild`, `embeddings-migrate`, `replay`, `explain`.
+- `ops` CLI: `vector-rebuild`, `embeddings-migrate`, `replay`, `explain`, and `mem-sample`
+  (arangod memory metrics as JSON lines: RSS, block cache, write buffers, the untracked
+  remainder, and the entities/memories held across all databases — run it alongside a long
+  benchmark to see what grows).
 - Persistent scope indexes backing every hot-path tenant/agent/invalid_at filter.
 
 ### Added — security
@@ -230,6 +233,13 @@ from the `v0.1.0` tag.
   aren't on a common scale, so appending raw scores could rank a tail item above the head). No
   change at the defaults (`k=10`, `rerank_top_n=50`, `MMR_LAMBDA=1.0`); with `MMR_LAMBDA < 1`,
   MMR's diversity term can now also draw from the tail.
+
+- **Local ArangoDB sized its caches for the whole Docker VM.** In `docker-compose.yml` arangod
+  auto-sized a 1.85 GB block cache and ~6.7 GB of AQL memory from the 8 GB VM it shares with the
+  core, and after the RQ-3 LongMemEval rerun an idle, empty server still held 4.19 GB RSS (6.08 GB
+  peak). Compose now sets `ARANGODB_OVERRIDE_DETECTED_TOTAL_MEMORY` from `ARANGO_DETECTED_MEMORY`
+  (default `4G` → 512 MiB block cache, 3.24 GB AQL). The entities Faiss index was ruled out:
+  measured at 100k 1536-dim entities, an index no query touches costs nothing measurable at rest.
 
 ### Fixed — examples
 

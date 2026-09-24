@@ -22,6 +22,11 @@ services:
     environment:
       ARANGO_ROOT_PASSWORD: ${ARANGO_PASSWORD:-changeme}
       ARANGO_LICENSE_KEY: ${ARANGO_LICENSE_KEY:-}
+      # arangod sizes its RocksDB block cache, in-memory cache, write buffers and AQL memory
+      # limits from the RAM it detects — in a container that is the whole Docker VM, shared with
+      # the core. 4G → 512 MiB block cache (vs 1.85 GB auto-sized on an 8 GB VM) and 3.24 GB total
+      # AQL memory. Raise it on a dedicated host.
+      ARANGODB_OVERRIDE_DETECTED_TOTAL_MEMORY: ${ARANGO_DETECTED_MEMORY:-4G}
     # --vector-index enables Faiss IVF support (DESIGN.md §5).
     # (Renamed from --experimental-vector-index in 3.12.9.)
     command: ["arangod", "--vector-index=true"]

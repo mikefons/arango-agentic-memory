@@ -43,22 +43,18 @@ class ArangoMemoryClient:
         sys_db = self._sys_db()
         if not sys_db.has_database(cfg.arango_db):
             sys_db.create_database(cfg.arango_db)
-
-        if cfg.arango_bearer_token:
-            self._db = self._client.db(cfg.arango_db, user_token=cfg.arango_bearer_token)
-        else:
-            self._db = self._client.db(
-                cfg.arango_db, username=cfg.arango_username, password=cfg.arango_password
-            )
+        self._db = self.database(cfg.arango_db)
         return self._db
 
-    def _sys_db(self) -> StandardDatabase:
+    def database(self, name: str) -> StandardDatabase:
+        """A handle on any database on the server, with the configured credentials."""
         cfg = self._config
         if cfg.arango_bearer_token:
-            return self._client.db("_system", user_token=cfg.arango_bearer_token)
-        return self._client.db(
-            "_system", username=cfg.arango_username, password=cfg.arango_password
-        )
+            return self._client.db(name, user_token=cfg.arango_bearer_token)
+        return self._client.db(name, username=cfg.arango_username, password=cfg.arango_password)
+
+    def _sys_db(self) -> StandardDatabase:
+        return self.database("_system")
 
     def ping(self) -> bool:
         """Health check used by the API /health endpoint."""
