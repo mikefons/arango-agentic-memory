@@ -101,6 +101,9 @@ core/converted.json
 # Anchored to core/ so the committed smoke slice (core/tests/data/*_smoke.json) stays tracked.
 /core/longmemeval_*.json
 /core/lme.json
+# Benchmark run artifacts (converted slices, checkpoints, logs) — derived from the licensed
+# datasets above, and kept out of /tmp so a checkpoint survives a reboot (RQ-3).
+/core/bench_runs/
 
 # ─── Local presentation assets (never commit) ───────────────
 presentation-screenshots/

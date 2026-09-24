@@ -45,7 +45,7 @@ Sizes: S ≈ ≤1 day, M ≈ 2–3 days.
 | 13 | BX-3 | Lightweight pooled diagnostic (extract-skip + graph-off; routes around O(n²) wall) | S | shipped (33% first-stage gap) |
 | 14 | SC-1 | Single-large-tenant scalability: ANN entity resolution + bounded graph fan-out | L | — |
 | 15 | RT-1 | Expose `candidate_pool` as a config + API knob (open-corpus tuning) | S | — |
-| 16 | RQ-3 | Rerank scoring: replace vs rank-blend vs event-time-aware (paired LongMemEval) | M | RQ-2b, IN-4 |
+| 16 | RQ-3 | Rerank scoring: replace vs rank-blend vs event-time-aware (paired LongMemEval) ✅ — **replace stays** | M | RQ-2b, IN-4 |
 
 Recommended sequence: **MA-1 → MA-2 → MA-3 → MA-4 → MA-5 → MA-6**, with MA-7/MA-8
 schedulable any time (no dependencies on the others). MA-1…MA-8 are **shipped**. **RQ-1**
@@ -1130,7 +1130,18 @@ byte-identical to today; docs explain the tuning. Size S.
 
 ## RQ-3 — Rerank scoring: replace vs blend (does the reranker throw away time?)
 
-*Scoped, not started.*
+*Done — **negative result, `replace` stays the default** (DESIGN §23, rev 93).* `event_time` reliably
+put updates above stale facts (held-out KU newest-above-stale 0.568 → 0.773, p=0.004) but KU answers
+didn't improve and temporal-reasoning collapsed (0.654 → 0.368, p<0.001): IN-4's dates in the
+assembled context already let the answerer resolve updates, and a global newness prior evicts older
+evidence. `rrf` was neutral everywhere. Any future newness signal must be scoped to conflicting
+statements of the same fact, not global recency.
+
+*Tooling notes:* Two findings from building it: variants
+must be scored with **read-only** retrieval probes (`record_access=False`) — a normal retrieve
+refreshes `accessed_at`, which feeds decay and would let one variant perturb the next; and
+`parse_explicit_time` can't order LongMemEval session dates (it reads `2023/05/20 (Sat) 02:21` as a
+bare year), so `event_time` scoring uses its own date+time sort key.
 
 **Why.** RQ-2b's locked decision *replaces* `fused_score` with the cross-encoder score for the
 reranked top-N (clean measurement of the reranker's lift; the two scores aren't on a common scale —
