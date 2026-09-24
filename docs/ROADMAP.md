@@ -300,6 +300,21 @@ fake/spaCy/GLiNER) and `write_entities_many` threads only when it's True. A thir
 without the attribute is treated as I/O-bound — the pre-flag behavior, and custom extractors are
 most often API wrappers; a CPU-bound one should set `io_bound = False`.
 
+**Confirmed after merge (#241, 2026-09-24).** Same question (`6a1eabeb`), same config
+(`--k 10 --rerank --extract`), fresh DB per run:
+
+| code | `EXTRACTION_CONCURRENCY` | wall | system CPU |
+|---|---|---|---|
+| pre-fix | 8 | 94s / 101s (2 runs) | 140s / 168s |
+| pre-fix | 1 | 58s | 3.0s |
+| **post-fix** | **8** | **49s** | **2.4s** |
+
+The default now matches the sequential path (the setting is inert for spaCy), and the graph
+matches across all four runs (1,287 entities, 2,891 mentions, 3,595 `relates_to`,
+Σcorroboration 5,200 — same entity checksum). Absolute times sit below the original
+42s/2m14s (machine/network load); the convoy signature — system CPU ≫ user at 8 threads,
+≈0 sequentially — is the same.
+
 **Files.** `core/src/arango_memory/ingest/entities.py` (pooled step 1),
 `core/src/arango_memory/ingest/extract.py` (thread-safe Haiku cache), `core/src/arango_memory/config.py`
 (`extraction_concurrency`), `docs/ops.md`.
