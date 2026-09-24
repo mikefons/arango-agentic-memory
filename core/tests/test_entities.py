@@ -96,6 +96,7 @@ def test_resolution_uses_ann_index_once_warm_and_still_merges(
 
     monkeypatch.setattr(s, "entity_vector_n_lists", 2)
     monkeypatch.setattr(s, "entity_vector_train_factor", 2)  # index builds at 4 entities
+    monkeypatch.setattr(s, "entity_resolution_scan_max", 0)  # tiny tenant → still take ANN
     emb = StubEmbedder({
         "Alice": [1.0, 0.0, 0.0], "Bravo": [0.0, 1.0, 0.0], "Cara": [0.0, 0.0, 1.0],
         "Delta": [-1.0, 0.0, 0.0], "Echo": [0.0, -1.0, 0.0], "Foxtrot": [0.0, 0.0, -1.0],

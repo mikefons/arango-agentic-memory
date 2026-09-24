@@ -216,3 +216,89 @@ def test_io_bound_declarations() -> None:
     cheap = LayeredExtractor(base=FakeExtractor())
     assert not is_io_bound(cheap)  # no LLM tier to escalate to
     assert is_io_bound(LayeredExtractor(base=FakeExtractor(), haiku=HaikuExtractor()))
+
+
+def _seed_entities(db: StandardDatabase, tenant: str, n: int, *, dim: int, seed: int) -> None:
+    import random
+
+    rnd = random.Random(seed)
+    db.collection("entities").insert_many([
+        {"tenant_id": tenant, "name": f"{tenant}_{i}", "label": "X",
+         "embedding": [rnd.gauss(0.0, 1.0) for _ in range(dim)]}
+        for i in range(n)
+    ], silent=True)
+
+
+def test_ann_resolution_pool_is_per_query_vector(
+    db: StandardDatabase, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The batched ANN pool must hold each query vector's own top-k. The old query put SORT/LIMIT
+    # at the top level of the nested FOR, so ArangoDB returned top-k rows for the WHOLE batch
+    # (2 here) and most entities resolved against the wrong candidates.
+    from arango_memory.config import settings as s
+    from arango_memory.ingest import entities as ent
+
+    monkeypatch.setattr(s, "entity_vector_n_lists", 2)
+    monkeypatch.setattr(s, "entity_vector_train_factor", 1)
+    monkeypatch.setattr(s, "entity_resolution_scan_max", 0)
+    monkeypatch.setattr(s, "entity_resolution_top_k", 2)
+    monkeypatch.setattr(s, "n_probe", 2)  # search every IVF cell → exact on this tiny index
+    monkeypatch.setattr(ent, "_ANN_QVEC_CHUNK", 7)  # exercise chunking
+    _seed_entities(db, "big", 30, dim=8, seed=1)
+    _seed_entities(db, "other", 30, dim=8, seed=2)
+    rows = list(db.aql.execute(
+        "FOR e IN entities FILTER e.tenant_id == 'big' RETURN {name: e.name, v: e.embedding}"
+    ))
+
+    assert ent._use_ann(db, "big", dimensions=8) is True
+    pool = ent._resolution_pool(db, "big", [r["v"] for r in rows], use_ann=True)
+    assert {p["name"] for p in pool} == {r["name"] for r in rows}  # every vector finds itself
+    assert all(p["embedding"] for p in pool)  # rows fetched in full for the numpy match
+
+
+def test_resolution_cost_is_independent_of_other_tenants(
+    db: StandardDatabase, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A small tenant resolves by an exact tenant-scoped scan even once the shared index is warm:
+    # filtered ANN widens until it finds top-k rows of the tenant, so its cost grew with OTHER
+    # tenants' entities (OOM-killed a many-tenant LongMemEval database). Same queries, same rows
+    # read, whatever the rest of the collection holds.
+    from arango.aql import AQL
+
+    from arango_memory.config import settings as s
+    from arango_memory.ingest import entities as ent
+
+    monkeypatch.setattr(s, "entity_vector_n_lists", 2)
+    monkeypatch.setattr(s, "entity_vector_train_factor", 1)
+    _seed_entities(db, "small", 5, dim=8, seed=1)
+    _seed_entities(db, "noisy", 20, dim=8, seed=2)
+    qvecs = [[1.0] * 8, [-1.0] * 8]
+
+    original = AQL.execute
+
+    def resolve() -> tuple[list[str], int, int]:
+        seen: list[tuple[str, Any]] = []
+
+        def recording(self: AQL, query: str, *args: object, **kwargs: object) -> object:
+            cur = original(self, query, *args, **kwargs)
+            seen.append((query, cur))
+            return cur
+
+        monkeypatch.setattr(AQL, "execute", recording)
+        try:
+            pool = ent._resolution_pool(
+                db, "small", qvecs, use_ann=ent._use_ann(db, "small", dimensions=8)
+            )
+        finally:
+            monkeypatch.setattr(AQL, "execute", original)
+        read = sum(c.statistics()["scanned_index"] + c.statistics()["scanned_full"]
+                   for _, c in seen)
+        return [q for q, _ in seen], read, len(pool)
+
+    small = resolve()
+    _seed_entities(db, "noisy", 500, dim=8, seed=3)
+    large = resolve()
+
+    assert small == large
+    assert not any("APPROX_NEAR" in q for q in large[0])
+    assert large[2] == 5
