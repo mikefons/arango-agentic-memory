@@ -176,6 +176,13 @@ from the `v0.1.0` tag.
 
 ### Fixed — core
 
+- **Extraction concurrency slowed CPU-bound extractors ~3x.** The IN-7 thread pool
+  (`EXTRACTION_CONCURRENCY`, default 8) wrapped every extractor, but spaCy (and the regex/GLiNER
+  tiers) mostly hold the GIL, so threads just convoyed: a 413-turn LongMemEval question with
+  `EXTRACTION_PROVIDER=spacy` took 2m14s at 8 threads (≈356s system CPU) vs 42s at 1, identical
+  output. Extractors now declare `io_bound`; the pool is used only for I/O-bound (LLM) extraction
+  — `haiku`, or `layered` with a Haiku tier — and the rest run sequentially. Custom extractors
+  without the attribute keep the threaded path; set `io_bound = False` to opt out.
 - **Vector retrieval under-probed the trained index.** `settings.n_probe` was defined but never
   passed to `APPROX_NEAR_COSINE`, so once a tenant's Faiss IVF index trained it searched ArangoDB's
   default of a single cell — losing ~30% recall versus the exact pre-training scan (surfaced by the
