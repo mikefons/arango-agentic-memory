@@ -182,6 +182,12 @@ from the `v0.1.0` tag.
   HX-2 recall-vs-corpus sweep: the vector arm collapsed to 0.40 recall-frac at 3,075 docs). The
   query now passes `{nProbe: settings.n_probe}`; recovery is ~0.41 → ~0.61 recall-frac at the
   default (`n_probe=10`), and nProbe is nearly free (retrieval latency is embedding-round-trip-bound).
+- **`store_many(extract=True)` double-counted the graph on replay.** The batched graph pass fed
+  every item to `write_entities_many` whether or not its episode already existed, so re-running a
+  batch (e.g. a benchmark against an existing DB with `--extract`, or a library retry) added again
+  to entity `mention_count`/`belief` and `relates_to` `corroboration`. It now checks which episode
+  keys already exist in one AQL round trip and graph-reflects only new ones, matching `store()`'s
+  `is_new` gate (§8); replayed items return empty `entity_ids`.
 - **Rerank silently truncated results when `k > RERANK_TOP_N`.** `_rerank` returned only the
   reranked head, dropping every fused candidate past `rerank_top_n` — contrary to the documented
   "the rest keep their fused order below the reranked block". The tail is now kept below the head

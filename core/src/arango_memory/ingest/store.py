@@ -101,7 +101,9 @@ def store_many(
     + memories (~2 round trips), then — when `extract=True` — reflect the whole batch into the
     entity graph in a handful more round trips (`write_entities_many`), instead of ~3+4E+pairs
     per turn. Idempotent and read-your-writes consistent (same keys as `store()`), so BM25 +
-    vector retrieval work immediately.
+    vector retrieval work immediately. Like `store()`, only NEW episodes feed the graph pass
+    (one existence lookup per batch), so a replay never double-counts mention_count / belief /
+    corroboration (§8); replayed items return empty `entity_ids`.
 
     Full-mode prospective indexing, working-capacity eviction, and topic-shift tracking stay
     per-item concerns in `store()`; `store_many` records working memories with their TTL but
@@ -129,7 +131,16 @@ def store_many(
     # 2. one embed batch for all distinct contents (cache-aware, §16).
     vec_by_text = embed_batch_cached(emb, [c for _, c, _ in prepared], tenant_id=tenant_id)
 
-    # 3. build docs, then 4. bulk-insert record, then 5. (optional) batched graph pass.
+    # 3. which episodes already exist (one round trip) — replays must not re-feed the graph.
+    existing: set[str] = set()
+    if extract:
+        cursor = cast(Cursor, db.aql.execute(
+            "FOR d IN DOCUMENT('episodes', @keys) RETURN d._key",
+            bind_vars={"keys": list({k for _, _, k in prepared})},
+        ))
+        existing = set(cursor)
+
+    # 4. build docs, then 5. bulk-insert record, then 6. (optional) batched graph pass.
     episodes: list[dict[str, Any]] = []
     memories: list[dict[str, Any]] = []
     order: list[tuple[str, str]] = []  # (episode_key, memory_key), for building results
@@ -149,8 +160,10 @@ def store_many(
             emb=emb, prospective=[], now=now, event_time=item.event_time,
         ))
         order.append((ep_key, mem_key))
-        # Working memory never mints durable entities (mirrors _store_impl).
-        if extract and not is_working:
+        # Working memory never mints durable entities; only new episodes feed the graph, once
+        # each even if repeated within the batch (mirrors _store_impl's `is_new` gate).
+        if extract and not is_working and ep_key not in existing:
+            existing.add(ep_key)
             graph_inputs.append(GraphMemory(
                 memory_key=mem_key, episode_key=ep_key, content=content,
                 source_reliability=item.source_reliability,
