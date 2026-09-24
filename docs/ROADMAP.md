@@ -45,6 +45,7 @@ Sizes: S ≈ ≤1 day, M ≈ 2–3 days.
 | 13 | BX-3 | Lightweight pooled diagnostic (extract-skip + graph-off; routes around O(n²) wall) | S | shipped (33% first-stage gap) |
 | 14 | SC-1 | Single-large-tenant scalability: ANN entity resolution + bounded graph fan-out | L | — |
 | 15 | RT-1 | Expose `candidate_pool` as a config + API knob (open-corpus tuning) | S | — |
+| 16 | RQ-3 | Rerank scoring: replace vs rank-blend vs event-time-aware (paired LongMemEval) | M | RQ-2b, IN-4 |
 
 Recommended sequence: **MA-1 → MA-2 → MA-3 → MA-4 → MA-5 → MA-6**, with MA-7/MA-8
 schedulable any time (no dependencies on the others). MA-1…MA-8 are **shipped**. **RQ-1**
@@ -1099,6 +1100,76 @@ path; the finding is open-corpus-specific, so make it *tunable*, not *bigger-by-
 
 **Acceptance.** `CANDIDATE_POOL` settable via env + `/v1/retrieve` opts; default runs are
 byte-identical to today; docs explain the tuning. Size S.
+
+---
+
+## RQ-3 — Rerank scoring: replace vs blend (does the reranker throw away time?)
+
+*Scoped, not started.*
+
+**Why.** RQ-2b's locked decision *replaces* `fused_score` with the cross-encoder score for the
+reranked top-N (clean measurement of the reranker's lift; the two scores aren't on a common scale —
+RRF is `Σ w/(60+rank)` ≈ 0.01–0.05, `bge-reranker` emits unbounded, often-negative logits). The cost:
+inside the reranked block we discard (a) **recency** and (b) **arm consensus** (a hit found by
+BM25 *and* vector *and* graph). For a memory system that's suspicious — the knowledge-update case is
+exactly "the same fact, stated twice; the newer one should win", and a cross-encoder scores the
+stale and fresh statements as equally relevant.
+
+**The load-bearing design finding (read before building).** The fused score's recency is
+**access recency**: `effective_strength(strength, accessed_at, now)` (`lifecycle/decay.py`) — wall-
+clock ingest/access time, *not* content time. LongMemEval ingests each question's whole history in
+one `store_many` batch with a single `now`, so **every candidate carries an identical decay factor**.
+A blend that "restores the fused score's recency" is therefore a **null by construction** on
+LongMemEval. To move knowledge-update the variant must use **content time** — `event_time`, the
+session date each memory already carries as a field (IN-4). (Access recency still matters in
+production, where it varies — but no offline benchmark here can measure it.)
+
+**Data supports a sharp test.** In LongMemEval-S, **all 78 knowledge-update questions have ≥2
+evidence sessions** (the stale fact + the update), turns carry `has_answer` labels (10,960 labelled
+turns), and sessions carry `haystack_dates`. So "is the *newest* evidence ranked above the *stale*
+evidence?" is measurable **deterministically**, with no LLM judge in the loop. Type sizes in the full
+set: knowledge-update 78, temporal-reasoning 133, multi-session 133, single-session-user 70,
+-assistant 56, -preference 30 (500 total). The stratified-90 (n=15/type, ±1–2 questions of judge
+noise = ±0.07–0.13) is **too small** to detect this effect — use the full per-type slices.
+
+**Variants** (new `rerank_scoring: Literal["replace", "rrf", "event_time"] = "replace"` in
+`config.py`, applied inside `search._rerank`; default keeps today's behaviour byte-identical):
+- **`replace`** — current RQ-2b behaviour (the baseline).
+- **`rrf`** — rank-level blend: `1/(60 + rank_ce) + 1/(60 + rank_fused)` over the head. Rank-based,
+  so no score calibration; carries arm consensus (and, in production, access recency) back in.
+- **`event_time`** — cross-encoder relevance plus a content-time prior: normalize CE scores within the
+  head (sigmoid of the logit), then add `β · newness(event_time)` where newness ranks the head's
+  `event_time`s (newest = 1). Candidates without `event_time` get a neutral prior.
+- Weights/`β` are **fixed a priori or tuned on a dev split** (e.g. 26 of the 78 KU questions),
+  reporting on the held-out remainder only — never tuned on the reported set.
+
+**Metrics.**
+1. **Update ordering (primary, deterministic):** over the 78 KU questions — is a `has_answer` turn
+   from the *newest* evidence session in top-k, and ranked above any stale-evidence turn? Plus
+   evidence recall@k (fraction of answer sessions with ≥1 `has_answer` turn retrieved).
+2. **End-to-end judged accuracy** on knowledge-update (78) + temporal-reasoning (133) + overall,
+   **paired per question** across variants; significance via McNemar's test on the discordant pairs.
+3. **Guardrails (must not regress):** LoCoMo lite+rerank Recall@k (0.700, n=1,531) and MuSiQue
+   all-hops rerank (0.565, n=200). Neither has a useful `event_time` signal, so a blend that dilutes
+   the cross-encoder there is a real risk.
+
+**Build plan.**
+1. `longmemeval_convert`: opt-in `--evidence` flag that carries per-turn `has_answer` + session date
+   into the converted QA (today `gold_fact` is intentionally left empty).
+2. `_rerank`: the three scoring modes behind `rerank_scoring` (unit-tested like the RQ-2b tail tests —
+   pure functions over `_Candidate`, incl. negative logits and missing `event_time`).
+3. Harness: `--rerank-scoring replace,rrf,event_time` **evaluates every variant against one ingest**
+   and emits a per-variant report + the paired table. Must not be done by re-running the harness on
+   the same `ARANGO_DB`: `store_many(extract=True)` has no replay guard, so a second ingest would
+   double-count graph beliefs (filed separately).
+4. Runs: KU + TR slices (211 Qs), graph-on spaCy (keyless) + `RERANKER_PROVIDER=local`, `--concurrency`.
+   Cost is answer+judge only: ~211 × 3 variants × 2 Haiku calls ≈ 1.3k calls (low single-digit $);
+   extraction is keyless. Then the LoCoMo + MuSiQue guardrail runs.
+
+**Decision rule.** Make a blend the default only if it improves KU update-ordering with paired
+significance **and** holds KU/TR/overall judged accuracy **and** passes both guardrails. Otherwise
+keep `replace` as the default, ship the winning blend as an opt-in knob (or drop it), and record the
+null in DESIGN §23 — either outcome is publishable. Size M.
 
 ---
 

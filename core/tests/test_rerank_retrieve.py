@@ -4,8 +4,10 @@ from __future__ import annotations
 
 from collections.abc import Callable, Sequence
 
+import pytest
 from arango.database import StandardDatabase
 
+from arango_memory.config import settings
 from arango_memory.ingest.store import store
 from arango_memory.retrieve.search import RetrieveResult, retrieve
 
@@ -61,6 +63,29 @@ def test_rerank_degrades_to_fused_order_on_failure(
     result = retrieve(db, query="alice acme", **ctx, k=10, rerank=True, reranker=_BoomReranker())
     assert result.hits
     assert {h.text for h in result.hits} == {h.text for h in baseline.hits}
+
+
+def test_rerank_does_not_truncate_when_k_exceeds_top_n(
+    db: StandardDatabase,
+    wait_for_searchable: Callable[..., RetrieveResult],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ctx = {"tenant_id": "t_rr_tail", "agent_id": "a"}
+    for i in range(6):
+        store(db, content=f"harbor log entry {i} about ferries", turn_index=i, **ctx)
+    wait_for_searchable(db, query="harbor ferries entry 5", **ctx)
+    baseline = retrieve(db, query="harbor ferries", **ctx, k=6)
+
+    # Rerank only the top 2; the other candidates must still be returned below them (the old
+    # head-only return truncated this to 2 hits). Exact ordering is pinned by the unit tests in
+    # test_rerank.py — these docs tie on BM25, so fused order isn't stable enough to assert here.
+    monkeypatch.setattr(settings, "rerank_top_n", 2)
+    result = retrieve(
+        db, query="harbor ferries", **ctx, k=6, rerank=True, reranker=_KeywordReranker("entry")
+    )
+    assert len(result.hits) == len(baseline.hits) > 2
+    scores = [h.score for h in result.hits]
+    assert scores == sorted(scores, reverse=True)
 
 
 def test_rerank_off_by_default(

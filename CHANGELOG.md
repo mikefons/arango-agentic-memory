@@ -9,10 +9,11 @@ ships. Until then (`0.x`), minor versions may carry breaking changes; see
 The Python core (`arango-memory`) and the Vercel adapter (`@arango-memory/vercel`)
 are versioned together and released from this repository.
 
-## [Unreleased]
+## [0.1.0] — 2026-09-16
 
-First planned release (`0.1.0`). Everything below is the initial public surface;
-it has not yet been tagged or published to a registry.
+First public release. Everything below is the initial public surface, published to
+PyPI (`arango-memory`), npm (`@arango-memory/vercel`), and GHCR (the core image)
+from the `v0.1.0` tag.
 
 ### Added — core
 
@@ -141,7 +142,7 @@ it has not yet been tagged or published to a registry.
 - **Gated release pipeline** (`.github/workflows/release.yml`): a `v*` tag builds the
   core wheel/sdist, the `@arango-memory/vercel` tarball, and the container image with a
   CycloneDX SBOM + dependency scan each; publishing no-ops until registry credentials
-  are added. Full package metadata; **MIT** `LICENSE`.
+  are added. Full package metadata; **Apache-2.0** `LICENSE` + `NOTICE`.
 - **Hardened container** — digest-pinned base, non-root user, `HEALTHCHECK`; a CI image
   build-smoke runs on every PR.
 
@@ -187,6 +188,13 @@ it has not yet been tagged or published to a registry.
   to entity `mention_count`/`belief` and `relates_to` `corroboration`. It now checks which episode
   keys already exist in one AQL round trip and graph-reflects only new ones, matching `store()`'s
   `is_new` gate (§8); replayed items return empty `entity_ids`.
+- **Rerank silently truncated results when `k > RERANK_TOP_N`.** `_rerank` returned only the
+  reranked head, dropping every fused candidate past `rerank_top_n` — contrary to the documented
+  "the rest keep their fused order below the reranked block". The tail is now kept below the head
+  in its fused order, re-scored just under the head's minimum (RRF scores and cross-encoder logits
+  aren't on a common scale, so appending raw scores could rank a tail item above the head). No
+  change at the defaults (`k=10`, `rerank_top_n=50`, `MMR_LAMBDA=1.0`); with `MMR_LAMBDA < 1`,
+  MMR's diversity term can now also draw from the tail.
 
 ### Fixed — examples
 
@@ -203,4 +211,4 @@ it has not yet been tagged or published to a registry.
   now also `console.error`s caught errors, so a failed phase shows its cause in the platform logs
   instead of being a black box. Confirmed fixed against the live deployment.
 
-[Unreleased]: https://github.com/mikefons/arango-agentic-memory/commits/main
+[0.1.0]: https://github.com/mikefons/arango-agentic-memory/releases/tag/v0.1.0

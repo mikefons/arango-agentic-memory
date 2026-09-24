@@ -125,4 +125,4 @@ docker-compose.yml     ArangoDB (Enterprise) + core for local dev
 
 ## License
 
-[MIT](LICENSE).
+[Apache-2.0](LICENSE).
