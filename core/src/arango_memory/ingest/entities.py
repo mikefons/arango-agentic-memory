@@ -70,24 +70,42 @@ FOR e IN entities
 _NEAREST_ENTITIES = """
 FOR e IN entities
   FILTER e.tenant_id == @tenant_id
-  LET score = APPROX_NEAR_COSINE(e.embedding, @qvec)
+  LET score = APPROX_NEAR_COSINE(e.embedding, @qvec, {nProbe: @nprobe})
   SORT score DESC
   LIMIT @topk
   RETURN { key: e._key, name: e.name, label: e.label, embedding: e.embedding }
 """
 
-# IN-6: the union of top-k nearest existing entities across a whole batch of query vectors, in
-# ONE round trip (vs one `_NEAREST_ENTITIES` call per entity). The union is a superset of each
-# vector's own top-k, so the per-entity best match is unchanged; DISTINCT dedups the overlap.
-_NEAREST_ENTITIES_BATCH = """
+# IN-6: the union of top-k nearest existing entity KEYS across a chunk of query vectors, in ONE
+# round trip (vs one `_NEAREST_ENTITIES` call per entity). The per-qvec SORT/LIMIT must sit in a
+# subquery: at the top level of a nested FOR they apply to the whole stream, and ArangoDB 3.12.9
+# then returned `topk` rows for the entire batch, not per vector. Keys only — DISTINCT over
+# 1536-dim embedding objects was the memory hog; `_FETCH_BY_KEYS` loads each distinct row once.
+_NEAREST_ENTITY_KEYS_BATCH = """
 FOR qvec IN @qvecs
-  FOR e IN entities
-    FILTER e.tenant_id == @tenant_id
-    LET score = APPROX_NEAR_COSINE(e.embedding, qvec)
-    SORT score DESC
-    LIMIT @topk
-    RETURN DISTINCT { key: e._key, name: e.name, label: e.label, embedding: e.embedding }
+  FOR k IN (
+    FOR e IN entities
+      FILTER e.tenant_id == @tenant_id
+      SORT APPROX_NEAR_COSINE(e.embedding, qvec, {nProbe: @nprobe}) DESC
+      LIMIT @topk
+      RETURN e._key
+  )
+    RETURN DISTINCT k
 """
+
+_FETCH_BY_KEYS = """
+FOR e IN entities
+  FILTER e._key IN @keys
+  RETURN { key: e._key, name: e.name, label: e.label, embedding: e.embedding }
+"""
+
+_TENANT_ENTITY_COUNT = """
+RETURN LENGTH(FOR e IN entities FILTER e.tenant_id == @tenant_id RETURN 1)
+"""
+
+# Query vectors per `_NEAREST_ENTITY_KEYS_BATCH` round trip — bounds one query's work/memory
+# when a batch extracts hundreds of distinct entities.
+_ANN_QVEC_CHUNK = 64
 
 _INCREMENT = """
 FOR e IN entities
@@ -186,20 +204,40 @@ def _best_match_many(
     return out
 
 
+def _use_ann(db: StandardDatabase, tenant_id: str, *, dimensions: int) -> bool:
+    """Resolve via the ANN index only when it is warm AND this tenant is big enough to need it.
+    Filtered ANN widens its search until it finds top-k rows of *this* tenant, so its cost
+    scales with the other tenants sharing the collection; the exact tenant scan costs only the
+    tenant's own count. Gating on the collection's count alone (the index lifecycle's concern)
+    is what OOM-killed a many-tenant eval database (DESIGN §7, SC-1b)."""
+    if not ensure_vector_index(
+        db, dimensions=dimensions, n_lists=settings.entity_vector_n_lists,
+        train_factor=settings.entity_vector_train_factor, collection="entities",
+    ):
+        return False
+    count = cast(Cursor, db.aql.execute(_TENANT_ENTITY_COUNT, bind_vars={"tenant_id": tenant_id}))
+    return int(next(iter(count), 0)) > settings.entity_resolution_scan_max
+
+
 def _resolution_pool(
     db: StandardDatabase, tenant_id: str, qvecs: list[list[float]], *, use_ann: bool
 ) -> list[dict[str, Any]]:
-    """Candidate existing-entity rows to resolve this batch against, in ONE round trip (IN-6).
-    ANN warm → the union of every query vector's top-k nearest (a superset of the old per-entity
-    ANN candidates, so best-match is unchanged); otherwise a single full tenant scan. Any ANN
-    fault falls back to the scan — never breaks ingest."""
+    """Candidate existing-entity rows to resolve this batch against (IN-6). ANN → the union of
+    every query vector's top-k nearest keys (chunked), then one fetch of those rows; a superset
+    of each vector's own top-k, so best-match is unchanged. Otherwise a single tenant scan. Any
+    ANN fault falls back to the scan — never breaks ingest."""
     if use_ann and qvecs:
         try:
-            bind: dict[str, Any] = {
-                "tenant_id": tenant_id, "qvecs": qvecs,
-                "topk": settings.entity_resolution_top_k,
-            }
-            return list(cast(Cursor, db.aql.execute(_NEAREST_ENTITIES_BATCH, bind_vars=bind)))
+            keys: set[str] = set()
+            for i in range(0, len(qvecs), _ANN_QVEC_CHUNK):
+                bind: dict[str, Any] = {
+                    "tenant_id": tenant_id, "qvecs": qvecs[i:i + _ANN_QVEC_CHUNK],
+                    "topk": settings.entity_resolution_top_k, "nprobe": settings.n_probe,
+                }
+                cur = db.aql.execute(_NEAREST_ENTITY_KEYS_BATCH, bind_vars=bind)
+                keys.update(cast(Cursor, cur))
+            rows = db.aql.execute(_FETCH_BY_KEYS, bind_vars={"keys": list(keys)})
+            return list(cast(Cursor, rows))
         except Exception as exc:  # noqa: BLE001 — ANN fault → scan, never break ingest
             logger.warning("entity ANN resolution failed; scanning",
                            extra={"reason": type(exc).__name__, "detail": str(exc)})
@@ -285,15 +323,9 @@ def write_entities(
     if not extracted:
         return []
 
-    # SC-1b: use the ANN index (top-k nearest) once the `entities` collection is warm enough
-    # to train it; below that, scan the tenant's entities once (cached, lazy) as before.
-    use_ann = ensure_vector_index(
-        db,
-        dimensions=embedder.dimensions,
-        n_lists=settings.entity_vector_n_lists,
-        train_factor=settings.entity_vector_train_factor,
-        collection="entities",
-    )
+    # SC-1b: use the ANN index (top-k nearest) once it is warm and the tenant is large; below
+    # that, scan the tenant's entities once (cached, lazy) as before.
+    use_ann = _use_ann(db, tenant_id, dimensions=embedder.dimensions)
     scan_cache: list[dict[str, Any]] | None = None
 
     def _candidates(qvec: list[float]) -> list[dict[str, Any]]:
@@ -302,7 +334,7 @@ def write_entities(
             try:
                 ann_bind: dict[str, Any] = {
                     "tenant_id": tenant_id, "qvec": qvec,
-                    "topk": settings.entity_resolution_top_k,
+                    "topk": settings.entity_resolution_top_k, "nprobe": settings.n_probe,
                 }
                 cur = cast(Cursor, db.aql.execute(_NEAREST_ENTITIES, bind_vars=ann_bind))
                 return list(cur)
@@ -586,10 +618,7 @@ def write_entities_many(
     #    The per-entity ANN query / O(cardinality²) scan loop was the graph-on ingest wall a
     #    real (high-cardinality) extractor exposed; folding it into a batch keeps it ~O(N·M)
     #    matmul in C. Belief/corroboration still fold by sum, so the result is unchanged.
-    use_ann = ensure_vector_index(
-        db, dimensions=embedder.dimensions, n_lists=settings.entity_vector_n_lists,
-        train_factor=settings.entity_vector_train_factor, collection="entities",
-    )
+    use_ann = _use_ann(db, tenant_id, dimensions=embedder.dimensions)
     nls = list(accum.keys())
     qvecs = [accum[nl].vec for nl in nls]
     pool = _resolution_pool(db, tenant_id, qvecs, use_ann=use_ann)

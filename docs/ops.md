@@ -88,6 +88,9 @@ ordinary turns (≤8 entities) untouched),
 a new entity against the **top-k nearest** via a Faiss index on `entities` instead of
 full-scanning the tenant — keeps ingestion from going O(N²) as a long-lived tenant fills;
 below the threshold it full-scans, which is fine at small N),
+`ENTITY_RESOLUTION_SCAN_MAX` (5000 — a tenant with at most this many entities resolves by an
+exact tenant-scoped scan even once the shared index is warm; filtered ANN's cost grows with the
+*other* tenants' entities, the scan's only with the tenant's own. `0` = always ANN once warm),
 `MMR_LAMBDA` (1.0 — final re-rank relevance↔diversity;
 1.0 = pure relevance/fusion order, lower trades recall for a more varied result set),
 `RRF_GRAPH_WEIGHT` (0.1 — the graph arm expands recall but ranks by hop distance, not

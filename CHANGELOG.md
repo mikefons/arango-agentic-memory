@@ -191,6 +191,19 @@ from the `v0.1.0` tag.
 
 ### Fixed — core
 
+- **Batched entity resolution degraded with other tenants' entities and OOM-killed ArangoDB.**
+  An RQ-3 LongMemEval run (one tenant per question, ~1.5k entities each) slowed to repeated
+  slow-query warnings and was OOM-killed at ~155k shared `entities`. `EXPLAIN` on 3.12.9 showed the
+  vector index *is* used with the tenant filter pushed in, but filtered ANN widens its search until
+  it finds top-k rows of the tenant, fetching each candidate (a 1536-dim document) to test
+  `tenant_id` — so its cost grew linearly with *other* tenants (200 query vectors: 0.17s at 10k
+  others → 1.7s at 100k), with `nProbe` never passed. The batch query also had a correctness bug:
+  its SORT/LIMIT sat at the top level of the nested `FOR`, so it returned top-k rows for the whole
+  batch rather than per entity, and most entities resolved against the wrong candidates (missed
+  merges). Tenants with ≤ `ENTITY_RESOLUTION_SCAN_MAX` (5000) entities now resolve by an exact
+  tenant-scoped scan, whose cost doesn't depend on other tenants. Larger tenants use a per-vector
+  subquery that returns keys only (`{nProbe}` passed, 64 vectors per round trip), then one fetch of
+  the distinct rows.
 - **Extraction concurrency slowed CPU-bound extractors ~3x.** The IN-7 thread pool
   (`EXTRACTION_CONCURRENCY`, default 8) wrapped every extractor, but spaCy (and the regex/GLiNER
   tiers) mostly hold the GIL, so threads just convoyed: a 413-turn LongMemEval question with
