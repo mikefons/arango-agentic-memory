@@ -109,7 +109,10 @@ diagnosed fix for in-pool-but-unranked golds, §9/§23), `RERANKER_PROVIDER` (`f
 `local` sentence-transformers — needs the `rerank` extra), `RERANKER_MODEL`
 (`BAAI/bge-reranker-base`), `RERANK_TOP_N` (50 — how many top fused candidates to re-score;
 cost scales with it. Off the lite hot path; degrades to the fused order if the model is
-unavailable);
+unavailable), `RERANK_SCORING` (`replace` — how the reranked block is scored, RQ-3: `replace`
+= cross-encoder only; `rrf` = rank-blend with the fused rank; `event_time` = cross-encoder +
+`RERANK_TIME_WEIGHT` × content-time newness, so an updated fact outranks its stale statement),
+`RERANK_TIME_WEIGHT` (0.1 — `event_time` only; the newness prior's weight);
 lifecycle: `DECAY_LAMBDA` (0.02),
 `DECAY_FLOOR` (0.1),
 `CONSOLIDATION_MENTION_THRESHOLD` (5), `DREAM_BREAKER_THRESHOLD` (0.5),
@@ -378,6 +381,10 @@ metrics — cheap enough to sweep `event_time` weights. `--types` / `--offset` /
 disjoint dev/test splits, e.g. tune on `--types knowledge-update --limit 26` and report on
 `--types knowledge-update --offset 26`. Don't re-run a variant into an existing `ARANGO_DB` with
 `--extract`: `store_many` would re-count graph beliefs — use a fresh DB per ingest.
+For long runs pass **`--checkpoint scores.jsonl`**: each question's scores are appended as it
+finishes, and **`--resume`** (same `ARANGO_DB`) skips scored questions and purges + redoes any
+interrupted one — a DB outage an hour in costs one question, not the run. Keep checkpoints out
+of `/tmp` (a reboot clears it); `core/bench_runs/` is gitignored for this.
 
 ### Recall vs corpus size (HX-2)
 

@@ -378,3 +378,58 @@ def test_answer_failure_is_counted_not_fatal(db: StandardDatabase) -> None:
     assert report.answer_errors == 2 and report.accuracy == 0.0
     assert all(s.answer_error for s in report.scores)
     assert not [r for r in report.paired if r["metric"] == "accuracy"]  # nothing left to pair
+
+
+def _counting(judgements: dict[str, str]) -> tuple[FakeGenerator, list[int]]:
+    """_mixed, plus a count of answer (non-judge) calls — how many questions were processed."""
+    calls = [0]
+    inner = _mixed(judgements)
+
+    def handler(prompt: str, system: str | None) -> str:
+        if "Model answer:" not in prompt:
+            calls[0] += 1
+        return inner.complete(prompt, system=system)
+
+    return FakeGenerator(handler=handler), calls
+
+
+def test_checkpoint_then_resume_skips_scored_questions(
+    db: StandardDatabase, tmp_path: Path
+) -> None:
+    ckpt = tmp_path / "scores.jsonl"
+    samples = load_dataset(_SMOKE)
+    gen, calls = _counting({"currently live": "CORRECT", "sister": "INCORRECT"})
+    first = run_longmemeval(db, samples, generator=gen, judge=gen, k=10, checkpoint=ckpt)
+    assert calls[0] == 2 and len(ckpt.read_text().splitlines()) == 2  # one row per question
+
+    calls[0] = 0
+    again = run_longmemeval(
+        db, samples, generator=gen, judge=gen, k=10, checkpoint=ckpt, resume=True
+    )
+    assert calls[0] == 0  # everything came from the checkpoint
+    assert (again.n_questions, again.accuracy) == (first.n_questions, first.accuracy)
+
+
+def test_resume_redoes_only_unfinished_questions(db: StandardDatabase, tmp_path: Path) -> None:
+    ckpt = tmp_path / "scores.jsonl"
+    samples = load_dataset(_SMOKE)
+    gen, calls = _counting({"currently live": "CORRECT", "sister": "INCORRECT"})
+    run_longmemeval(db, samples, generator=gen, judge=gen, k=10, checkpoint=ckpt)
+    ckpt.write_text(ckpt.read_text().splitlines()[0] + "\n")  # as if killed after question 1
+
+    calls[0] = 0
+    report = run_longmemeval(
+        db, samples, generator=gen, judge=gen, k=10, checkpoint=ckpt, resume=True
+    )
+    assert calls[0] == 1 and report.n_questions == 2
+    assert len(ckpt.read_text().splitlines()) == 2
+
+
+def test_checkpoint_refuses_to_clobber_without_resume(
+    db: StandardDatabase, tmp_path: Path
+) -> None:
+    ckpt = tmp_path / "scores.jsonl"
+    ckpt.write_text('{"question_id": "x"}\n')
+    with pytest.raises(FileExistsError, match="resume"):
+        run_longmemeval(db, load_dataset(_SMOKE), generator=FakeGenerator(), k=10,
+                        checkpoint=ckpt)

@@ -46,6 +46,7 @@ from ..generation import Generator, get_generator
 from ..ingest.store import StoreItem, store_many
 from ..retrieve.search import _event_sort_key, force_view_sync, retrieve
 from ..schema.collections import ensure_schema
+from ..security.forget import purge
 from ..security.redact import redact
 from ..telemetry.logging import configure_logging, logger
 from .halu import generate_answer
@@ -305,6 +306,8 @@ def run_longmemeval(
     db_factory: Callable[[], StandardDatabase] | None = None,
     rerank_scorings: Sequence[str] | None = None,
     judge_answers: bool = True,
+    checkpoint: str | Path | None = None,
+    resume: bool = False,
     progress: bool = False,
 ) -> LongMemReport:
     """Ingest each question's history, answer from memory, judge accuracy; aggregate.
@@ -322,18 +325,50 @@ def run_longmemeval(
     `rerank_scorings` (RQ-3), e.g. `["replace", "rrf", "event_time:0.2"]`, evaluates every
     rerank-scoring variant against ONE ingest per question and reports each, plus paired tests
     of each variant against the first. `judge_answers=False` (`--retrieval-only`) skips the
-    answer + judge LLM calls, reporting only the deterministic evidence metrics."""
+    answer + judge LLM calls, reporting only the deterministic evidence metrics.
+
+    `checkpoint` (JSONL) appends each question's scores the moment it finishes, so a crash
+    (e.g. the DB going away an hour in) costs one question, not the run. `resume=True` loads
+    it, skips questions already scored under every variant, and hard-purges each remaining
+    question's tenant before re-ingesting — a question interrupted mid-ingest left a partial
+    tenant, and re-ingesting over it would double-count graph beliefs."""
     gen = generator or get_generator()
     jdg = judge or gen
-    total = len(samples)
     variants: tuple[str, ...] = tuple(rerank_scorings) if rerank_scorings else ("",)
     for spec in variants:
         _parse_variant(spec)  # validate up front — never fail minutes into a paid run
+
+    scores: list[LongMemScore] = []
+    ckpt = Path(checkpoint) if checkpoint else None
+    if ckpt is not None and ckpt.exists() and ckpt.stat().st_size and not resume:
+        raise FileExistsError(f"checkpoint {ckpt} already has scores — pass resume=True "
+                              "(--resume) to continue it, or remove it to start over")
+    if ckpt is not None and resume and ckpt.exists():
+        prior = [LongMemScore(**json.loads(line)) for line in ckpt.read_text().splitlines()
+                 if line.strip()]
+        have: dict[str, set[str]] = {}
+        for sc in prior:
+            have.setdefault(sc.question_id, set()).add(sc.variant)
+        complete = {q for q, vs in have.items() if set(variants) <= vs}
+        scores = [sc for sc in prior if sc.question_id in complete and sc.variant in variants]
+        samples = [sample for sample in samples if sample.sample_id not in complete]
+        if progress:
+            print(f"resume: {len(complete)} questions already scored, {len(samples)} to go",
+                  file=sys.stderr, flush=True)
+    total = len(samples)
+
+    def _record(rows: list[LongMemScore]) -> None:
+        """Append one finished question's scores (main thread only — no concurrent writes)."""
+        if ckpt is not None:
+            with ckpt.open("a") as f:
+                f.writelines(json.dumps(dataclasses.asdict(r)) + "\n" for r in rows)
 
     def _turns(sample: Sample) -> int:
         return sum(len(session) for session in sample.sessions)
 
     def _process(conn: StandardDatabase, sample: Sample) -> list[LongMemScore]:
+        if resume:  # clear any partial ingest left by an interrupted run (see docstring)
+            purge(conn, tenant_id=sample.sample_id)
         return _process_sample(
             conn, sample, gen=gen, jdg=jdg, agent_id=agent_id, mode=mode, k=k,
             rerank=rerank, extract=extract, variants=variants, judge_answers=judge_answers,
@@ -349,7 +384,6 @@ def run_longmemeval(
         )
         print(f"[{done}/{total}] {sample.sample_id}: done — {tail}", file=sys.stderr, flush=True)
 
-    scores: list[LongMemScore] = []
     if concurrency <= 1:
         for i, sample in enumerate(samples, 1):
             if progress:
@@ -358,7 +392,9 @@ def run_longmemeval(
                     f"({len(sample.sessions)} sessions)…",
                     file=sys.stderr, flush=True,
                 )
-            scores.extend(_process(db, sample))
+            rows = _process(db, sample)
+            _record(rows)
+            scores.extend(rows)
             _done(i, sample, scores)
         return _aggregate_all(scores, variants, min_accuracy=min_accuracy, judged=judge_answers)
 
@@ -376,7 +412,9 @@ def run_longmemeval(
     with ThreadPoolExecutor(max_workers=concurrency) as executor:
         futures = {executor.submit(_task, sample): sample for sample in samples}
         for future in as_completed(futures):
-            scores.extend(future.result())
+            rows = future.result()
+            _record(rows)
+            scores.extend(rows)
             done += 1
             _done(done, futures[future], scores)
     return _aggregate_all(scores, variants, min_accuracy=min_accuracy, judged=judge_answers)
@@ -559,9 +597,13 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--retrieval-only", action="store_true",
                         help="skip answer + judge (no LLM calls): report only the deterministic "
                              "evidence metrics (needs a dataset converted with --evidence)")
-    parser.add_argument("--scores-out", default=None,
-                        help="also write every per-question, per-variant score as JSON — for "
-                             "re-analysis or merging runs split across processes")
+    parser.add_argument("--checkpoint", default=None,
+                        help="JSONL file: each question's scores are appended as it finishes — "
+                             "crash-safe, and the per-question data for re-analysis or merging "
+                             "runs split across processes")
+    parser.add_argument("--resume", action="store_true",
+                        help="continue a --checkpoint: skip questions already scored, purge "
+                             "and redo the rest (use the same ARANGO_DB)")
     return parser
 
 
@@ -579,13 +621,10 @@ def main(argv: list[str] | None = None) -> int:
         db, load_dataset(args.dataset), mode=args.mode, k=args.k,
         rerank=args.rerank, extract=args.extract, min_accuracy=args.min_accuracy,
         concurrency=args.concurrency, rerank_scorings=scorings,
-        judge_answers=not args.retrieval_only, progress=True,
+        judge_answers=not args.retrieval_only, checkpoint=args.checkpoint, resume=args.resume,
+        progress=True,
     )
     print(_format(report, gated=args.min_accuracy is not None))
-    if args.scores_out:
-        subs = report.by_variant.values() if report.by_variant else [report]
-        rows = [dataclasses.asdict(s) for sub in subs for s in sub.scores]
-        Path(args.scores_out).write_text(json.dumps(rows, indent=1))
     return 0 if report.passed else 1
 
 
