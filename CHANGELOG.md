@@ -243,6 +243,13 @@ from the `v0.1.0` tag.
 
 ### Fixed — examples
 
+- **Live demos patched for a critical Next.js advisory** (unauthenticated RCE in the Image
+  Optimization API, plus SSRF / DoS / cache-confusion advisories): Memory Dungeon and Diligence Room
+  move Next.js 15.5.19 / 15.5.21 → **15.5.26** (same major). Diligence Room also overrides
+  `@workflow/core`'s exact `nanoid@5.1.6` pin to the patched **5.1.16** — upstream's latest beta still
+  pins the vulnerable version, and npm's suggested "fix" was a breaking downgrade of `workflow` to
+  2.0.6. Remaining advisories need major upgrades: postcss bundled in Next (fixed only in Next 16) and
+  undici under the AI SDK (fixed only in `ai` v7).
 - MCP memory (`examples/mcp-memory`) — the demo now recalls reliably on a **cold core** (fresh
   tenant, `vector: deferred`, BM25-only retrieval). Each recall query carries a light lexical anchor
   that also appears in its target memory (`allergic`, `Mira`, `Munich`), so BM25 alone surfaces the
