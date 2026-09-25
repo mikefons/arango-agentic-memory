@@ -512,6 +512,42 @@ the `store_p50` column should stay roughly flat instead of climbing.
 
 ---
 
+## ArangoDB memory (local Docker)
+
+arangod sizes its RocksDB block cache, in-memory cache, write buffers and AQL memory limits from
+the RAM it *detects*. In a container that is the whole Docker VM, which it shares with the core
+and anything else running there. On a 7.7 GiB Docker Desktop VM an idle, **empty** server after
+the RQ-3 LongMemEval rerun held 4.19 GB RSS (it had peaked at 6.08 GB):
+
+| Where | Size | Metric |
+|---|---|---|
+| RocksDB block cache (full, auto-sized to ~30% of the VM) | 1.85 GB | `rocksdb_block_cache_usage` |
+| RocksDB write buffers | 0.39 GB | `rocksdb_size_all_mem_tables` |
+| ArangoDB caches, AQL, index estimates | < 20 MB | `*_memory_usage` |
+| Untracked: heap the allocator kept after the peak | ~1.95 GB | RSS minus the above |
+
+The Docker VM also has transparent huge pages set to `always` (arangod warns at startup), and 805 MB
+of that RSS was in huge pages. The Faiss indexes were **not** a separate cost: measured on a
+scratch 3.12.9.1 with 100k 1536-dim entities, an index no query touches adds nothing measurable
+after a restart (370 MB vs 408 MB without). Building it peaks at about +650 MB for ~5 s, and the
+first ANN query reads roughly `nProbe / nLists` of its lists (+214 MB) through RocksDB.
+
+`docker-compose.yml` therefore sets `ARANGODB_OVERRIDE_DETECTED_TOTAL_MEMORY` from
+**`ARANGO_DETECTED_MEMORY`** (default `4G`). That gives a 512 MiB block cache, a 256 MiB in-memory
+cache, and 3.24 GB of total AQL memory (2.4 GB per query). Raise it on a dedicated host. It takes
+effect when the container is recreated (`docker compose up -d arangodb`); the data volume is kept.
+
+To see what grows during a long run, sample the server alongside it:
+```bash
+python -m arango_memory.ops mem-sample --interval 30 >> bench_runs/mem.jsonl
+```
+Each line holds `rss_mib`, the tracked parts above, `untracked_mib`, and the `entities` /
+`memories` / `vector_indexes` held across **all** databases. The command is read-only and keeps
+sampling through an outage (it writes an `error` line), so an OOM kill shows up as the last good
+sample followed by errors.
+
+---
+
 ## Troubleshooting
 
 | Symptom | Cause / fix |
@@ -520,6 +556,7 @@ the `store_p50` column should stay roughly flat instead of climbing.
 | `ERR 1554/1555 vector index not ready` on rebuild | Corpus below the threshold. Wait for more data, or lower `VECTOR_N_LISTS` **and** `VECTOR_TRAIN_FACTOR` for small deployments — then `ops vector-rebuild` (a plain restart won't rebuild an existing index). |
 | Persistent **"retrieve degraded"** with no reason | Run `python -m arango_memory.ops vector-diag` — it prints the raw `AQLQueryExecuteError`. The CLIs now call `configure_logging()`, so `LOG_FORMAT=json` also surfaces the `detail` field. A common cause is an under-trained index built at the old `n_lists`-only threshold; `ops vector-rebuild`. |
 | arangod **crashes during index build** / `Connection refused` mid-run | `vm.max_map_count` too low for the Faiss mmap. `docker compose up` now raises it via the `sysctl-init` service; on a rootless/podman host set it manually: `sudo sysctl -w vm.max_map_count=1048576`. |
+| arangod **RSS climbs during a benchmark** / OOM-killed in Docker | arangod sizes its caches for the whole Docker VM. Lower `ARANGO_DETECTED_MEMORY` (compose default `4G`) and run `ops mem-sample` alongside the run to see which part grows; see *ArangoDB memory* above. |
 | Connection refused / IPv6 weirdness on localhost | Use `ARANGO_URL=http://127.0.0.1:8529` (not `localhost`) to avoid IPv6 resolution issues. |
 | `failed_writes` is growing | Writes are exhausting retries (bad data or a downstream outage). Inspect the collection, fix the cause, then `python -m arango_memory.ops replay`. |
 | Writes accepted (`status:queued`) but never appear | With `WRITE_QUEUE_BACKEND=memory`, unacked work is **lost on crash** — set `WRITE_QUEUE_BACKEND=arango` in production. Also confirm the write worker thread is running (single process / not blocked). |

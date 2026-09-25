@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from arango.database import StandardDatabase
 
+from arango_memory.client import ArangoMemoryClient
 from arango_memory.config import settings
 from arango_memory.embedding import FakeEmbedder
 from arango_memory.ingest.store import store
@@ -11,7 +12,9 @@ from arango_memory.models import utcnow_iso
 from arango_memory.ops import (
     _build_parser,
     explain_hot_queries,
+    memory_sample,
     migrate_embeddings,
+    parse_metrics,
     rebuild_vector_index,
     replay_dead_letters,
 )
@@ -91,3 +94,30 @@ def test_cli_parser_recognizes_commands() -> None:
     assert parser.parse_args(["replay"]).command == "replay"
     assert parser.parse_args(["explain"]).command == "explain"
     assert parser.parse_args(["vector-diag"]).command == "vector-diag"
+    mem = parser.parse_args(["mem-sample", "--interval", "5", "--count", "3"])
+    assert (mem.command, mem.interval, mem.count) == ("mem-sample", 5.0, 3)
+
+
+def test_parse_metrics_sums_label_sets_and_skips_comments() -> None:
+    text = (
+        "# HELP rocksdb_block_cache_usage bytes\n"
+        'rocksdb_block_cache_usage{role="SINGLE"} 1048576\n'
+        'arangodb_search_num_files{db="a",view="v 1"} 2\n'
+        'arangodb_search_num_files{db="b",view="v2"} 3\n'
+        "\n"
+    )
+    assert parse_metrics(text) == {
+        "rocksdb_block_cache_usage": 1048576.0, "arangodb_search_num_files": 5.0,
+    }
+
+
+def test_memory_sample_reports_memory_and_what_is_held(
+    client: ArangoMemoryClient, db: StandardDatabase
+) -> None:
+    store(db, content="a memory to count", tenant_id="ops_m", agent_id="a", turn_index=0)
+    row = memory_sample(client)
+
+    assert row["rss_mib"] > 0
+    parts = ("block_cache", "memtables", "cache", "aql", "index_estimates", "untracked")
+    assert sum(row[f"{k}_mib"] for k in parts) == row["rss_mib"]
+    assert row["memories"] >= 1  # counted across every database on the server
