@@ -1,8 +1,8 @@
-# Digest-pinned for reproducible, supply-chain-safe builds (python:3.11.15-slim).
+# Digest-pinned for reproducible, supply-chain-safe builds (python:3.11.16-slim).
 # Pin the multi-arch *index* digest, not a per-arch manifest: a manifest digest locks the
 # build to one architecture, so arm64 hosts silently get an emulated amd64 image. The
 # index still pins exact content — Docker just resolves the right platform from it.
-FROM python@sha256:db3ff2e1800a8581e2c48a27c3995339d47bdf046da21c7627accd3d51053a93
+FROM python@sha256:da047cb8f9d1d98e5c070f5300ba9f7274e33b8fc0e5be5ed88740aed1b95ba9
 
 # uv for fast, reproducible installs
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
