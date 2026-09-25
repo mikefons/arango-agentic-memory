@@ -10,8 +10,17 @@
     "url": "git+https://github.com/mikefons/arango-agentic-memory.git",
     "directory": "packages/vercel"
   },
-  "bugs": { "url": "https://github.com/mikefons/arango-agentic-memory/issues" },
-  "keywords": ["vercel", "ai-sdk", "agentic-memory", "arangodb", "llm", "middleware"],
+  "bugs": {
+    "url": "https://github.com/mikefons/arango-agentic-memory/issues"
+  },
+  "keywords": [
+    "vercel",
+    "ai-sdk",
+    "agentic-memory",
+    "arangodb",
+    "llm",
+    "middleware"
+  ],
   "type": "module",
   "main": "./dist/index.js",
   "module": "./dist/index.js",
@@ -22,7 +31,11 @@
       "import": "./dist/index.js"
     }
   },
-  "files": ["dist", "LICENSE", "NOTICE"],
+  "files": [
+    "dist",
+    "LICENSE",
+    "NOTICE"
+  ],
   "scripts": {
     "build": "tsc",
     "typecheck": "tsc --noEmit",
@@ -38,6 +51,6 @@
     "@types/node": "^22.0.0",
     "ai": "^5.0.237",
     "typescript": "^5.6.0",
-    "vitest": "^3.0.0"
+    "vitest": "^4.1.11"
   }
 }
