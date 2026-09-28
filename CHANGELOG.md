@@ -43,8 +43,8 @@ from the `v0.1.0` tag.
   split that motivates it.
 - Rerank scoring modes (RQ-3): `RERANK_SCORING` picks how the reranked block is scored —
   `replace` (default, unchanged: cross-encoder only), `rrf` (rank-blend of cross-encoder and
-  fused rank, restoring arm consensus/recency), or `event_time` (sigmoid of the cross-encoder
-  score + `RERANK_TIME_WEIGHT` × content-time newness, so an updated statement of a fact
+  fused rank, restoring arm consensus/recency), or `event_time` (the cross-encoder
+  probability + `RERANK_TIME_WEIGHT` × content-time newness, so an updated statement of a fact
   outranks the stale one). **Measured (DESIGN §23): keep `replace`** — `event_time` fixes update
   ordering but hurts temporal-reasoning accuracy (0.654 → 0.368) and recall; `rrf` is neutral. `retrieve()` takes per-call `rerank_scoring` / `rerank_time_weight`
   overrides and a `record_access=False` read-only probe (skips the spaced-repetition refresh).
@@ -240,6 +240,15 @@ from the `v0.1.0` tag.
   peak). Compose now sets `ARANGODB_OVERRIDE_DETECTED_TOTAL_MEMORY` from `ARANGO_DETECTED_MEMORY`
   (default `4G` → 512 MiB block cache, 3.24 GB AQL). The entities Faiss index was ruled out:
   measured at 100k 1536-dim entities, an index no query touches costs nothing measurable at rest.
+
+### Fixed — retrieval
+
+- **`event_time` rerank scoring squashed relevance with a second sigmoid.** It computed
+  `sigmoid(ce) + β × newness`, assuming raw cross-encoder logits, but sentence-transformers already
+  returns sigmoid probabilities — so relevance was compressed into ~[0.5, 0.73] and `RERANK_TIME_WEIGHT`
+  acted ~4–5× stronger than set. β now adds on the probability scale, and the `Reranker` protocol
+  documents a [0, 1] score contract. Opt-in mode only (`replace`, the default, and `rrf` are
+  unaffected); the RQ-3 write-up (DESIGN §23) is corrected and its decision stands.
 
 ### Fixed — adapters
 
