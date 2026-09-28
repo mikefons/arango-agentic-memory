@@ -1145,7 +1145,7 @@ bare year), so `event_time` scoring uses its own date+time sort key.
 
 **Why.** RQ-2b's locked decision *replaces* `fused_score` with the cross-encoder score for the
 reranked top-N (clean measurement of the reranker's lift; the two scores aren't on a common scale —
-RRF is `Σ w/(60+rank)` ≈ 0.01–0.05, `bge-reranker` emits unbounded, often-negative logits). The cost:
+RRF is `Σ w/(60+rank)` ≈ 0.01–0.05, `bge-reranker` a sigmoid relevance probability in [0, 1]). The cost:
 inside the reranked block we discard (a) **recency** and (b) **arm consensus** (a hit found by
 BM25 *and* vector *and* graph). For a memory system that's suspicious — the knowledge-update case is
 exactly "the same fact, stated twice; the newer one should win", and a cross-encoder scores the
@@ -1173,8 +1173,9 @@ noise = ±0.07–0.13) is **too small** to detect this effect — use the full p
 - **`replace`** — current RQ-2b behaviour (the baseline).
 - **`rrf`** — rank-level blend: `1/(60 + rank_ce) + 1/(60 + rank_fused)` over the head. Rank-based,
   so no score calibration; carries arm consensus (and, in production, access recency) back in.
-- **`event_time`** — cross-encoder relevance plus a content-time prior: normalize CE scores within the
-  head (sigmoid of the logit), then add `β · newness(event_time)` where newness ranks the head's
+- **`event_time`** — cross-encoder relevance plus a content-time prior: take the CE relevance
+  probability (already sigmoid-scaled by sentence-transformers — the runs wrongly applied a second
+  sigmoid; see the DESIGN §23 correction), then add `β · newness(event_time)` where newness ranks the head's
   `event_time`s (newest = 1). Candidates without `event_time` get a neutral prior.
 - Weights/`β` are **fixed a priori or tuned on a dev split** (e.g. 26 of the 78 KU questions),
   reporting on the held-out remainder only — never tuned on the reported set.

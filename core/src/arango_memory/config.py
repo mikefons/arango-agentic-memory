@@ -78,7 +78,7 @@ class Settings(BaseSettings):
     rerank_top_n: int = Field(default=50, ge=1)
     # How the reranked head is scored (RQ-3). "replace" = cross-encoder score only (RQ-2b);
     # "rrf" = rank-blend of cross-encoder rank + fused rank (restores arm consensus/recency);
-    # "event_time" = sigmoid(cross-encoder) + rerank_time_weight × newness of the memory's
+    # "event_time" = cross-encoder probability + rerank_time_weight × newness of the memory's
     # content time (event_time), so a newer statement of the same fact outranks a stale one.
     # Measured in RQ-3 (DESIGN §23): keep "replace" — "event_time" fixes update ordering but
     # costs temporal-reasoning accuracy and recall; "rrf" is neutral.

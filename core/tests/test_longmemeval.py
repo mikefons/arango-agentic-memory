@@ -337,15 +337,16 @@ def test_rerank_scoring_variants_are_paired_on_one_ingest(db: StandardDatabase) 
     sample = _sam_sample("lme-rq3-sam")
     report = run_longmemeval(
         db, [sample], generator=FakeGenerator(), k=10,
-        rerank_scorings=["replace", "event_time:0.5"], judge_answers=False,
+        rerank_scorings=["replace", "event_time:1.0"], judge_answers=False,
     )
-    assert set(report.by_variant) == {"replace", "event_time:0.5"}
+    assert set(report.by_variant) == {"replace", "event_time:1.0"}
     assert report.judged is False and report.passed  # retrieval-only: no accuracy gate
-    # Replace ranks the stale (more query-relevant) statement first; the time prior flips it.
+    # Replace ranks the stale (more query-relevant) statement first; the time prior flips it
+    # (β must beat the 0.8 − 0.2 relevance gap on the probability scale).
     assert report.by_variant["replace"].evidence["newest_above_stale"] == 0.0
-    assert report.by_variant["event_time:0.5"].evidence["newest_above_stale"] == 1.0
+    assert report.by_variant["event_time:1.0"].evidence["newest_above_stale"] == 1.0
     (row,) = [r for r in report.paired if r["metric"] == "newest_above_stale"]
-    assert (row["variant"], row["gain"], row["loss"]) == ("event_time:0.5", 1, 0)
+    assert (row["variant"], row["gain"], row["loss"]) == ("event_time:1.0", 1, 0)
     # Variants are read-only probes: no spaced-repetition refresh, so every variant saw the
     # same state (store_many writes access_count=1; a recorded access would bump it).
     counts = list(db.aql.execute(

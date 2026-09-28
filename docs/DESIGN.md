@@ -1252,8 +1252,8 @@ retrievals + cross-encoder, p50 ~9s/question) — the **recommended max-recall s
 
 RQ-2b *replaces* the fused score with the cross-encoder's, discarding recency and arm consensus
 inside the reranked block. RQ-3 tested whether blending them back helps a memory system: **`rrf`**
-(rank-blend of cross-encoder and fused rank) and **`event_time`** (`sigmoid(ce) + β × newness` of
-the memory's content time, IN-4). The fused score's own recency is *access* time, which is uniform
+(rank-blend of cross-encoder and fused rank) and **`event_time`** (`ce + β × newness` of
+the memory's content time, IN-4; see the scale correction below — the runs used `sigmoid(ce)`). The fused score's own recency is *access* time, which is uniform
 within a LongMemEval ingest, so only a content-time prior can move knowledge-update.
 
 **Design.** LongMemEval-S, graph-on (spaCy) + local `bge-reranker-base` + `openai` embeddings +
@@ -1325,6 +1325,20 @@ Paired against its own pre-#243 run, each variant's evidence retrieval changed o
 Its answer correctness flipped 7–10 times in each direction (ns), which is consistent with
 answerer/judge variance. Both lanes (two concurrent run databases, ~2½ h) finished with no OOM; the
 `p1` slice (119 questions, ~1.5k entities each, in one database) is the one that was OOM-killed before #243.
+
+**Correction — the tested β was ~4–5× stronger than labelled (rev 95).** Both runs above scored
+`event_time` as `sigmoid(ce) + β × newness`, on the assumption that the cross-encoder emits raw
+logits. It doesn't: sentence-transformers' `CrossEncoder.predict` already applies a sigmoid to
+single-label models, so `ce` was a probability in [0, 1], and the second sigmoid squashed it into
+≈[0.5, 0.73] (slope ≈0.20–0.25). Relative to relevance, each β therefore acted like roughly 4–5× its
+nominal value — the smallest tested, β = 0.05, behaved like ≈0.2–0.25 on the probability scale. So
+the sweep covered only the *strong*-prior regime; a genuinely small prior (≈0.01–0.05 on the probability
+scale) was never tested. The code now adds β on the probability scale directly (the `Reranker`
+contract is a [0, 1] relevance score); `replace` and `rrf` were unaffected. **The decision stands:**
+it rests on the KU mechanism above — the answerer already resolves supersession from the dated
+context, so even ~perfect ordering didn't lift KU answers — and a global-recency prior of any
+strength can only trade older evidence away. The "not recommended; scope newness to same-fact
+conflicts" guidance is unchanged.
 
 ### Open-corpus scalability finding (BX-2 pooled run)
 

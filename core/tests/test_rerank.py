@@ -129,7 +129,7 @@ def test_event_time_scoring_prefers_the_newer_of_equally_relevant_statements() -
     # The knowledge-update case: stale and updated statements score (almost) the same on
     # relevance, so the content-time prior decides — the update wins.
     head = [("stale", "2023/01/10 (Tue) 09:00"), ("update", "2023/06/02 (Fri) 18:30")]
-    reranker = _LogitReranker({"stale": 2.05, "update": 2.0})
+    reranker = _LogitReranker({"stale": 0.905, "update": 0.88})
     out = _rerank(_timed(*head), "q", reranker=reranker, top_n=2, scoring="event_time",
                   time_weight=0.1)
     assert [c.text for c in out] == ["update", "stale"]
@@ -139,10 +139,18 @@ def test_event_time_scoring_prefers_the_newer_of_equally_relevant_statements() -
     assert [c.text for c in out] == ["stale", "update"]
 
 
+def test_event_time_adds_the_prior_on_the_probability_scale() -> None:
+    # Reranker scores are already probabilities; β must add on that scale, not after a second
+    # sigmoid (which squashed [0, 1] into ~[0.5, 0.73] and made β act ~4× stronger).
+    head = _timed(("old", "2023/01/10"), ("mid", None), ("new", "2023/06/02"))
+    scores = _head_scores(head, [0.9, 0.5, 0.1], scoring="event_time", time_weight=0.2)
+    assert scores == pytest.approx([0.9, 0.6, 0.3])
+
+
 def test_event_time_scoring_never_lets_newness_beat_clear_relevance() -> None:
     # A prior, not an override: a newer but irrelevant memory stays below a relevant old one.
     head = [("relevant-old", "2023/01/10"), ("irrelevant-new", "2023/06/02")]
-    reranker = _LogitReranker({"relevant-old": 4.0, "irrelevant-new": -4.0})
+    reranker = _LogitReranker({"relevant-old": 0.98, "irrelevant-new": 0.02})
     out = _rerank(_timed(*head), "q", reranker=reranker, top_n=2, scoring="event_time",
                   time_weight=0.1)
     assert [c.text for c in out] == ["relevant-old", "irrelevant-new"]

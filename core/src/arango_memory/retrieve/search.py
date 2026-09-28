@@ -592,14 +592,6 @@ def _newness(event_times: Sequence[str | None]) -> list[float]:
     return [pos[k] if k is not None else 0.5 for k in keys]
 
 
-def _sigmoid(x: float) -> float:
-    """Numerically stable logistic — maps cross-encoder logits (unbounded) into (0, 1)."""
-    if x >= 0:
-        return 1.0 / (1.0 + math.exp(-x))
-    z = math.exp(x)
-    return z / (1.0 + z)
-
-
 def _head_scores(
     head: list[_Candidate], ce: list[float], *, scoring: str, time_weight: float
 ) -> list[float]:
@@ -608,16 +600,18 @@ def _head_scores(
     if scoring == "replace":
         return ce
     if scoring == "rrf":
-        # Rank-level blend: no calibration between RRF scores and logits is needed, and the fused
-        # rank carries back the arm consensus + recency that "replace" discards. Stable sort →
-        # cross-encoder ties keep fused order.
+        # Rank-level blend: no calibration between RRF and cross-encoder scores is needed, and
+        # the fused rank carries back the arm consensus + recency that "replace" discards.
+        # Stable sort → cross-encoder ties keep fused order.
         ce_rank = [0] * len(ce)
         for r, i in enumerate(sorted(range(len(ce)), key=lambda i: -ce[i]), 1):
             ce_rank[i] = r
         return [1.0 / (_RRF_K + ce_rank[i]) + 1.0 / (_RRF_K + i + 1) for i in range(len(ce))]
     if scoring == "event_time":
+        # Reranker scores are already relevance probabilities in [0, 1] (the `Reranker`
+        # contract), so β adds on that scale directly — no squashing.
         newness = _newness([c.event_time for c in head])
-        return [_sigmoid(s) + time_weight * n for s, n in zip(ce, newness, strict=True)]
+        return [s + time_weight * n for s, n in zip(ce, newness, strict=True)]
     raise ValueError(f"unknown rerank_scoring {scoring!r}")
 
 

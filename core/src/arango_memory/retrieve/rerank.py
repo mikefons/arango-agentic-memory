@@ -29,7 +29,8 @@ class Reranker(Protocol):
     model: str
 
     def score(self, query: str, texts: Sequence[str]) -> list[float]:
-        """Relevance score per passage (higher = more relevant); order matches `texts`."""
+        """Relevance per passage as a probability in [0, 1] (higher = more relevant); order
+        matches `texts`. `rerank_scoring="event_time"` adds its time prior on this scale."""
         ...
 
 
@@ -55,7 +56,10 @@ class FakeReranker:
 
 
 class LocalCrossEncoderReranker:
-    """Cross-encoder relevance scoring via sentence-transformers (default bge-reranker-base)."""
+    """Cross-encoder relevance scoring via sentence-transformers (default bge-reranker-base).
+
+    `CrossEncoder.predict` applies a sigmoid to single-label models by default, so scores are
+    already probabilities, not raw logits."""
 
     def __init__(self, model: str = "BAAI/bge-reranker-base") -> None:
         from sentence_transformers import CrossEncoder
