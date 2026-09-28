@@ -1333,12 +1333,43 @@ single-label models, so `ce` was a probability in [0, 1], and the second sigmoid
 ≈[0.5, 0.73] (slope ≈0.20–0.25). Relative to relevance, each β therefore acted like roughly 4–5× its
 nominal value — the smallest tested, β = 0.05, behaved like ≈0.2–0.25 on the probability scale. So
 the sweep covered only the *strong*-prior regime; a genuinely small prior (≈0.01–0.05 on the probability
-scale) was never tested. The code now adds β on the probability scale directly (the `Reranker`
+scale) was not tested until the re-sweep below. The code now adds β on the probability scale directly (the `Reranker`
 contract is a [0, 1] relevance score); `replace` and `rrf` were unaffected. **The decision stands:**
 it rests on the KU mechanism above — the answerer already resolves supersession from the dated
 context, so even ~perfect ordering didn't lift KU answers — and a global-recency prior of any
 strength can only trade older evidence away. The "not recommended; scope newness to same-fact
 conflicts" guidance is unchanged.
+
+**Small-β re-sweep on the corrected scale (rev 96).** The correction left the weak-prior regime untested,
+so the retrieval-only sweep was rerun on the fixed code (post-#250): `event_time` at β = 0.005–0.2 on the
+probability scale, on the same 26-question KU dev split and 70-question SSU guardrail, one fresh ingest per
+slice (same stack as above; no LLM calls). The rule was written down before the run: a β is *promising*
+only if it significantly improves dev newest-above-stale (p < 0.05) **and** loses at most one SSU evidence
+hit with no significant loss. A promising β would have justified a judged held-out run.
+
+| β (probability scale) | KU dev newest-above-stale (26) | KU dev evidence recall | SSU evidence in top-k (64) |
+|---|---|---|---|
+| `replace` | 0.577 | 1.000 | 63/64 |
+| 0.005 | 0.615 (+1/−0, p=1.0) | 1.000 | 62 (+0/−1) |
+| 0.01 | 0.769 (+5/−0, p=0.062) | 1.000 | 62 (+0/−1) |
+| 0.02 | 0.808 (+6/−0, **p=0.031**) | 1.000 | 61 (+0/−2, p=0.50) |
+| 0.05 | 0.808 (+6/−0, p=0.031) | 0.962 | 58 (+0/−5, p=0.062) |
+| 0.1 | 0.885 (+8/−0, p=0.008) | 0.962 | 58 (+0/−5, p=0.062) |
+| 0.2 | 0.923 (+9/−0, p=0.004) | 0.923 | 56 (+0/−7, **p=0.016**) |
+
+- **No β qualifies.** Ordering gains become significant at β = 0.02, and at that point SSU is already losing
+  evidence (−2). Below that, neither effect is detectable at this n. The trade is monotone: every step up in
+  β buys ordering and costs evidence, and no β *adds* an SSU hit, as expected for a global prior that can
+  only displace.
+- **The two scales agree.** β = 0.2 here (−7 SSU) matches the old run's smallest β = 0.05 (−8), which the
+  correction put at ≈0.2–0.25 on this scale.
+- **Baseline drift.** `replace` dev newest-above-stale came out at 0.577 versus 0.654 in both earlier runs (2 of 26
+  questions flipped). `replace` doesn't depend on #250, so the likely cause is the #246 torch/transformers
+  upgrade moving near-tied reranker scores. All comparisons above are paired within this one run.
+
+**Decision unchanged: `replace` stays the default.** The weak-prior regime doesn't open a free lunch: the
+ordering it buys is the ordering the answerer didn't need (see *Why better ordering doesn't help KU*), and
+it already costs evidence. A newness signal still has to be same-fact-scoped to be worth another trial.
 
 ### Open-corpus scalability finding (BX-2 pooled run)
 
