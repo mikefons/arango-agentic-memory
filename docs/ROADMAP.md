@@ -46,6 +46,7 @@ Sizes: S ≈ ≤1 day, M ≈ 2–3 days.
 | 14 | SC-1 | Single-large-tenant scalability: ANN entity resolution + bounded graph fan-out | L | — |
 | 15 | RT-1 | Expose `candidate_pool` as a config + API knob (open-corpus tuning) | S | — |
 | 16 | RQ-3 | Rerank scoring: replace vs rank-blend vs event-time-aware (paired LongMemEval) ✅ — **replace stays** | M | RQ-2b, IN-4 |
+| 17 | CW-1 | Port the CrewAI shim to crewai ≥ 1.10 unified memory (0.2) | S | — |
 
 Recommended sequence: **MA-1 → MA-2 → MA-3 → MA-4 → MA-5 → MA-6**, with MA-7/MA-8
 schedulable any time (no dependencies on the others). MA-1…MA-8 are **shipped**. **RQ-1**
@@ -1275,3 +1276,19 @@ Obsidian) read/write one brain. Decide OBS-1's core-vs-plugin split before build
   `retrieve`/`prime` for now; design doc first if demand materialises.
 - **Doc-level ACLs / visibility enums**: namespacing + `read_agent_ids` + MA-7 key
   binding cover the known consumers with far less complexity.
+
+---
+
+## CW-1 — Port the CrewAI shim to crewai ≥ 1.10 unified memory (0.2)
+
+**Why.** `to_crewai_storage()` subclasses crewai's legacy `crewai.memory.storage.interface.Storage`
+for `Crew(external_memory=ExternalMemory(...))`. CrewAI 1.10.0 removed both in favour of a unified
+memory backend (`crewai/memory/storage/backend.py`), so the shim only works on `crewai<1.10`. For
+0.1.0 it raises a clear `ImportError` on newer crewai; `ArangoCrewStorage` / `crew_memory()` are
+crewai-free and unaffected. Capping the extra at `<1.10` was rejected — it pins an advisory-bearing
+json-repair.
+
+**Scope.** Implement the unified-memory backend protocol over `ArangoCrewStorage` (keep the
+G-Memory tier namespacing), and replace the stubbed-crewai shim test with one against a real
+crewai install so an upstream interface change can't slip past CI again.
+

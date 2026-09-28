@@ -29,7 +29,7 @@ mem = crew_memory(db, tenant_id="acme", crew_id="research", agent_id="analyst")
 mem.query.save("Decision: ship on Friday")
 hits = mem.query.search("when do we ship?")        # [{context, score, metadata}]
 
-# Wire into CrewAI (needs the extra):
+# Wire into CrewAI (needs the extra, crewai<1.10 — see Notes):
 from crewai import Crew
 from crewai.memory.external.external_memory import ExternalMemory
 crew = Crew(..., external_memory=ExternalMemory(storage=to_crewai_storage(mem.query)))
@@ -42,3 +42,9 @@ crew = Crew(..., external_memory=ExternalMemory(storage=to_crewai_storage(mem.qu
   soft-delete; results exclude embeddings (§17).
 - The shim ignores CrewAI's per-call `score_threshold` (our fused scores live on a
   different scale) — `limit` is the cutoff.
+- **CrewAI ≥ 1.10 is not supported by the shim.** CrewAI 1.10.0 removed the legacy
+  `Storage` interface and `ExternalMemory` in favour of its unified memory, so
+  `to_crewai_storage()` needs `crewai<1.10`; on newer crewai it raises an
+  `ImportError` explaining this. `ArangoCrewStorage` / `crew_memory()` don't import
+  crewai and work with any version — call them directly (e.g. from crew tools). A
+  port to CrewAI's unified-memory backend is planned for 0.2.

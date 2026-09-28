@@ -250,6 +250,15 @@ from the `v0.1.0` tag.
   documents a [0, 1] score contract. Opt-in mode only (`replace`, the default, and `rrf` are
   unaffected); the RQ-3 write-up (DESIGN §23) is corrected and its decision stands.
 
+### Fixed — adapters
+
+- **CrewAI `to_crewai_storage()` on crewai ≥ 1.10 now fails with a clear message.** CrewAI 1.10.0
+  removed the legacy `crewai.memory.storage.interface.Storage` (and `ExternalMemory`) the shim
+  subclasses, so on current crewai it died with an opaque `ModuleNotFoundError` — CI missed it
+  because the shim test stubs crewai. It now raises an `ImportError` naming the cause and pointing to
+  `ArangoCrewStorage` / `crew_memory()`, which don't import crewai and work on any version. The shim
+  supports `crewai<1.10`; a port to CrewAI's unified-memory backend is planned for 0.2.
+
 ### Fixed — examples
 
 - **Live demos patched for a critical Next.js advisory** (unauthenticated RCE in the Image
