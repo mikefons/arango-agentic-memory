@@ -9,6 +9,11 @@ and fully tested in `storage.py`.
 CrewAI's per-call `score_threshold` is deliberately *not* forwarded: our hybrid
 RRF-fused scores live on a different scale than CrewAI's cosine scores, so a
 crewai default threshold would drop every hit. We rely on `limit` for cutoff.
+
+CrewAI 1.10.0 removed the legacy `Storage` interface (and `ExternalMemory`) in
+favour of its unified memory, so the shim works with `crewai<1.10` only; on newer
+crewai it raises a clear `ImportError` rather than an opaque module-not-found.
+`ArangoCrewStorage` / `crew_memory()` are unaffected.
 """
 
 from __future__ import annotations
@@ -19,7 +24,21 @@ from .storage import ArangoCrewStorage
 
 
 def _storage_base() -> type:
-    from crewai.memory.storage.interface import Storage  # lazy: needs the extra
+    try:
+        from crewai.memory.storage.interface import Storage  # lazy: needs the extra
+    except ImportError as exc:
+        try:
+            import crewai
+        except ImportError:
+            raise ImportError(
+                "to_crewai_storage() needs the `crewai` extra: pip install 'arango-memory[crewai]'"
+            ) from exc
+        raise ImportError(
+            f"crewai {getattr(crewai, '__version__', '?')} has no legacy "
+            "`crewai.memory.storage.interface.Storage` (removed in crewai 1.10.0); "
+            "to_crewai_storage() supports crewai<1.10 only. Use ArangoCrewStorage / "
+            "crew_memory() directly."
+        ) from exc
 
     return Storage  # type: ignore[no-any-return]
 

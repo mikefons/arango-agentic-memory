@@ -132,3 +132,25 @@ def test_shim_delegates_to_core(db: StandardDatabase, stub_crewai: None) -> None
         time.sleep(0.25)
     assert any("crew memory" in h["context"] for h in shim.search("crew memory"))
     shim.reset()
+
+
+def test_shim_explains_crewai_without_legacy_storage(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from arango_memory.crewai import to_crewai_storage
+
+    mod_crewai = types.ModuleType("crewai")
+    mod_crewai.__version__ = "1.15.22"  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "crewai", mod_crewai)
+    monkeypatch.setitem(sys.modules, "crewai.memory.storage.interface", None)
+    with pytest.raises(ImportError, match=r"crewai 1\.15\.22 .*removed in crewai 1\.10\.0"):
+        to_crewai_storage(object())  # type: ignore[arg-type]
+
+
+def test_shim_explains_missing_extra(monkeypatch: pytest.MonkeyPatch) -> None:
+    from arango_memory.crewai import to_crewai_storage
+
+    monkeypatch.setitem(sys.modules, "crewai", None)
+    monkeypatch.setitem(sys.modules, "crewai.memory.storage.interface", None)
+    with pytest.raises(ImportError, match=r"needs the `crewai` extra"):
+        to_crewai_storage(object())  # type: ignore[arg-type]

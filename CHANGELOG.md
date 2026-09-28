@@ -241,6 +241,15 @@ from the `v0.1.0` tag.
   (default `4G` → 512 MiB block cache, 3.24 GB AQL). The entities Faiss index was ruled out:
   measured at 100k 1536-dim entities, an index no query touches costs nothing measurable at rest.
 
+### Fixed — adapters
+
+- **CrewAI `to_crewai_storage()` on crewai ≥ 1.10 now fails with a clear message.** CrewAI 1.10.0
+  removed the legacy `crewai.memory.storage.interface.Storage` (and `ExternalMemory`) the shim
+  subclasses, so on current crewai it died with an opaque `ModuleNotFoundError` — CI missed it
+  because the shim test stubs crewai. It now raises an `ImportError` naming the cause and pointing to
+  `ArangoCrewStorage` / `crew_memory()`, which don't import crewai and work on any version. The shim
+  supports `crewai<1.10`; a port to CrewAI's unified-memory backend is planned for 0.2.
+
 ### Fixed — examples
 
 - **Live demos patched for a critical Next.js advisory** (unauthenticated RCE in the Image
