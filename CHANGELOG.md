@@ -256,4 +256,17 @@ from the `v0.1.0` tag.
   now also `console.error`s caught errors, so a failed phase shows its cause in the platform logs
   instead of being a black box. Confirmed fixed against the live deployment.
 
+### Security
+
+- **Core runtime dependencies patched** (these ship inside the container image, which installs
+  from `uv.lock`): starlette 1.2.1 → 1.7.0 (with FastAPI 0.136 → 0.141), cryptography 48.0.0 →
+  50.0.1, anyio 4.13.0 → 4.15.1 — clearing all 13 known advisories in the runtime set (`pip-audit`).
+  Base image re-pinned to the current `python:3.11.16-slim` index digest.
+- **Optional extras patched:** crewai 1.14 → 1.15 (clears its pinned mcp / json-repair advisories),
+  gliner 0.2.29 + transformers 5.15, torch 2.14, pillow 12.3, aiohttp 3.14.3, datasets, setuptools.
+  One residual: **chromadb 1.1.1** (via the `crewai` extra) has advisories with no fixed release and
+  is pinned `~=1.1.0` by crewai itself.
+- **`core/.dockerignore`** keeps `.env`, benchmark data, and caches out of the Docker build context, so
+  a future broad `COPY` can't bake secrets into a published image.
+
 [0.1.0]: https://github.com/mikefons/arango-agentic-memory/releases/tag/v0.1.0

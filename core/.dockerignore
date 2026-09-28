@@ -1,0 +1,18 @@
+# Build context hygiene. The Dockerfile COPYs explicit paths, but anything not excluded here is
+# still sent to the daemon — and a future `COPY . .` would bake it into a published image.
+# Secrets
+.env
+.env.*
+!.env.example
+# Local benchmark data + run artifacts (externally licensed, large)
+/*.json
+/*.jsonl
+bench_runs/
+# Caches / build output
+.venv/
+**/__pycache__/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+dist/
+*.log
