@@ -22,6 +22,9 @@ from ..schema.collections import EDGE_COLLECTIONS, drop_vector_index
 
 _VERTEX_COLLECTIONS = ("memories", "entities", "episodes", "steps")
 _SOFT_DELETABLE = ("memories", "entities")
+# Adapter-owned rows scoped by tenant/agent but outside the graph: no edges touch them, and
+# soft-deleted memories already hide them (they join on the memory), so only purge removes them.
+_SIDE_COLLECTIONS = ("crewai_records",)
 
 _SOFT = """
 FOR doc IN @@coll
@@ -67,6 +70,22 @@ def forget(db: StandardDatabase, *, tenant_id: str, agent_id: str | None = None)
     return counts
 
 
+_SOFT_KEYS = """
+FOR k IN @keys
+  LET doc = DOCUMENT(memories, k)
+  FILTER doc != null AND doc.tenant_id == @tenant_id AND doc.invalid_at == null
+  UPDATE doc WITH { invalid_at: @now } IN memories
+  RETURN 1
+"""
+
+
+def forget_memories(db: StandardDatabase, *, tenant_id: str, memory_keys: list[str]) -> int:
+    """Soft-delete specific memories by key, confined to `tenant_id`. Returns the count."""
+    if not memory_keys:
+        return 0
+    return _run(db, _SOFT_KEYS, keys=memory_keys, tenant_id=tenant_id, now=utcnow_iso())
+
+
 def purge(db: StandardDatabase, *, tenant_id: str, agent_id: str | None = None) -> dict[str, int]:
     """Physical hard-delete of the subject's vertices + touching edges (ops only)."""
     ids: list[str] = []
@@ -86,7 +105,7 @@ def purge(db: StandardDatabase, *, tenant_id: str, agent_id: str | None = None) 
         edges += _run(db, _REMOVE_EDGES, **{"@coll": coll, "ids": ids})
     counts["edges"] = edges
 
-    for coll in _VERTEX_COLLECTIONS:
+    for coll in (*_VERTEX_COLLECTIONS, *_SIDE_COLLECTIONS):
         counts[coll] = _run(
             db, _REMOVE_DOCS, **{"@coll": coll, "tenant_id": tenant_id, "agent_id": agent_id}
         )

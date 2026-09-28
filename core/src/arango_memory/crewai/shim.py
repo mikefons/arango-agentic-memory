@@ -12,8 +12,7 @@ crewai default threshold would drop every hit. We rely on `limit` for cutoff.
 
 CrewAI 1.10.0 removed the legacy `Storage` interface (and `ExternalMemory`) in
 favour of its unified memory, so the shim works with `crewai<1.10` only; on newer
-crewai it raises a clear `ImportError` rather than an opaque module-not-found.
-`ArangoCrewStorage` / `crew_memory()` are unaffected.
+crewai it raises a clear `ImportError` pointing to `arango_crewai_memory()` (unified.py).
 """
 
 from __future__ import annotations
@@ -36,8 +35,8 @@ def _storage_base() -> type:
         raise ImportError(
             f"crewai {getattr(crewai, '__version__', '?')} has no legacy "
             "`crewai.memory.storage.interface.Storage` (removed in crewai 1.10.0); "
-            "to_crewai_storage() supports crewai<1.10 only. Use ArangoCrewStorage / "
-            "crew_memory() directly."
+            "to_crewai_storage() supports crewai<1.10 only. On crewai>=1.10 use "
+            "arango_crewai_memory() (unified memory): Crew(memory=arango_crewai_memory(...))."
         ) from exc
 
     return Storage  # type: ignore[no-any-return]

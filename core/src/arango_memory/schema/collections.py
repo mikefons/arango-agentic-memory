@@ -17,7 +17,7 @@ from .migrations import run_migrations
 
 DOCUMENT_COLLECTIONS: tuple[str, ...] = (
     "episodes", "memories", "entities", "steps", "ontology_proposals", "sessions",
-    "write_intents",
+    "write_intents", "crewai_records",
 )
 EDGE_COLLECTIONS: tuple[str, ...] = (
     "mentions", "relates_to", "produced_by", "TOUCHED", "TRANSITION", "Supersedes",
@@ -141,6 +141,10 @@ def _ensure_scope_indexes(db: StandardDatabase) -> None:
         ("write_intents", "idx_intent_lease", ["leased_until"]),
         # Ontology review lists proposals by tenant + status.
         ("ontology_proposals", "idx_proposal_scope", ["tenant_id", "status"]),
+        # CrewAI unified-memory backend (CW-1): crewai's per-record fields, joined to the
+        # core memory by `memory_key`; scans filter by tenant/agent (+ scope prefix).
+        ("crewai_records", "idx_crewai_scope", ["tenant_id", "agent_id", "scope"]),
+        ("crewai_records", "idx_crewai_memory", ["tenant_id", "agent_id", "memory_key"]),
     ):
         db.collection(collection).add_index(
             {"type": "persistent", "fields": fields, "name": name}
