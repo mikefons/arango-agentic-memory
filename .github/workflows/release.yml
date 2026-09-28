@@ -34,17 +34,23 @@ jobs:
         working-directory: core
         run: uv build
 
+      # Runtime-only pinned set (no dev group, no extras) — what `pip install arango-memory`
+      # resolves to as tested. Feeds both the scan and the SBOM.
+      - name: Export runtime requirements
+        working-directory: core
+        run: uv export --format requirements-txt --no-emit-project --no-dev > requirements.txt
+
       - name: Dependency scan (pip-audit)
         working-directory: core
         continue-on-error: true # informational; a new advisory shouldn't block a tag
-        run: |
-          uv export --format requirements-txt --no-emit-project --no-dev > requirements.txt
-          uvx pip-audit -r requirements.txt
+        run: uvx pip-audit -r requirements.txt
 
+      # syft can't read dependencies out of a built wheel (scanning core/dist gave 0 components),
+      # so catalog the pinned runtime export instead.
       - name: SBOM (CycloneDX)
         uses: anchore/sbom-action@v0
         with:
-          path: core/dist
+          file: core/requirements.txt
           format: cyclonedx-json
           output-file: sbom-core.cdx.json
           artifact-name: sbom-core.cdx.json

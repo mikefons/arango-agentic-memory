@@ -9,7 +9,7 @@ ships. Until then (`0.x`), minor versions may carry breaking changes; see
 The Python core (`arango-memory`) and the Vercel adapter (`@arango-memory/vercel`)
 are versioned together and released from this repository.
 
-## [0.1.0] — 2026-09-16
+## [0.1.0] — 2026-09-28
 
 First public release. Everything below is the initial public surface, published to
 PyPI (`arango-memory`), npm (`@arango-memory/vercel`), and GHCR (the core image)
@@ -291,6 +291,9 @@ from the `v0.1.0` tag.
   gliner 0.2.29 + transformers 5.15, torch 2.14, pillow 12.3, aiohttp 3.14.3, datasets, setuptools.
   One residual: **chromadb 1.1.1** (via the `crewai` extra) has advisories with no fixed release and
   is pinned `~=1.1.0` by crewai itself.
+- **Release SBOM for the Python package now lists its dependencies.** The release workflow pointed
+  syft at the built wheel, which it can't catalog (0 components); it now catalogs the pinned
+  runtime export (`uv export --no-dev`, no extras).
 - **`core/.dockerignore`** keeps `.env`, benchmark data, and caches out of the Docker build context, so
   a future broad `COPY` can't bake secrets into a published image.
 
