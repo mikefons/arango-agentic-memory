@@ -249,6 +249,12 @@ from the `v0.1.0` tag.
   acted ~4–5× stronger than set. β now adds on the probability scale, and the `Reranker` protocol
   documents a [0, 1] score contract. Opt-in mode only (`replace`, the default, and `rrf` are
   unaffected); the RQ-3 write-up (DESIGN §23) is corrected and its decision stands.
+- **The local reranker crashed the process under concurrency on Apple Silicon.** `get_reranker()`'s
+  `lru_cache` let concurrent first calls each build their own cross-encoder, so N threads loaded N
+  copies of the model onto MPS at once. Concurrent `predict()` on one model is also unsafe on MPS. Either
+  one killed the process with no Python traceback: a Metal command-buffer assertion or a segfault. Found
+  running the LongMemEval harness with `--concurrency 4 --rerank`; the API server's concurrent requests
+  were exposed too. The first build now happens under a lock, and each instance serializes `predict()`.
 
 ### Fixed — adapters
 

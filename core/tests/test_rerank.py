@@ -2,12 +2,21 @@
 
 from __future__ import annotations
 
+import sys
+import threading
+import time
+import types
 from collections.abc import Sequence
 
 import pytest
 
 from arango_memory.config import Settings
-from arango_memory.retrieve.rerank import FakeReranker, Reranker, get_reranker
+from arango_memory.retrieve.rerank import (
+    FakeReranker,
+    LocalCrossEncoderReranker,
+    Reranker,
+    get_reranker,
+)
 from arango_memory.retrieve.search import (
     _Candidate,
     _event_sort_key,
@@ -186,3 +195,63 @@ def test_get_reranker_local_without_extra_is_a_clear_error() -> None:
             get_reranker(Settings(reranker_provider="local"))
     else:
         pytest.skip("sentence-transformers is installed; the error path is not exercised")
+
+
+def test_local_reranker_serializes_concurrent_predict(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Concurrent predict() on one model aborts the process on Apple MPS (Metal command-buffer
+    # assertion), so the shared instance must never run two predicts at once.
+    class _OverlapDetectingEncoder:
+        active = 0
+        overlapped = False
+
+        def __init__(self, model: str) -> None: ...
+
+        def predict(self, pairs: list[tuple[str, str]]) -> list[float]:
+            cls = _OverlapDetectingEncoder
+            cls.active += 1
+            cls.overlapped |= cls.active > 1
+            time.sleep(0.02)
+            cls.active -= 1
+            return [0.5] * len(pairs)
+
+    stub = types.ModuleType("sentence_transformers")
+    stub.CrossEncoder = _OverlapDetectingEncoder  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "sentence_transformers", stub)
+
+    reranker = LocalCrossEncoderReranker(model="stub")
+    threads = [
+        threading.Thread(target=reranker.score, args=("q", ["a", "b"])) for _ in range(8)
+    ]
+    for th in threads:
+        th.start()
+    for th in threads:
+        th.join()
+    assert not _OverlapDetectingEncoder.overlapped
+    assert reranker.score("q", ["a"]) == [0.5]
+
+
+def test_concurrent_first_get_reranker_builds_one_instance(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Racing first calls must share one model, not each load their own copy.
+    builds: list[str] = []
+
+    class _SlowEncoder:
+        def __init__(self, model: str) -> None:
+            builds.append(model)
+            time.sleep(0.05)
+
+        def predict(self, pairs: list[tuple[str, str]]) -> list[float]:
+            return [0.5] * len(pairs)
+
+    stub = types.ModuleType("sentence_transformers")
+    stub.CrossEncoder = _SlowEncoder  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "sentence_transformers", stub)
+
+    cfg = Settings(reranker_provider="local", reranker_model="stub-concurrent-build")
+    got: list[Reranker] = []
+    threads = [threading.Thread(target=lambda: got.append(get_reranker(cfg))) for _ in range(8)]
+    for th in threads:
+        th.start()
+    for th in threads:
+        th.join()
+    assert len(builds) == 1
+    assert len({id(r) for r in got}) == 1

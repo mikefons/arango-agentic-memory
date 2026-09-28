@@ -17,6 +17,7 @@ Two implementations:
 
 from __future__ import annotations
 
+import threading
 from collections.abc import Sequence
 from functools import lru_cache
 from typing import Protocol, runtime_checkable
@@ -66,12 +67,18 @@ class LocalCrossEncoderReranker:
 
         self._encoder = CrossEncoder(model)
         self.model = model
+        # One cached instance is shared across threads (API requests, the eval harness's
+        # --concurrency), and concurrent predict() on Apple MPS aborts the process with a Metal
+        # command-buffer assertion. Serializing costs nothing on a single device.
+        self._lock = threading.Lock()
 
     def score(self, query: str, texts: Sequence[str]) -> list[float]:
         if not texts:
             return []
         pairs = [(query, text) for text in texts]
-        return [float(s) for s in self._encoder.predict(pairs)]
+        with self._lock:
+            scores = self._encoder.predict(pairs)
+        return [float(s) for s in scores]
 
 
 @lru_cache(maxsize=4)
@@ -91,8 +98,15 @@ def _build_reranker(provider: str, model: str) -> Reranker:
         ) from exc
 
 
+_build_lock = threading.Lock()
+
+
 def get_reranker(config: Settings | None = None) -> Reranker:
     """The configured reranker (cached per provider+model). Selecting 'local' without the
     extra is an error."""
     cfg = config or settings
-    return _build_reranker(cfg.reranker_provider, cfg.reranker_model)
+    # lru_cache doesn't stop concurrent first calls from each building their own instance —
+    # N threads would load N copies of the model at once (and each copy's predict lock would
+    # guard nothing). Holding a lock across the lookup makes the first build happen once.
+    with _build_lock:
+        return _build_reranker(cfg.reranker_provider, cfg.reranker_model)
