@@ -10,7 +10,7 @@ from fastapi.testclient import TestClient
 
 from arango_memory.ingest.store import store
 from arango_memory.retrieve.search import RetrieveResult, retrieve
-from arango_memory.security.forget import forget, purge
+from arango_memory.security.forget import forget, forget_memories, purge
 
 
 def _eventually_empty(db: StandardDatabase, query: str, ctx: dict[str, str]) -> bool:
@@ -125,3 +125,31 @@ def test_hard_purge_lets_identical_content_restore(
     purge(db, tenant_id="t_reset")                               # hard-delete → key removed
     store(db, content="quarterly revenue was 12M", **ctx)        # now it lands
     assert wait_for_searchable(db, query="revenue", **ctx).hits
+
+
+# ── per-memory soft-delete + adapter side rows (CW-1) ──────────────────────
+def test_forget_memories_soft_deletes_only_the_named_keys_in_the_tenant(
+    db: StandardDatabase,
+) -> None:
+    ctx = {"tenant_id": "fm_a", "agent_id": "x"}
+    keep = store(db, content="keep this one", **ctx).memory_ids[0]
+    drop = store(db, content="drop this one", **ctx).memory_ids[0]
+    other = store(db, content="drop this one", tenant_id="fm_b", agent_id="x").memory_ids[0]
+
+    # A key from another tenant is ignored even if named.
+    assert forget_memories(db, tenant_id="fm_a", memory_keys=[drop, other]) == 1
+    memories = db.collection("memories")
+    assert memories.get(drop)["invalid_at"] is not None
+    assert memories.get(keep)["invalid_at"] is None
+    assert memories.get(other)["invalid_at"] is None
+    assert forget_memories(db, tenant_id="fm_a", memory_keys=[drop]) == 0  # already gone
+    assert forget_memories(db, tenant_id="fm_a", memory_keys=[]) == 0
+
+
+def test_purge_removes_crewai_side_rows_for_the_subject_only(db: StandardDatabase) -> None:
+    rows = db.collection("crewai_records")
+    rows.insert({"_key": "p1", "tenant_id": "cp_a", "agent_id": "x", "metadata": {"pii": 1}})
+    rows.insert({"_key": "p2", "tenant_id": "cp_b", "agent_id": "x", "metadata": {}})
+    counts = purge(db, tenant_id="cp_a")
+    assert counts["crewai_records"] == 1
+    assert not rows.has("p1") and rows.has("p2")

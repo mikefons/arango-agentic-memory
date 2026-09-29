@@ -10,7 +10,7 @@ export PYTHONPATH := src
 
 UVRUN := uv run --no-sync
 
-.PHONY: sync dev check test lint type ci clean-venv benchmark longmemeval handoff-eval recall-curve spacy-model
+.PHONY: sync dev check test lint type ci clean-venv benchmark longmemeval handoff-eval recall-curve spacy-model test-crewai
 
 # LoCoMo benchmark (§23). Override DATASET/MODE/K; needs a running ArangoDB and, for a
 # real run, real providers (EMBEDDING_PROVIDER=openai GENERATION_PROVIDER=anthropic + keys).
@@ -31,6 +31,14 @@ check:           ## Connection/round-trip probe (set ARANGO_TARGET for cloud)
 
 test:            ## Run the test suite
 	$(UVRUN) pytest
+
+# The CrewAI adapter against a REAL crewai (CW-1). Own venv: syncing the `crewai` extra into
+# the shared one would prune its other extras (rerank, spaCy).
+test-crewai: export UV_PROJECT_ENVIRONMENT := $(HOME)/.venvs/arango-memory-crewai
+test-crewai:     ## CrewAI adapter tests + types against a real crewai install
+	uv sync --extra dev --extra crewai
+	$(UVRUN) pytest tests/test_crewai.py tests/test_crewai_unified.py
+	$(UVRUN) mypy src/arango_memory/crewai
 
 lint:            ## Ruff lint
 	$(UVRUN) ruff check .

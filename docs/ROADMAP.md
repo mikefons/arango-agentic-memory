@@ -46,7 +46,7 @@ Sizes: S ≈ ≤1 day, M ≈ 2–3 days.
 | 14 | SC-1 | Single-large-tenant scalability: ANN entity resolution + bounded graph fan-out | L | — |
 | 15 | RT-1 | Expose `candidate_pool` as a config + API knob (open-corpus tuning) | S | — |
 | 16 | RQ-3 | Rerank scoring: replace vs rank-blend vs event-time-aware (paired LongMemEval) ✅ — **replace stays** | M | RQ-2b, IN-4 |
-| 17 | CW-1 | Port the CrewAI shim to crewai ≥ 1.10 unified memory (0.2) | S | — |
+| 17 | CW-1 | Port the CrewAI shim to crewai ≥ 1.10 unified memory ✅ — hybrid backend + paired embedder | M | — |
 
 Recommended sequence: **MA-1 → MA-2 → MA-3 → MA-4 → MA-5 → MA-6**, with MA-7/MA-8
 schedulable any time (no dependencies on the others). MA-1…MA-8 are **shipped**. **RQ-1**
@@ -1279,7 +1279,7 @@ Obsidian) read/write one brain. Decide OBS-1's core-vs-plugin split before build
 
 ---
 
-## CW-1 — Port the CrewAI shim to crewai ≥ 1.10 unified memory (0.2)
+## CW-1 — Port the CrewAI shim to crewai ≥ 1.10 unified memory  ✅
 
 **Why.** `to_crewai_storage()` subclasses crewai's legacy `crewai.memory.storage.interface.Storage`
 for `Crew(external_memory=ExternalMemory(...))`. CrewAI 1.10.0 removed both in favour of a unified
@@ -1291,4 +1291,15 @@ json-repair.
 **Scope.** Implement the unified-memory backend protocol over `ArangoCrewStorage` (keep the
 G-Memory tier namespacing), and replace the stubbed-crewai shim test with one against a real
 crewai install so an upstream interface change can't slip past CI again.
+
+**Outcome.** Shipped as `arango_crewai_memory()` (`crewai/unified.py`): a `StorageBackend` plus a
+**paired embedder**. crewai's `search()` receives only a query embedding; the paired embedder is the
+core's embedder remembering the text behind each vector, so `search()` recovers the text and runs the
+core's full hybrid retrieval (exact-cosine fallback for foreign vectors). This was chosen over a plain
+vector-store backend, which would have reduced ArangoDB to one more vector store and dropped BM25, the
+graph and rerank. crewai's per-record fields live in a `crewai_records` side collection (covered by
+tenant `forget`/`purge`); each record revision gets its own core memory key, so deletes and rewrites
+never collide with the core's keep-the-soft-deleted-key rule. Scores are cosine (crewai's Qdrant
+convention). A `crewai` CI job (`make test-crewai`) tests against real crewai. The legacy shim remains
+for `crewai<1.10`.
 

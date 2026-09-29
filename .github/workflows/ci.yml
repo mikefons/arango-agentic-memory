@@ -29,6 +29,26 @@ jobs:
       - name: Lint, type-check, test
         run: make ci
 
+  crewai:
+    name: Core — CrewAI adapter vs real crewai
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: core
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      # The `core` job runs these tests with crewai absent (the unified-backend suite skips);
+      # this job installs the real extra so an upstream crewai interface change fails CI
+      # instead of slipping past a stub (CW-1).
+      - name: Test + type-check against real crewai
+        run: make test-crewai
+
   adapter:
     name: Adapter (typecheck, test)
     runs-on: ubuntu-latest

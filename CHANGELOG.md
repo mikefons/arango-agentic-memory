@@ -122,6 +122,18 @@ from the `v0.1.0` tag.
 
 - `@arango-memory/vercel` AI SDK middleware client, MCP server, LangChain /
   LangGraph / CrewAI integrations, and the Memory Dungeon reference app.
+- **CrewAI ≥ 1.10 unified-memory backend (CW-1).** `arango_crewai_memory(db, tenant_id=…, agent_id=…)`
+  returns a crewai `Memory` backed by the core, for `Crew(memory=…)`. crewai's `StorageBackend.search()`
+  receives only a query embedding, so the backend ships with a paired embedder (the core's embedder, which
+  remembers the text behind each vector): searches recover the query text and run the core's full hybrid
+  retrieval (BM25 + vector + graph + rerank), falling back to exact cosine search for a vector it didn't
+  produce. crewai's per-record fields (scope, categories, metadata, importance, timestamps, privacy) live in
+  a new `crewai_records` collection joined to the core memory, so the text stays single-sourced and
+  PII-redacted, and tenant `forget` / `purge` cover it. Scores are cosine similarity, as crewai's Qdrant
+  backend reports. The legacy `to_crewai_storage()` shim stays for `crewai<1.10`.
+- Core: `forget_memories(db, tenant_id=…, memory_keys=…)` soft-deletes specific memories by key.
+- CI: a `crewai` job runs the adapter tests and mypy against a real crewai install (`make test-crewai`),
+  so an upstream interface change fails CI instead of slipping past a stub.
 
 ### Added — quality
 
@@ -263,7 +275,7 @@ from the `v0.1.0` tag.
   subclasses, so on current crewai it died with an opaque `ModuleNotFoundError` — CI missed it
   because the shim test stubs crewai. It now raises an `ImportError` naming the cause and pointing to
   `ArangoCrewStorage` / `crew_memory()`, which don't import crewai and work on any version. The shim
-  supports `crewai<1.10`; a port to CrewAI's unified-memory backend is planned for 0.2.
+  supports `crewai<1.10`; crewai ≥ 1.10 uses the new unified-memory backend (`arango_crewai_memory()`, above).
 
 ### Fixed — examples
 
