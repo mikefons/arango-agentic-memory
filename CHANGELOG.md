@@ -313,6 +313,10 @@ from the `v0.1.0` tag.
   from `uv.lock`): starlette 1.2.1 → 1.7.0 (with FastAPI 0.136 → 0.141), cryptography 48.0.0 →
   50.0.1, anyio 4.13.0 → 4.15.1 — clearing all 13 known advisories in the runtime set (`pip-audit`).
   Base image re-pinned to the current `python:3.11.16-slim` index digest.
+- **PyJWT 2.13.0 → 2.15.1 and urllib3 2.7.0 → 2.8.0** (runtime, so in the image): 12 PyJWT
+  advisories, relevant because PyJWT verifies JWT credentials on the core's auth path, plus 3 in
+  urllib3. All were published after the first audit. oauthlib 3.3.1 → 4.0.0 in the `crewai` extra's
+  chain. The runtime set audits clean again.
 - **Optional extras patched:** crewai 1.14 → 1.15 (clears its pinned mcp / json-repair advisories),
   gliner 0.2.29 + transformers 5.15, torch 2.14, pillow 12.3, aiohttp 3.14.3, datasets, setuptools.
   One residual: **chromadb 1.1.1** (via the `crewai` extra) has advisories with no fixed release and
