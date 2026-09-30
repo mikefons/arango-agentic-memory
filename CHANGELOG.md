@@ -130,6 +130,12 @@ from the `v0.1.0` tag.
   without `--allowed-hosts`, and is stateless for load balancers. Tool calls now run off the event
   loop, so concurrent clients don't wait on each other. The `mcp` extra's floor rises to `>=1.14.0`,
   the first release this works on, checked by `make mcp-floor` in CI.
+- **One image, core or MCP (MCP-2).** The container image now includes the `mcp` extra (+1.5 MB), so
+  `python -m arango_memory.mcp --transport http` runs from the same image as the core. The image puts
+  its venv first on `PATH`, the Docker healthcheck URL is configurable (`HEALTHCHECK_URL`), the MCP HTTP
+  server answers an unauthenticated `GET /health`, and its port falls back to the platform `PORT`. There
+  is a `docker compose --profile mcp` service, a TLS reverse-proxy and Railway recipe
+  (`docs/adapters/mcp.md`), and a CI smoke test of the image's MCP role.
 - **CrewAI ≥ 1.10 unified-memory backend (CW-1).** `arango_crewai_memory(db, tenant_id=…, agent_id=…)`
   returns a crewai `Memory` backed by the core, for `Crew(memory=…)`. crewai's `StorageBackend.search()`
   receives only a query embedding, so the backend ships with a paired embedder (the core's embedder, which

@@ -233,10 +233,30 @@ class _RequireBearer:
         await self.app(scope, receive, send)
 
 
+class _Health:
+    """`GET /health` liveness for orchestrators: answered before auth, without touching the
+    core (like the core's own /health — up means the process serves, not that the core does)."""
+
+    def __init__(self, app: ASGIApp) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] == "http" and scope["path"] == "/health":
+            await send({
+                "type": "http.response.start",
+                "status": 200,
+                "headers": [(b"content-type", b"application/json")],
+            })
+            await send({"type": "http.response.body", "body": b'{"status":"ok"}'})
+            return
+        await self.app(scope, receive, send)
+
+
 def build_http_app(server: FastMCP, *, allow_anonymous: bool = False) -> ASGIApp:
-    """The Streamable HTTP ASGI app, behind the bearer gate unless `allow_anonymous`."""
+    """The Streamable HTTP ASGI app, behind the bearer gate unless `allow_anonymous`, with an
+    unauthenticated `/health`."""
     app: ASGIApp = server.streamable_http_app()
-    return app if allow_anonymous else _RequireBearer(app)
+    return _Health(app if allow_anonymous else _RequireBearer(app))
 
 
 def _csv(value: str | None) -> list[str]:
@@ -249,7 +269,9 @@ def _parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
     p.add_argument("--transport", choices=("stdio", "http"),
                    default=env("ARANGO_MEMORY_MCP_TRANSPORT", "stdio"))
     p.add_argument("--host", default=env("ARANGO_MEMORY_MCP_HOST", "127.0.0.1"))
-    p.add_argument("--port", type=int, default=int(env("ARANGO_MEMORY_MCP_PORT", "8000")))
+    # `PORT` is the platform convention (Railway, Cloud Run, Heroku) for the port to listen on.
+    p.add_argument("--port", type=int,
+                   default=int(env("ARANGO_MEMORY_MCP_PORT") or env("PORT") or "8000"))
     p.add_argument("--path", default=env("ARANGO_MEMORY_MCP_PATH", "/mcp"))
     p.add_argument("--allowed-hosts", default=env("ARANGO_MEMORY_MCP_ALLOWED_HOSTS"),
                    help="comma-separated Host values accepted (required off localhost)")

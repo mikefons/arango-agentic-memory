@@ -141,6 +141,24 @@ jobs:
       - name: Build core image
         run: docker build -t arango-memory-core:ci -f core/Dockerfile core
 
+      # The same image's MCP role (MCP-2): boots without a core, answers /health unauthenticated,
+      # gates /mcp behind a bearer, and completes an MCP initialize over Streamable HTTP.
+      - name: Smoke the MCP HTTP role
+        run: |
+          docker run -d --name mcp -p 127.0.0.1:8000:8000 \
+            -e ARANGO_MEMORY_MCP_HOST=0.0.0.0 \
+            -e ARANGO_MEMORY_MCP_ALLOWED_HOSTS='localhost:*,127.0.0.1:*' \
+            arango-memory-core:ci python -m arango_memory.mcp --transport http
+          for i in $(seq 1 30); do curl -sf localhost:8000/health && break; sleep 1; done
+          curl -sf localhost:8000/health | grep -q '"ok"'
+          test "$(curl -s -o /dev/null -w '%{http_code}' -X POST localhost:8000/mcp -d '{}')" = 401
+          curl -sf -X POST localhost:8000/mcp \
+            -H 'authorization: Bearer ci' -H 'content-type: application/json' \
+            -H 'accept: application/json, text/event-stream' \
+            -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"ci","version":"0"}}}' \
+            | grep -q '"serverInfo"'
+          docker rm -f mcp
+
   docs:
     name: Docs (link check)
     runs-on: ubuntu-latest

@@ -57,5 +57,26 @@ services:
       arangodb:
         condition: service_healthy
 
+  # Optional: the MCP server over Streamable HTTP, from the same image as the core.
+  # `docker compose --profile mcp up` → http://localhost:8000/mcp. Callers send their own
+  # bearer credential (forwarded to the core), so this service gets no .env secrets.
+  mcp:
+    profiles: ["mcp"]
+    build:
+      context: ./core
+      dockerfile: Dockerfile
+    container_name: arango-memory-mcp
+    command: ["python", "-m", "arango_memory.mcp", "--transport", "http"]
+    environment:
+      ARANGO_MEMORY_CORE_URL: http://core:8080
+      ARANGO_MEMORY_MCP_HOST: 0.0.0.0
+      ARANGO_MEMORY_MCP_ALLOWED_HOSTS: "localhost:*,127.0.0.1:*"
+      HEALTHCHECK_URL: http://localhost:8000/health
+    ports:
+      - "127.0.0.1:8000:8000"
+    depends_on:
+      core:
+        condition: service_healthy
+
 volumes:
   arango-data:

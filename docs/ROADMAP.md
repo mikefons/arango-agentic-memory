@@ -48,7 +48,7 @@ Sizes: S ≈ ≤1 day, M ≈ 2–3 days.
 | 16 | RQ-3 | Rerank scoring: replace vs rank-blend vs event-time-aware (paired LongMemEval) ✅ — **replace stays** | M | RQ-2b, IN-4 |
 | 17 | CW-1 | Port the CrewAI shim to crewai ≥ 1.10 unified memory ✅ — hybrid backend + paired embedder | M | — |
 | 18 | MCP-1 | MCP OAuth authorization flow for the HTTP transport (spec auth discovery) | M | #255 |
-| 19 | MCP-2 | Packaged MCP HTTP deployment: image with the `mcp` extra + optional hosted service | S | #255 |
+| 19 | MCP-2 | Packaged MCP HTTP deployment ✅ — one image runs core or MCP; recipes; hosted service not deployed | S | #255 |
 | 20 | MCP-3 | Legacy HTTP+SSE transport — only if a needed client can't speak Streamable HTTP | S | #255 |
 
 Recommended sequence: **MA-1 → MA-2 → MA-3 → MA-4 → MA-5 → MA-6**, with MA-7/MA-8
@@ -1327,7 +1327,7 @@ authorization server to obtain tokens from.
 external IdP (Auth0/Okta/Cognito) vs. a minimal built-in issuer. Pass-through bearer stays as the
 simple mode.
 
-### MCP-2 — Packaged MCP HTTP deployment
+### MCP-2 — Packaged MCP HTTP deployment  ✅
 
 **Why.** The container image is built with `uv sync --no-dev` and no extras, so it can't run the MCP
 server; HTTP mode today is a `pip install "arango-memory[mcp]"` + run-it-yourself process.
@@ -1336,6 +1336,15 @@ server; HTTP mode today is a `pip install "arango-memory[mcp]"` + run-it-yoursel
 `python -m arango_memory.mcp --transport http --host 0.0.0.0 --allowed-hosts …`; document a
 reverse-proxy/TLS recipe; optionally add it as a Railway service beside the live core (needs the
 core in enforced mode — it is — and a public `--allowed-hosts`).
+
+**Outcome.** The image now syncs the `mcp` extra (+1.5 MB; runtime + `mcp` audits clean), so one
+image runs the core (default command) or the MCP server
+(`python -m arango_memory.mcp --transport http`). Along the way: the venv goes first on `PATH` (bare
+`python` in the container was the base image's), the healthcheck URL is configurable, the MCP HTTP
+server has an unauthenticated `/health`, and its port falls back to `PORT`. There is a
+`docker compose --profile mcp` service, Caddy TLS + Railway recipes in `docs/adapters/mcp.md`, and a
+CI smoke test of the MCP role. **Not done:** actually deploying a hosted MCP service beside the live
+core — that's an infrastructure decision, left to the owner.
 
 ### MCP-3 — Legacy HTTP+SSE transport (conditional)
 
