@@ -29,6 +29,10 @@ jobs:
       - name: Lint, type-check, test
         run: make ci
 
+      # The MCP server's HTTP mode against the lowest `mcp` release the extra allows.
+      - name: MCP floor smoke (mcp>=1.14.0)
+        run: make mcp-floor
+
   crewai:
     name: Core — CrewAI adapter vs real crewai
     runs-on: ubuntu-latest
