@@ -9,7 +9,7 @@ ships. Until then (`0.x`), minor versions may carry breaking changes; see
 The Python core (`arango-memory`) and the Vercel adapter (`@arango-memory/vercel`)
 are versioned together and released from this repository.
 
-## [0.1.0] — 2026-09-28
+## [0.1.0] — 2026-09-30
 
 First public release. Everything below is the initial public surface, published to
 PyPI (`arango-memory`), npm (`@arango-memory/vercel`), and GHCR (the core image)

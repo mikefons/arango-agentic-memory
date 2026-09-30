@@ -47,6 +47,9 @@ Sizes: S ≈ ≤1 day, M ≈ 2–3 days.
 | 15 | RT-1 | Expose `candidate_pool` as a config + API knob (open-corpus tuning) | S | — |
 | 16 | RQ-3 | Rerank scoring: replace vs rank-blend vs event-time-aware (paired LongMemEval) ✅ — **replace stays** | M | RQ-2b, IN-4 |
 | 17 | CW-1 | Port the CrewAI shim to crewai ≥ 1.10 unified memory ✅ — hybrid backend + paired embedder | M | — |
+| 18 | MCP-1 | MCP OAuth authorization flow for the HTTP transport (spec auth discovery) | M | #255 |
+| 19 | MCP-2 | Packaged MCP HTTP deployment: image with the `mcp` extra + optional hosted service | S | #255 |
+| 20 | MCP-3 | Legacy HTTP+SSE transport — only if a needed client can't speak Streamable HTTP | S | #255 |
 
 Recommended sequence: **MA-1 → MA-2 → MA-3 → MA-4 → MA-5 → MA-6**, with MA-7/MA-8
 schedulable any time (no dependencies on the others). MA-1…MA-8 are **shipped**. **RQ-1**
@@ -1302,4 +1305,43 @@ tenant `forget`/`purge`); each record revision gets its own core memory key, so 
 never collide with the core's keep-the-soft-deleted-key rule. Scores are cosine (crewai's Qdrant
 convention). A `crewai` CI job (`make test-crewai`) tests against real crewai. The legacy shim remains
 for `crewai<1.10`.
+
+---
+
+## MCP HTTP follow-ups (from #255)
+
+#255 added the Streamable HTTP transport (`python -m arango_memory.mcp --transport http`) with
+pass-through bearer auth: each caller's own core key / JWT is forwarded, so the core's ABAC applies
+per caller. These were scoped out of it:
+
+### MCP-1 — MCP OAuth authorization flow
+
+**Why.** Pass-through bearer works for clients that let you set a header (Claude Code, Cursor, custom
+agents). Clients that only connect to remote MCP servers through the spec's OAuth flow — e.g. Claude
+Desktop / claude.ai custom connectors — can't use it; they expect protected-resource metadata and an
+authorization server to obtain tokens from.
+
+**Scope.** Serve OAuth protected-resource metadata from the MCP server (the SDK's `AuthSettings` +
+`TokenVerifier`), pointing at an authorization server that issues tokens the core already accepts
+(its JWT verification, §17), so tenant/agent/scope claims keep driving ABAC. Decide first: bring an
+external IdP (Auth0/Okta/Cognito) vs. a minimal built-in issuer. Pass-through bearer stays as the
+simple mode.
+
+### MCP-2 — Packaged MCP HTTP deployment
+
+**Why.** The container image is built with `uv sync --no-dev` and no extras, so it can't run the MCP
+server; HTTP mode today is a `pip install "arango-memory[mcp]"` + run-it-yourself process.
+
+**Scope.** Include the `mcp` extra in the image (or publish a second tag) so the same image can run
+`python -m arango_memory.mcp --transport http --host 0.0.0.0 --allowed-hosts …`; document a
+reverse-proxy/TLS recipe; optionally add it as a Railway service beside the live core (needs the
+core in enforced mode — it is — and a public `--allowed-hosts`).
+
+### MCP-3 — Legacy HTTP+SSE transport (conditional)
+
+**Why.** The MCP spec deprecated the older two-endpoint HTTP+SSE transport in favour of Streamable
+HTTP, so it was deliberately not added. Some older clients may still only speak it.
+
+**Scope.** Only if a client we need can't use Streamable HTTP: FastMCP also serves `sse_app()`; mount
+it behind the same bearer gate and host/origin checks. Otherwise, close as won't-do.
 
