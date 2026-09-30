@@ -1,7 +1,7 @@
 # MCP Server
 
-`arango_memory.mcp` — a [FastMCP](https://github.com/jlowin/fastmcp) **stdio**
-server that exposes the core's `/v1` HTTP API as 11 tools, so MCP clients (Claude
+`arango_memory.mcp` — a [FastMCP](https://github.com/jlowin/fastmcp) server (**stdio**, or
+**Streamable HTTP** as a standalone network service) that exposes the core's `/v1` HTTP API as 11 tools, so MCP clients (Claude
 Desktop, Cursor, Windsurf) get agentic memory — including multi-agent handoff — without
 writing code.
 
@@ -34,6 +34,48 @@ The server is a **client of the core** — start the core first (see [ops.md](..
   }
 }
 ```
+
+## Streamable HTTP (remote clients)
+Run the same server as a standalone HTTP service, for clients that connect by URL (Claude Code,
+Cursor, custom agents) or to share one server across machines:
+```bash
+python -m arango_memory.mcp --transport http            # http://127.0.0.1:8000/mcp
+```
+| Flag | Env | Default |
+|---|---|---|
+| `--transport` | `ARANGO_MEMORY_MCP_TRANSPORT` | `stdio` (`http` for this mode) |
+| `--host` / `--port` / `--path` | `ARANGO_MEMORY_MCP_HOST` / `_PORT` / `_PATH` | `127.0.0.1` / `8000` / `/mcp` |
+| `--allowed-hosts` | `ARANGO_MEMORY_MCP_ALLOWED_HOSTS` | — (comma-separated `Host` values; **required** off localhost) |
+| `--allowed-origins` | `ARANGO_MEMORY_MCP_ALLOWED_ORIGINS` | — (comma-separated browser `Origin`s) |
+| `--allow-anonymous` | `ARANGO_MEMORY_MCP_ALLOW_ANONYMOUS=1` | off (localhost binds only) |
+
+**Auth is pass-through.** Every request must carry the caller's own `Authorization: Bearer <key or
+JWT>` — the same credential the core accepts — or it gets `401`. The server forwards that header to
+the core on each tool call, so the core's ABAC applies **per caller**: a tenant-bound key can only
+reach its tenant, agent binding and scopes hold (§17, MA-7). The server's own
+`ARANGO_MEMORY_API_KEY` is **never** used in HTTP mode, so a network caller can't borrow it. Run the
+core in enforced mode (`API_KEYS` / JWT) when the MCP port is reachable by anyone but you.
+
+**Network safety.** It binds `127.0.0.1` by default, with the SDK's DNS-rebinding guard (only local
+`Host`/`Origin` values). Binding anything else requires `--allowed-hosts` (the start-up refuses
+otherwise), and `--allow-anonymous` is refused off localhost. Put it behind TLS (a reverse proxy)
+before exposing it. The transport is **stateless** (no session affinity), so it scales behind a load
+balancer.
+
+**Client config.** Claude Code:
+```bash
+claude mcp add --transport http arango-memory http://127.0.0.1:8000/mcp \
+  --header "Authorization: Bearer <your-core-key>"
+```
+Cursor (`.cursor/mcp.json`):
+```jsonc
+{ "mcpServers": { "arango-memory": {
+    "url": "http://127.0.0.1:8000/mcp",
+    "headers": { "Authorization": "Bearer <your-core-key>" } } } }
+```
+Claude Desktop keeps using stdio (above).
+
+Requires `mcp>=1.14.0` (the `[mcp]` extra pins it); `make mcp-floor` smoke-tests that floor.
 
 ## Tools
 Eleven thin wrappers over the endpoints in [api.md](../api.md):

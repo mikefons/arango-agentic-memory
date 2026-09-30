@@ -122,6 +122,14 @@ from the `v0.1.0` tag.
 
 - `@arango-memory/vercel` AI SDK middleware client, MCP server, LangChain /
   LangGraph / CrewAI integrations, and the Memory Dungeon reference app.
+- **MCP server over Streamable HTTP.** `python -m arango_memory.mcp --transport http` runs the MCP
+  server as a standalone network service at `/mcp` (stdio stays the default). Auth is pass-through:
+  each request must carry the caller's own bearer credential (401 otherwise), forwarded to the core
+  so its ABAC applies per caller; the server's own `ARANGO_MEMORY_API_KEY` is never lent to HTTP
+  callers. It binds localhost by default with DNS-rebinding protection, refuses non-local binds
+  without `--allowed-hosts`, and is stateless for load balancers. Tool calls now run off the event
+  loop, so concurrent clients don't wait on each other. The `mcp` extra's floor rises to `>=1.14.0`,
+  the first release this works on, checked by `make mcp-floor` in CI.
 - **CrewAI ≥ 1.10 unified-memory backend (CW-1).** `arango_crewai_memory(db, tenant_id=…, agent_id=…)`
   returns a crewai `Memory` backed by the core, for `Crew(memory=…)`. crewai's `StorageBackend.search()`
   receives only a query embedding, so the backend ships with a paired embedder (the core's embedder, which

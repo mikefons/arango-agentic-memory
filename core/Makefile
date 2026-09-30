@@ -10,7 +10,7 @@ export PYTHONPATH := src
 
 UVRUN := uv run --no-sync
 
-.PHONY: sync dev check test lint type ci clean-venv benchmark longmemeval handoff-eval recall-curve spacy-model test-crewai
+.PHONY: sync dev check test lint type ci clean-venv benchmark longmemeval handoff-eval recall-curve spacy-model test-crewai mcp-floor
 
 # LoCoMo benchmark (§23). Override DATASET/MODE/K; needs a running ArangoDB and, for a
 # real run, real providers (EMBEDDING_PROVIDER=openai GENERATION_PROVIDER=anthropic + keys).
@@ -39,6 +39,12 @@ test-crewai:     ## CrewAI adapter tests + types against a real crewai install
 	uv sync --extra dev --extra crewai
 	$(UVRUN) pytest tests/test_crewai.py tests/test_crewai_unified.py
 	$(UVRUN) mypy src/arango_memory/crewai
+
+# Keep in step with the `mcp>=` floor in pyproject.toml.
+MCP_FLOOR ?= 1.14.0
+mcp-floor:       ## MCP Streamable HTTP smoke against the lowest supported mcp release
+	uv run --no-project --with "mcp==$(MCP_FLOOR)" --with httpx --with uvicorn \
+	  python scripts/mcp_floor_smoke.py src
 
 lint:            ## Ruff lint
 	$(UVRUN) ruff check .
