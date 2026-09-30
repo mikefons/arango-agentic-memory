@@ -177,3 +177,22 @@ def test_cli_refuses_unsafe_network_binds() -> None:
     with pytest.raises(SystemExit, match="localhost"):
         main(["--transport", "http", "--host", "0.0.0.0", "--allowed-hosts", "mcp.example",
               "--allow-anonymous"])
+
+
+def test_health_is_open_and_does_not_touch_the_core(serve: Any) -> None:
+    url = serve(object())  # a core that would fail any call: /health must never reach it
+    res = httpx.get(url.removesuffix("/mcp") + "/health")
+    assert res.status_code == 200 and res.json() == {"status": "ok"}
+
+
+def test_port_falls_back_to_the_platform_port_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    from arango_memory.mcp.server import _parse_args
+
+    monkeypatch.delenv("ARANGO_MEMORY_MCP_PORT", raising=False)
+    monkeypatch.setenv("PORT", "9123")
+    assert _parse_args([]).port == 9123
+    monkeypatch.setenv("ARANGO_MEMORY_MCP_PORT", "9200")  # the explicit setting wins
+    assert _parse_args([]).port == 9200
+    monkeypatch.delenv("ARANGO_MEMORY_MCP_PORT")
+    monkeypatch.delenv("PORT")
+    assert _parse_args([]).port == 8000
