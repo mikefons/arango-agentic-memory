@@ -323,6 +323,14 @@ from the `v0.1.0` tag.
   advisories, relevant because PyJWT verifies JWT credentials on the core's auth path, plus 3 in
   urllib3. All were published after the first audit. oauthlib 3.3.1 → 4.0.0 in the `crewai` extra's
   chain. The runtime set audits clean again.
+- **Image OS layer hardened.** The image build applies Debian security updates newer than the
+  pinned base: OpenSSL `3.5.7-1~deb13u2 → deb13u3` (13 advisories each in `openssl` / `libssl3t64` /
+  the legacy provider, some High) and libpcre2 (High). It also removes the base image's unused system
+  pip 24 / setuptools 79 (the app runs from its uv venv). Fixable image findings drop 59 → 10. The 10
+  left are CPython 3.11.16 interpreter advisories fixed only on 3.13/3.14 (3.11.16 is the latest
+  3.11). pip-audit only sees Python dependencies, so the release workflow now also runs a **Grype scan
+  of the built image** and fails on fixable High/Critical findings before anything is pushed. Exceptions
+  live in `.grype.yaml`, each with its reason.
 - **Optional extras patched:** crewai 1.14 → 1.15 (clears its pinned mcp / json-repair advisories),
   gliner 0.2.29 + transformers 5.15, torch 2.14, pillow 12.3, aiohttp 3.14.3, datasets, setuptools.
   One residual: **chromadb 1.1.1** (via the `crewai` extra) has advisories with no fixed release and

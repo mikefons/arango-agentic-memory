@@ -50,6 +50,7 @@ Sizes: S ≈ ≤1 day, M ≈ 2–3 days.
 | 18 | MCP-1 | MCP OAuth authorization flow for the HTTP transport (spec auth discovery) | M | #255 |
 | 19 | MCP-2 | Packaged MCP HTTP deployment ✅ — one image runs core or MCP; recipes; hosted service not deployed | S | #255 |
 | 20 | MCP-3 | Legacy HTTP+SSE transport — only if a needed client can't speak Streamable HTTP | S | #255 |
+| 21 | IMG-1 | Move the image to a newer Python (3.12/3.13) to clear CPython-binary advisories | S | — |
 
 Recommended sequence: **MA-1 → MA-2 → MA-3 → MA-4 → MA-5 → MA-6**, with MA-7/MA-8
 schedulable any time (no dependencies on the others). MA-1…MA-8 are **shipped**. **RQ-1**
@@ -1353,4 +1354,18 @@ HTTP, so it was deliberately not added. Some older clients may still only speak 
 
 **Scope.** Only if a client we need can't use Streamable HTTP: FastMCP also serves `sse_app()`; mount
 it behind the same bearer gate and host/origin checks. Otherwise, close as won't-do.
+
+---
+
+## IMG-1 — Move the container image to a newer Python
+
+**Why.** After the OS-layer hardening, the only fixable findings left in the image are advisories
+against the CPython 3.11.16 interpreter binary, fixed only on 3.13/3.14. 3.11 is in security-only
+maintenance and 3.11.16 is its latest release, so they are excepted in `.grype.yaml` rather than
+fixed. Moving the image (and `requires-python`/CI) to 3.12 or 3.13 removes the exception.
+
+**Scope.** Bump the base image (re-pin the multi-arch index digest), run the full suite + `make
+test-crewai` + `make mcp-floor` on the new interpreter (watch spaCy/torch/sentence-transformers wheel
+availability), drop the `.grype.yaml` python-binary exception, and decide whether the published
+wheel's `requires-python = ">=3.11"` stays (likely yes — the image and the library floor are separate).
 

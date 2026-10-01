@@ -4,6 +4,11 @@
 # index still pins exact content — Docker just resolves the right platform from it.
 FROM python@sha256:da047cb8f9d1d98e5c070f5300ba9f7274e33b8fc0e5be5ed88740aed1b95ba9
 
+# Debian security updates newer than the pinned base (e.g. OpenSSL), and drop the base
+# image's system pip/setuptools: the app runs from the uv venv and never uses them.
+RUN apt-get update && apt-get -y upgrade && rm -rf /var/lib/apt/lists/* \
+    && python -m pip uninstall -y pip setuptools
+
 # uv for fast, reproducible installs
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 

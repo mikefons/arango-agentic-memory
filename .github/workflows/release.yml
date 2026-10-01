@@ -135,6 +135,19 @@ jobs:
           output-file: sbom-image.cdx.json
           artifact-name: sbom-image.cdx.json
 
+      # OS + package vulnerability scan of the built image. pip-audit (core job) sees only the
+      # Python dependencies; this catches the base image's Debian packages too. Fails the
+      # release on any fixable High/Critical finding not excepted in .grype.yaml.
+      - name: Vulnerability scan (Grype)
+        uses: anchore/scan-action@v7
+        with:
+          image: arango-memory-core:${{ github.ref_name }}
+          only-fixed: true
+          severity-cutoff: high
+          fail-build: true
+          output-format: table
+          config: .grype.yaml
+
       - name: Push to GHCR (gated on PUBLISH_IMAGE=true)
         if: ${{ vars.PUBLISH_IMAGE == 'true' }}
         run: |
