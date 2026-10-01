@@ -10,8 +10,16 @@ on:
 
 jobs:
   core:
-    name: Core (lint, type, test)
+    name: Core (lint, type, test) — py${{ matrix.python }}
     runs-on: ubuntu-latest
+    # 3.11 is the published wheel's floor (requires-python); 3.14 is the container image's
+    # interpreter (IMG-1). Both must pass.
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.11", "3.14"]
+    env:
+      UV_PYTHON: ${{ matrix.python }}
     defaults:
       run:
         working-directory: core
@@ -29,8 +37,10 @@ jobs:
       - name: Lint, type-check, test
         run: make ci
 
-      # The MCP server's HTTP mode against the lowest `mcp` release the extra allows.
+      # The MCP server's HTTP mode against the lowest `mcp` release the extra allows — a
+      # floor check, so it runs on the floor Python only.
       - name: MCP floor smoke (mcp>=1.14.0)
+        if: matrix.python == '3.11'
         run: make mcp-floor
 
   crewai:
