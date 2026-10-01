@@ -42,9 +42,10 @@ test-crewai:     ## CrewAI adapter tests + types against a real crewai install
 
 # Keep in step with the `mcp>=` floor in pyproject.toml.
 MCP_FLOOR ?= 1.17.0
+# A real install of the package (`.[mcp]`) with mcp pinned to the floor; --isolated so no
+# local environment can mask a missing dependency.
 mcp-floor:       ## MCP Streamable HTTP smoke against the lowest supported mcp release
-	uv run --no-project --with "mcp==$(MCP_FLOOR)" --with httpx --with uvicorn \
-	  --with fastapi --with "pyjwt[crypto]" \
+	uv run --isolated --no-project --with "mcp==$(MCP_FLOOR)" --with ".[mcp]" \
 	  python scripts/mcp_floor_smoke.py src
 
 lint:            ## Ruff lint
