@@ -300,6 +300,17 @@ from the `v0.1.0` tag.
   pins the vulnerable version, and npm's suggested "fix" was a breaking downgrade of `workflow` to
   2.0.6. Remaining advisories need major upgrades: postcss bundled in Next (fixed only in Next 16) and
   undici under the AI SDK (fixed only in `ai` v7).
+- **Demos re-patched after a pre-release audit.**
+  - **Next.js 15.5.26 → 15.5.27** in both demos. Next pins an exact, vulnerable **postcss 8.4.31** for its
+    build-time CSS processing; an `overrides` entry moves it to 8.5.28 (semver-minor), which clears the
+    **postcss highs** without moving to Next 16. Production builds and CSS output were verified.
+  - **`@ai-sdk/gateway` ^1 → ^2** in both demos, aligning it with the `ai@5` line it already runs on
+    (same provider spec). This drops a vulnerable `@ai-sdk/provider-utils` 3.0.12.
+  - **The Diligence Room moves from `workflow` 5.0.0-beta.56 to the 5.0.0 stable release**: 23 steps still
+    compile, and the `nanoid` override is still needed.
+  - **Result:** production findings drop to 0 critical / 1 high in each demo (Dungeon 2H/8M → 1H/7M,
+    Diligence 2H/19M → 1H/3M). Everything left is AI SDK v5's `undici` 5 dependency, which is fixed
+    only by the AI SDK v7 migration.
 - MCP memory (`examples/mcp-memory`) — the demo now recalls reliably on a **cold core** (fresh
   tenant, `vector: deferred`, BM25-only retrieval). Each recall query carries a light lexical anchor
   that also appears in its target memory (`allergic`, `Mira`, `Munich`), so BM25 alone surfaces the
