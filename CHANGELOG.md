@@ -329,7 +329,6 @@ from the `v0.1.0` tag.
 - **Core runtime dependencies patched** (these ship inside the container image, which installs
   from `uv.lock`): starlette 1.2.1 → 1.7.0 (with FastAPI 0.136 → 0.141), cryptography 48.0.0 →
   50.0.1, anyio 4.13.0 → 4.15.1 — clearing all 13 known advisories in the runtime set (`pip-audit`).
-  Base image re-pinned to the current `python:3.11.16-slim` index digest.
 - **PyJWT 2.13.0 → 2.15.1 and urllib3 2.7.0 → 2.8.0** (runtime, so in the image): 12 PyJWT
   advisories, relevant because PyJWT verifies JWT credentials on the core's auth path, plus 3 in
   urllib3. All were published after the first audit. oauthlib 3.3.1 → 4.0.0 in the `crewai` extra's
@@ -337,11 +336,14 @@ from the `v0.1.0` tag.
 - **Image OS layer hardened.** The image build applies Debian security updates newer than the
   pinned base: OpenSSL `3.5.7-1~deb13u2 → deb13u3` (13 advisories each in `openssl` / `libssl3t64` /
   the legacy provider, some High) and libpcre2 (High). It also removes the base image's unused system
-  pip 24 / setuptools 79 (the app runs from its uv venv). Fixable image findings drop 59 → 10. The 10
-  left are CPython 3.11.16 interpreter advisories fixed only on 3.13/3.14 (3.11.16 is the latest
-  3.11). pip-audit only sees Python dependencies, so the release workflow now also runs a **Grype scan
-  of the built image** and fails on fixable High/Critical findings before anything is pushed. Exceptions
-  live in `.grype.yaml`, each with its reason.
+  pip (the app runs from its uv venv).
+- **Image moved to Python 3.14** (`python:3.14.7-slim`, index-digest pinned). Every CPython line still
+  carries some interpreter advisories, but 3.11–3.13 each have a fixable **High** one; 3.14 has only
+  Medium/Low. Fixable image findings drop 59 → **4**, all Medium/Low. The published wheel still supports
+  Python ≥ 3.11, and CI now runs the core suite on both 3.11 (the floor) and 3.14 (the image).
+- **Release gate:** pip-audit only sees Python dependencies, so the release workflow now also runs a
+  **Grype scan of the built image** and fails on fixable High/Critical findings before anything is
+  pushed. Any exception must be listed with its reason in `.grype.yaml`, which currently has none.
 - **Optional extras patched:** crewai 1.14 → 1.15 (clears its pinned mcp / json-repair advisories),
   gliner 0.2.29 + transformers 5.15, torch 2.14, pillow 12.3, aiohttp 3.14.3, datasets, setuptools.
   One residual: **chromadb 1.1.1** (via the `crewai` extra) has advisories with no fixed release and

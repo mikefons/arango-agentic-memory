@@ -1,13 +1,15 @@
-# Digest-pinned for reproducible, supply-chain-safe builds (python:3.11.16-slim).
+# Digest-pinned for reproducible, supply-chain-safe builds (python:3.14.7-slim).
 # Pin the multi-arch *index* digest, not a per-arch manifest: a manifest digest locks the
 # build to one architecture, so arm64 hosts silently get an emulated amd64 image. The
 # index still pins exact content — Docker just resolves the right platform from it.
-FROM python@sha256:da047cb8f9d1d98e5c070f5300ba9f7274e33b8fc0e5be5ed88740aed1b95ba9
+# 3.14 (not the library's 3.11 floor) because it's the oldest line with no fixable High
+# advisories against the CPython interpreter itself (IMG-1); the wheel still supports >=3.11.
+FROM python@sha256:51dafde81dbdb6ebde285137a295cf18a47ca95234fe388a343719cb97305b3d
 
 # Debian security updates newer than the pinned base (e.g. OpenSSL), and drop the base
-# image's system pip/setuptools: the app runs from the uv venv and never uses them.
+# image's system pip: the app runs from the uv venv and never uses it.
 RUN apt-get update && apt-get -y upgrade && rm -rf /var/lib/apt/lists/* \
-    && python -m pip uninstall -y pip setuptools
+    && python -m pip uninstall -y pip
 
 # uv for fast, reproducible installs
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
