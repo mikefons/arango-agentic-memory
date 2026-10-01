@@ -75,7 +75,62 @@ Cursor (`.cursor/mcp.json`):
 ```
 Claude Desktop keeps using stdio (above).
 
-Requires `mcp>=1.14.0` (the `[mcp]` extra pins it); `make mcp-floor` smoke-tests that floor.
+Requires `mcp>=1.17.0` (the `[mcp]` extra pins it); `make mcp-floor` smoke-tests that floor.
+
+### OAuth mode (MCP authorization spec)
+For clients that connect to remote MCP servers **only through OAuth** — they can't be given a
+static header — run the server as an OAuth 2.1 **resource server**:
+```bash
+ARANGO_MEMORY_DELEGATE_KEY=<core delegate key> \
+python -m arango_memory.mcp --transport http --auth oauth \
+  --oauth-issuer https://idp.example.com/realms/memory \
+  --resource-url https://mcp.example.com/mcp \
+  --required-scopes memory --oauth-scope-claim memory_access \
+  --host 0.0.0.0 --allowed-hosts mcp.example.com
+```
+How it works, per the spec:
+1. An unauthenticated request gets `401` with `WWW-Authenticate: Bearer resource_metadata=…`,
+   pointing at this server's **protected-resource metadata** (RFC 9728,
+   `/.well-known/oauth-protected-resource/mcp`), which names the authorization server (your IdP).
+2. The client discovers the IdP, registers itself (dynamic client registration), and runs the
+   authorization-code flow with PKCE; the user logs in at the IdP.
+3. The server accepts only tokens **issued for it**: RS256 against the IdP's JWKS (from OIDC
+   discovery), `iss`, `exp`, and **`aud` = the resource URL** (override with `--oauth-audience`).
+   Tokens minted for anything else — including the core — are rejected. `--required-scopes`
+   lists OAuth scopes every token must carry (else `403`).
+4. It never forwards that token (the spec forbids token passthrough). It calls the core with its
+   own **delegate key** (`ARANGO_MEMORY_DELEGATE_KEY`, env only) and asserts the verified identity:
+   tenant from `--oauth-tenant-claim` (default `tenant_id`), read/write from
+   `--oauth-scope-claim` (default `scope`; any value containing "write" → write), agents from
+   `--oauth-agent-claim`. The core caps all of it by the delegate key — see
+   [Delegate keys](../ops.md). The core must run **enforced** (`API_KEYS`) for this to mean anything.
+
+Every flag has an `ARANGO_MEMORY_MCP_*` env equivalent (`_AUTH`, `_OAUTH_ISSUER`, `_RESOURCE_URL`,
+`_OAUTH_AUDIENCE`, `_OAUTH_JWKS_URI`, `_OAUTH_TENANT_CLAIM`, `_OAUTH_SCOPE_CLAIM`,
+`_OAUTH_AGENT_CLAIM`, `_REQUIRED_SCOPES`). A rejected token is logged with its reason (never the
+token). The bearer mode above stays available for header-capable clients; there the client holds
+a *core* credential on purpose, so forwarding it isn't the spec's passthrough case.
+
+**IdP requirements.** OIDC discovery + JWKS; a **tenant claim** on access tokens; the **MCP resource
+URL in `aud`**; dynamic client registration (or pre-registered clients) for MCP clients; and
+ideally write access as a *user* entitlement (a role mapped to a claim) rather than a scope any
+client can request.
+
+**Keycloak reference setup** (verified end to end, including dynamic registration and PKCE login):
+```bash
+KEYCLOAK_ADMIN_PASSWORD=… python core/scripts/keycloak_mcp_realm.py \
+  --keycloak https://idp.example.com --resource-url https://mcp.example.com/mcp
+```
+It creates a realm with a default `memory` client scope (audience mapper → the resource URL,
+`tenant_id` user attribute → claim), a separate `memory-roles` scope mapping the
+`memory-writer` / `memory-consolidator` roles into a `memory_access` claim (hence
+`--oauth-scope-claim memory_access`), and anonymous client registration for trusted redirect
+hosts. Give users a `tenant_id` attribute and, for write access, the `memory-writer` role. Two
+Keycloak behaviours the script handles: dynamically registered clients don't get "full scope", so
+roles must be scope-mapped onto a client scope; and a scope that *has* role mappings is applied
+only to users holding one of them — which is why the roles live in their own scope (on `memory`
+they'd strip the audience and tenant from every role-less user's token).
+`core/scripts/mcp_oauth_e2e.py` drives the whole flow with the SDK's OAuth client for a test.
 
 ### Deploy
 The core's container image includes the `mcp` extra, so **one image runs either service**: the

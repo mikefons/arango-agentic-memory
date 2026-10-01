@@ -41,9 +41,10 @@ test-crewai:     ## CrewAI adapter tests + types against a real crewai install
 	$(UVRUN) mypy src/arango_memory/crewai
 
 # Keep in step with the `mcp>=` floor in pyproject.toml.
-MCP_FLOOR ?= 1.14.0
+MCP_FLOOR ?= 1.17.0
 mcp-floor:       ## MCP Streamable HTTP smoke against the lowest supported mcp release
 	uv run --no-project --with "mcp==$(MCP_FLOOR)" --with httpx --with uvicorn \
+	  --with fastapi --with "pyjwt[crypto]" \
 	  python scripts/mcp_floor_smoke.py src
 
 lint:            ## Ruff lint

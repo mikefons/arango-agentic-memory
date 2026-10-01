@@ -6,7 +6,8 @@ trusted, the dev/CI/demo posture). When either is configured, every `/v1` route
 requires `Authorization: Bearer <token>`:
   - an **OIDC/JWT** (when `oidc_issuer` is set) — verified against the issuer's
     JWKS and mapped to a `Principal` (see `jwt_auth.verify_jwt`);
-  - a **static API key** — looked up in `api_keys`.
+  - a **static API key** — looked up in `api_keys`. A key marked `delegate` (MCP-1) instead
+    yields the identity it asserts in `X-On-Behalf-Of-*` headers, capped by the key.
 Both yield a `Principal` stashed on `request.state` for handlers to authorize
 against (authz lives in the route layer, AUTH-2). A missing/invalid credential is
 a `401`. `/health` + the OpenAPI docs are always exempt.
@@ -18,7 +19,7 @@ from dataclasses import dataclass
 
 from fastapi import HTTPException, Request
 
-from ..config import settings
+from ..config import ApiKeyEntry, scope_allows, settings
 
 _OPEN_PATHS = frozenset({"/health", "/ready", "/docs", "/openapi.json", "/redoc"})
 
@@ -51,6 +52,44 @@ def agent_allowed(allowed: tuple[str, ...] | None, agent_id: str) -> bool:
     return False
 
 
+# Identity a delegate credential asserts on the caller's behalf (MCP-1).
+_OBO_TENANT = "x-on-behalf-of-tenant"
+_OBO_SCOPE = "x-on-behalf-of-scope"
+_OBO_AGENTS = "x-on-behalf-of-agents"
+_OBO_HEADERS = (_OBO_TENANT, _OBO_SCOPE, _OBO_AGENTS)
+
+
+def _forbidden(detail: str) -> HTTPException:
+    return HTTPException(status_code=403, detail=detail)
+
+
+def _delegated_principal(request: Request, entry: ApiKeyEntry) -> Principal:
+    """The caller a delegate key asserts, capped by the key (MCP-1). Fail-closed: a delegate
+    must assert a tenant it may act for, and can never widen scope or agents beyond its own."""
+    tenant = request.headers.get(_OBO_TENANT)
+    if not tenant:
+        raise _forbidden("delegate credential must assert X-On-Behalf-Of-Tenant")
+    if entry.tenant_id not in ("*", tenant):
+        raise _forbidden("delegate credential may not act for this tenant")
+
+    asserted_scope = request.headers.get(_OBO_SCOPE, "read")
+    if asserted_scope not in ("read", "write", "consolidate"):
+        raise _forbidden("invalid X-On-Behalf-Of-Scope")
+    # Effective scope = the lower of what's asserted and the delegate's own cap.
+    scope = asserted_scope if scope_allows(entry.scope, asserted_scope) else entry.scope
+
+    cap = tuple(entry.agent_ids) if entry.agent_ids is not None else None
+    raw = request.headers.get(_OBO_AGENTS)
+    asserted = tuple(a.strip() for a in raw.split(",") if a.strip()) if raw else None
+    if asserted is None:
+        agents = cap
+    elif cap is not None and not all(agent_allowed(cap, a) for a in asserted):
+        raise _forbidden("asserted agents exceed the delegate credential's agents")
+    else:
+        agents = asserted
+    return Principal(tenant_id=tenant, scope=scope, agent_ids=agents)
+
+
 def _bearer(request: Request) -> str | None:
     header = request.headers.get("authorization")
     if header and header.lower().startswith("bearer "):
@@ -74,17 +113,22 @@ def require_principal(request: Request) -> Principal | None:
 
     token = _bearer(request)
     principal: Principal | None = None
+    delegated = False
     if token:
         if oidc_on and token.count(".") == 2:  # looks like a JWT → verify (raises 401)
             from .jwt_auth import verify_jwt  # local import keeps auth import-light
 
             principal = verify_jwt(token)
         elif (entry := settings.api_keys.get(token)) is not None:
-            principal = Principal(
-                tenant_id=entry.tenant_id,
-                scope=entry.scope,
-                agent_ids=tuple(entry.agent_ids) if entry.agent_ids is not None else None,
-            )
+            if entry.delegate:
+                delegated = True
+                principal = _delegated_principal(request, entry)
+            else:
+                principal = Principal(
+                    tenant_id=entry.tenant_id,
+                    scope=entry.scope,
+                    agent_ids=tuple(entry.agent_ids) if entry.agent_ids is not None else None,
+                )
 
     if principal is None:
         raise HTTPException(
@@ -92,5 +136,9 @@ def require_principal(request: Request) -> Principal | None:
             detail="missing or invalid bearer credential",
             headers={"WWW-Authenticate": "Bearer"},
         )
+    # Only a delegate key may assert someone else's identity; anyone else trying is refused
+    # rather than ignored, so a misconfigured caller can't believe it's acting as another tenant.
+    if not delegated and any(h in request.headers for h in _OBO_HEADERS):
+        raise _forbidden("only a delegate credential may send X-On-Behalf-Of-* headers")
     request.state.principal = principal
     return principal
