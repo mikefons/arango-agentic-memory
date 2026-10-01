@@ -1,0 +1,9 @@
+# Grype config for the release image scan (.github/workflows/release.yml).
+# The release fails on fixable High/Critical findings; exceptions below must say why.
+ignore:
+  # CPython's own interpreter binary. These advisories are fixed only on newer minor lines
+  # (3.13/3.14); 3.11.16 is the latest 3.11 release, so there is nothing to upgrade to within
+  # the image's Python version. Revisit when moving the image to a newer Python (ROADMAP).
+  - package:
+      name: python
+      type: binary
