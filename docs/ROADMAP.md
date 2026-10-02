@@ -49,7 +49,7 @@ Sizes: S ≈ ≤1 day, M ≈ 2–3 days.
 | 17 | CW-1 | Port the CrewAI shim to crewai ≥ 1.10 unified memory ✅ — hybrid backend + paired embedder | M | — |
 | 18 | MCP-1 | MCP OAuth authorization flow for the HTTP transport (spec auth discovery) | M | #255 |
 | 19 | MCP-2 | Packaged MCP HTTP deployment ✅ — one image runs core or MCP; recipes; hosted service not deployed | S | #255 |
-| 20 | MCP-3 | Legacy HTTP+SSE transport — only if a needed client can't speak Streamable HTTP | S | #255 |
+| 20 | MCP-3 | Legacy HTTP+SSE transport — ✖ closed, won't do (no client needs it) | S | #255 |
 | 21 | IMG-1 | Move the image to a newer Python ✅ — 3.14; Grype exception removed | S | — |
 
 Recommended sequence: **MA-1 → MA-2 → MA-3 → MA-4 → MA-5 → MA-6**, with MA-7/MA-8
@@ -1347,13 +1347,23 @@ server has an unauthenticated `/health`, and its port falls back to `PORT`. Ther
 CI smoke test of the MCP role. **Not done:** actually deploying a hosted MCP service beside the live
 core — that's an infrastructure decision, left to the owner.
 
-### MCP-3 — Legacy HTTP+SSE transport (conditional)
+### MCP-3 — Legacy HTTP+SSE transport (conditional)  ✖ closed — won't do
 
 **Why.** The MCP spec deprecated the older two-endpoint HTTP+SSE transport in favour of Streamable
 HTTP, so it was deliberately not added. Some older clients may still only speak it.
 
 **Scope.** Only if a client we need can't use Streamable HTTP: FastMCP also serves `sse_app()`; mount
 it behind the same bearer gate and host/origin checks. Otherwise, close as won't-do.
+
+**Decision (2026-10-01): closed as won't-do.** No client we need is limited to the legacy
+transport. Mainstream clients (Claude Code, Cursor, the official SDKs) speak Streamable HTTP, which
+the spec adopted in place of HTTP+SSE in 2025. Building it anyway would add a deprecated, **stateful**
+transport: its `GET /sse` stream and `POST /messages?session_id=…` pair keeps the session in one
+process's memory. That needs a single replica or sticky sessions, against the stateless,
+load-balanced design of the Streamable HTTP mode, and it's more surface to maintain and secure.
+**Reopen if** a concrete client we need can't use Streamable HTTP. The work is then about a day:
+an opt-in `--transport sse` from the SDK's `sse_app()`, behind the same bearer/OAuth auth and
+host checks, documented as single-replica only.
 
 ---
 
