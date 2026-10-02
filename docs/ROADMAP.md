@@ -28,29 +28,32 @@ Sizes: S ≈ ≤1 day, M ≈ 2–3 days.
 
 ## Priority order
 
+Status: ✅ shipped · 🔄 built, merge pending · ✖ closed (won't do). Unmarked = open.
+
 | # | ID | Item | Size | Depends on |
 |---|----|------|------|-----------|
-| 1 | MA-1 | Read-your-writes: `sync` store + `/v1/flush` barrier | S | — |
-| 2 | MA-2 | Multi-`agent_id` retrieval with single-pass fusion | M | — |
-| 3 | MA-3 | `POST /v1/prime` — task briefing endpoint | M | MA-2 |
-| 4 | MA-4 | Capture assistant outputs in the Vercel middleware | S | — |
-| 5 | MA-5 | Handoff eval (A writes → B retrieves, scored) | M | MA-1, MA-2 |
-| 6 | MA-6 | Docs: multi-agent orchestration guide | S | MA-1..3 |
-| 7 | MA-7 | Per-agent key binding + insight-tier write protection | S | — |
-| 8 | MA-8 | Vector-index reliability + resume P1 benchmark | M | — |
-| 9 | RQ-1 | Multi-hop query decomposition / iterative retrieval | L | shipped (helps on MuSiQue) |
-| 10 | BX-1 | Benchmark expansion: MuSiQue multi-evidence dataset + metric | M | — |
-| 11 | RQ-2 | Close the retrieval-content gap (diagnostic → cross-encoder reranker) | L | shipped (+0.135 recall) |
-| 12 | BX-2 | Pooled-corpus MuSiQue (open-retrieval variant, tests first-stage recall) | S | BX-1 |
-| 13 | BX-3 | Lightweight pooled diagnostic (extract-skip + graph-off; routes around O(n²) wall) | S | shipped (33% first-stage gap) |
-| 14 | SC-1 | Single-large-tenant scalability: ANN entity resolution + bounded graph fan-out | L | — |
-| 15 | RT-1 | Expose `candidate_pool` as a config + API knob (open-corpus tuning) | S | — |
+| 1 | MA-1 | Read-your-writes: `sync` store + `/v1/flush` barrier ✅ | S | — |
+| 2 | MA-2 | Multi-`agent_id` retrieval with single-pass fusion ✅ | M | — |
+| 3 | MA-3 | `POST /v1/prime` — task briefing endpoint ✅ | M | MA-2 |
+| 4 | MA-4 | Capture assistant outputs in the Vercel middleware ✅ | S | — |
+| 5 | MA-5 | Handoff eval (A writes → B retrieves, scored) ✅ | M | MA-1, MA-2 |
+| 6 | MA-6 | Docs: multi-agent orchestration guide ✅ | S | MA-1..3 |
+| 7 | MA-7 | Per-agent key binding + insight-tier write protection ✅ | S | — |
+| 8 | MA-8 | Vector-index reliability + resume P1 benchmark ✅ (infra; the run itself is user-executed) | M | — |
+| 9 | RQ-1 | Multi-hop query decomposition / iterative retrieval ✅ — opt-in, benchmark-dependent (helps on MuSiQue) | L | — |
+| 10 | BX-1 | Benchmark expansion: MuSiQue multi-evidence dataset + metric ✅ | M | — |
+| 11 | RQ-2 | Close the retrieval-content gap (diagnostic → cross-encoder reranker) ✅ — +0.135 recall | L | — |
+| 12 | BX-2 | Pooled-corpus MuSiQue (open-retrieval variant, tests first-stage recall) ✅ — surfaced the scalability wall → BX-3, SC-1 | S | BX-1 |
+| 13 | BX-3 | Lightweight pooled diagnostic (extract-skip + graph-off; routes around O(n²) wall) ✅ — 33% first-stage gap | S | BX-2 |
+| 14 | SC-1 | Single-large-tenant scalability: ANN entity resolution + bounded graph fan-out ✅ (SC-1a–d) | L | — |
+| 15 | RT-1 | Expose `candidate_pool` as a config + API knob (open-corpus tuning) ✅ | S | — |
 | 16 | RQ-3 | Rerank scoring: replace vs rank-blend vs event-time-aware (paired LongMemEval) ✅ — **replace stays** | M | RQ-2b, IN-4 |
 | 17 | CW-1 | Port the CrewAI shim to crewai ≥ 1.10 unified memory ✅ — hybrid backend + paired embedder | M | — |
 | 18 | MCP-1 | MCP OAuth authorization flow ✅ — resource server + core delegation; Keycloak verified | M | #255 |
 | 19 | MCP-2 | Packaged MCP HTTP deployment ✅ — one image runs core or MCP; recipes; hosted service not deployed | S | #255 |
-| 20 | MCP-3 | Legacy HTTP+SSE transport — only if a needed client can't speak Streamable HTTP | S | #255 |
+| 20 | MCP-3 | Legacy HTTP+SSE transport — ✖ closed, won't do (no client needs it) | S | #255 |
 | 21 | IMG-1 | Move the image to a newer Python ✅ — 3.14; Grype exception removed | S | — |
+| 22 | OBS | Obsidian adapter: vault ingestion, plugin, example vault (OBS-1–3) | L | — |
 
 Recommended sequence: **MA-1 → MA-2 → MA-3 → MA-4 → MA-5 → MA-6**, with MA-7/MA-8
 schedulable any time (no dependencies on the others). MA-1…MA-8 are **shipped**. **RQ-1**
@@ -113,10 +116,10 @@ which is exactly what `multi-session` recall (0.067 on LongMemEval) needs.
 
 | # | ID | Item | Effect | Size |
 |---|----|------|--------|------|
-| 1 | IN-1 | `store_many()` bulk record path (Phase 1) | ~40× ingest; unblocks honest benchmarking | M |
-| 2 | IN-2 | Batched graph pass (Phase 2) + memoized index probe | graph ON at benchmark scale | M |
-| 3 | IN-3 | Cap co-occurrence fan-out | speed **+ graph quality** (revisit `RRF_GRAPH_WEIGHT`) | S |
-| 4 | IN-4 | Metadata-as-fields (dates) surfaced at assembly | recovers the date-noise recall regression | S |
+| 1 | IN-1 | `store_many()` bulk record path (Phase 1) ✅ | ~40× ingest; unblocks honest benchmarking | M |
+| 2 | IN-2 | Batched graph pass (Phase 2) + memoized index probe ✅ | graph ON at benchmark scale | M |
+| 3 | IN-3 | Cap co-occurrence fan-out ✅ (`graph_max_pairs_per_turn`) | speed **+ graph quality** (revisit `RRF_GRAPH_WEIGHT`) | S |
+| 4 | IN-4 | Metadata-as-fields (dates) surfaced at assembly ✅ | recovers the date-noise recall regression | S |
 | 5 | IN-5 | Re-run stratified LongMemEval with the graph ON | harness ✅; substrate-only **0.411** recorded; graph-on run confounded by `fake` extractor → **HX-1b** | — |
 | 6 | HX-1b | Legitimate graph-on LongMemEval (real extractor + reranker) ✅ | **0.522 vs 0.411 substrate (+0.111)**; multi-session 0.067→0.267; every type up | S |
 | 7 | IN-6 | Batch entity resolution (the read loop IN-2 left unbatched) ✅ | graph-on ingest minutes→seconds; unblocks haiku rung + prod graph | M |
@@ -1364,13 +1367,23 @@ server has an unauthenticated `/health`, and its port falls back to `PORT`. Ther
 CI smoke test of the MCP role. **Not done:** actually deploying a hosted MCP service beside the live
 core — that's an infrastructure decision, left to the owner.
 
-### MCP-3 — Legacy HTTP+SSE transport (conditional)
+### MCP-3 — Legacy HTTP+SSE transport (conditional)  ✖ closed — won't do
 
 **Why.** The MCP spec deprecated the older two-endpoint HTTP+SSE transport in favour of Streamable
 HTTP, so it was deliberately not added. Some older clients may still only speak it.
 
 **Scope.** Only if a client we need can't use Streamable HTTP: FastMCP also serves `sse_app()`; mount
 it behind the same bearer gate and host/origin checks. Otherwise, close as won't-do.
+
+**Decision (2026-10-01): closed as won't-do.** No client we need is limited to the legacy
+transport. Mainstream clients (Claude Code, Cursor, the official SDKs) speak Streamable HTTP, which
+the spec adopted in place of HTTP+SSE in 2025. Building it anyway would add a deprecated, **stateful**
+transport: its `GET /sse` stream and `POST /messages?session_id=…` pair keeps the session in one
+process's memory. That needs a single replica or sticky sessions, against the stateless,
+load-balanced design of the Streamable HTTP mode, and it's more surface to maintain and secure.
+**Reopen if** a concrete client we need can't use Streamable HTTP. The work is then about a day:
+an opt-in `--transport sse` from the SDK's `sse_app()`, behind the same bearer/OAuth auth and
+host checks, documented as single-replica only.
 
 ---
 
