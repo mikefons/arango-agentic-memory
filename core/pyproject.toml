@@ -54,7 +54,7 @@ extraction-spacy = [
     "spacy>=3.8.0",
 ]
 mcp = [
-    "mcp>=1.14.0",
+    "mcp>=1.17.0",
 ]
 langchain = [
     "langchain-core>=0.3.0",
@@ -79,7 +79,7 @@ dev = [
     "testcontainers>=4.8.0",
     "ruff>=0.7.0",
     "mypy>=1.13.0",
-    "mcp>=1.14.0",
+    "mcp>=1.17.0",
     "langchain-core>=0.3.0",
     "langgraph>=0.2.0",
     "redis>=5.0.0",

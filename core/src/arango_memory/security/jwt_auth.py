@@ -43,7 +43,7 @@ def _jwks_client() -> jwt.PyJWKClient:
     return client
 
 
-def _claim_tokens(value: object) -> list[str]:
+def claim_tokens(value: object) -> list[str]:
     """Normalize a claim value to tokens: a space-delimited string (OAuth2 `scope`) or
     a list (roles)."""
     if isinstance(value, str):
@@ -53,9 +53,9 @@ def _claim_tokens(value: object) -> list[str]:
     return []
 
 
-def _scope_from_claim(value: object) -> str:
+def scope_from_claim(value: object) -> str:
     """Map the scope/roles claim to read|write|consolidate (highest wins; MA-7)."""
-    tokens = [t.lower() for t in _claim_tokens(value)]
+    tokens = [t.lower() for t in claim_tokens(value)]
     if any("consolidate" in t for t in tokens):
         return "consolidate"
     return "write" if any("write" in t for t in tokens) else "read"
@@ -65,7 +65,7 @@ def _agents_from_claim(claims: dict[str, object]) -> tuple[str, ...] | None:
     """Map the configured agent claim (MA-7) to an allow-list, or None (any agent)."""
     if settings.oidc_agent_claim is None:
         return None
-    tokens = _claim_tokens(claims.get(settings.oidc_agent_claim))
+    tokens = claim_tokens(claims.get(settings.oidc_agent_claim))
     return tuple(tokens) if tokens else None
 
 
@@ -99,7 +99,7 @@ def verify_jwt(token: str) -> Principal:
             detail=f"token missing tenant claim '{settings.oidc_tenant_claim}'",
             headers=_UNAUTHORIZED,
         )
-    scope = _scope_from_claim(claims.get(settings.oidc_scope_claim))
+    scope = scope_from_claim(claims.get(settings.oidc_scope_claim))
     return Principal(
         tenant_id=str(tenant), scope=scope, agent_ids=_agents_from_claim(claims)
     )

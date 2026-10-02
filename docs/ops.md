@@ -155,6 +155,20 @@ gets `403`. `agent_ids` omitted → any agent (the pre-MA-7 default; existing ke
 unchanged). **Rotation:** add the new key alongside the old, roll clients over, then drop
 the old key. Keep keys in the host env / a gitignored `.env`, never in the image or VCS.
 
+**Delegate keys (MCP-1).** A key with `"delegate": true` belongs to a trusted service that
+has *already authenticated* its caller — the MCP server in OAuth mode — and acts **on that
+caller's behalf**: every request must assert the caller's identity in `X-On-Behalf-Of-Tenant`
+(required), `X-On-Behalf-Of-Scope` (default `read`) and `X-On-Behalf-Of-Agents` (optional,
+comma-separated). The key **caps** what it may assert — its `tenant_id` (or `"*"` for any
+tenant, allowed only on delegate keys), its `scope` (an asserted scope above it is lowered) and
+its `agent_ids` (asserting an agent outside them is `403`). A delegate key that asserts nothing is
+`403`, and any *non*-delegate credential sending `X-On-Behalf-Of-*` is `403` — so the headers can't
+be used to escalate. Delegation is static-key only (not JWT). Treat a delegate key like a root
+credential for the tenants it covers: one per service, kept in that service's env only.
+```bash
+API_KEYS='{"d_mcp":{"tenant_id":"*","scope":"write","delegate":true}}'
+```
+
 **OIDC / JWT (§17)** — for federated/SSO deployments, set `OIDC_ISSUER` to also accept
 signed bearer **JWTs** from an external IdP (Auth0/Okta/Cognito/Keycloak/…). Coexists
 with `API_KEYS` (a JWT is verified when the bearer is a JWT; otherwise it's matched

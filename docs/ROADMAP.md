@@ -49,7 +49,7 @@ Status: ✅ shipped · 🔄 built, merge pending · ✖ closed (won't do). Unmar
 | 15 | RT-1 | Expose `candidate_pool` as a config + API knob (open-corpus tuning) ✅ | S | — |
 | 16 | RQ-3 | Rerank scoring: replace vs rank-blend vs event-time-aware (paired LongMemEval) ✅ — **replace stays** | M | RQ-2b, IN-4 |
 | 17 | CW-1 | Port the CrewAI shim to crewai ≥ 1.10 unified memory ✅ — hybrid backend + paired embedder | M | — |
-| 18 | MCP-1 | MCP OAuth authorization flow 🔄 — built in #262, merging after the v0.1.0 tag | M | #255 |
+| 18 | MCP-1 | MCP OAuth authorization flow ✅ — resource server + core delegation; Keycloak verified | M | #255 |
 | 19 | MCP-2 | Packaged MCP HTTP deployment ✅ — one image runs core or MCP; recipes; hosted service not deployed | S | #255 |
 | 20 | MCP-3 | Legacy HTTP+SSE transport — ✖ closed, won't do (no client needs it) | S | #255 |
 | 21 | IMG-1 | Move the image to a newer Python ✅ — 3.14; Grype exception removed | S | — |
@@ -1318,7 +1318,7 @@ for `crewai<1.10`.
 pass-through bearer auth: each caller's own core key / JWT is forwarded, so the core's ABAC applies
 per caller. These were scoped out of it:
 
-### MCP-1 — MCP OAuth authorization flow
+### MCP-1 — MCP OAuth authorization flow  ✅
 
 **Why.** Pass-through bearer works for clients that let you set a header (Claude Code, Cursor, custom
 agents). Clients that only connect to remote MCP servers through the spec's OAuth flow — e.g. Claude
@@ -1330,6 +1330,23 @@ authorization server to obtain tokens from.
 (its JWT verification, §17), so tenant/agent/scope claims keep driving ABAC. Decide first: bring an
 external IdP (Auth0/Okta/Cognito) vs. a minimal built-in issuer. Pass-through bearer stays as the
 simple mode.
+
+**Outcome.** The MCP server became an OAuth resource server (`--auth oauth`): RFC 9728 metadata,
+audience-bound JWT verification against the IdP's JWKS, required scopes. The design decision was
+**how to reach the core**: the spec forbids passing the user's token through, so the server holds
+a core **delegate key** and asserts the verified identity (`X-On-Behalf-Of-*`), which the core caps
+by the key. That works with any IdP; token exchange (RFC 8693) was the IdP-dependent alternative,
+and is not built. **Keycloak** is the verified reference: a setup script plus an end-to-end test
+through the SDK's own OAuth client (discovery → dynamic registration → PKCE → tools). Three things
+only surfaced against the real IdP:
+- dynamically registered clients get no optional scopes, so write access became a **user role**
+  (`memory_access` claim), not a client-requestable scope;
+- the verifier had taken OAuth `scopes` from the role claim (fixed, regression-tested);
+- Keycloak drops a role-mapped scope for users without those roles (roles moved to their own scope).
+
+The SDK's `AccessToken.claims` only exists from mcp 1.28, so the verifier uses its own subclass
+field, and the floor rose to `mcp>=1.17.0` for path-inserted RFC 9728 metadata. Both are covered by
+the floor smoke test.
 
 ### MCP-2 — Packaged MCP HTTP deployment  ✅
 
