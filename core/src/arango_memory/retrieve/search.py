@@ -156,6 +156,22 @@ FOR start IN @seed_ids
                  strength: strength, accessed_at: accessed_at }
 """
 
+# Summarised entities mentioned by the selected memories, most-mentioned-by-the-hits first
+# (query relevance), then salience. Only Dream-State-distilled entities carry a summary.
+_ENTITY_SUMMARIES = """
+FOR mem_key IN @keys
+  FOR e IN 1..1 OUTBOUND CONCAT('memories/', mem_key) mentions
+    FILTER e.tenant_id == @tenant_id AND e.invalid_at == null
+       AND e.summary != null AND e.summary != ""
+    COLLECT id = e._key INTO grp = e
+    LET rep = grp[0]
+    LET salience = MAX([NOT_NULL(rep.belief, 0), NOT_NULL(rep.centrality, 0)])
+    SORT LENGTH(grp) DESC, salience DESC, NOT_NULL(rep.mention_count, 0) DESC
+    LIMIT @limit
+    RETURN { name: rep.name, summary: rep.summary }
+"""
+_ENTITY_SUMMARY_LIMIT = 5
+
 _ENCODER = tiktoken.get_encoding("cl100k_base")
 
 _RRF_K = 60
@@ -210,6 +226,29 @@ def _assemble_line(cand: _Candidate) -> str:
     if cand.event_time:
         return f"- [{cand.event_time}] {cand.text}"
     return f"- {cand.text}"
+
+
+def _entity_block(
+    db: StandardDatabase, keys: list[str], tenant_id: str, budget: int
+) -> tuple[str, int]:
+    """The `Entity summaries:` section, packed best-first under `budget` tokens."""
+    if not keys or budget <= 0:
+        return "", 0
+    rows = _run(db, _ENTITY_SUMMARIES,
+                {"keys": keys, "tenant_id": tenant_id, "limit": _ENTITY_SUMMARY_LIMIT})
+    header = "Entity summaries:"
+    lines: list[str] = []
+    used = _count_tokens(header)
+    for row in rows:
+        line = f"- {row['name']}: {row['summary']}"
+        cost = _count_tokens(line)
+        if used + cost > budget:
+            break
+        lines.append(line)
+        used += cost
+    if not lines:
+        return "", 0
+    return "\n".join([header, *lines]), used
 
 
 def _cos(a: list[float], b: list[float]) -> float:
@@ -396,6 +435,7 @@ def retrieve(
     rerank_scoring: str | None = None,
     rerank_time_weight: float | None = None,
     record_access: bool = True,
+    entity_summaries: bool | None = None,
 ) -> RetrieveResult:
     """Instrumented retrieval (DESIGN.md §18): span + metrics + §15 degradation.
 
@@ -405,8 +445,9 @@ def retrieve(
     `rerank_time_weight=None` use their settings (RQ-3 — per-call overrides, so concurrent
     callers never mutate the shared settings). `record_access=False` skips the spaced-repetition
     access refresh — a read-only probe for evals that must not perturb the decay state the next
-    query sees. Any failure degrades to an empty (memory-less) result and a `degraded` event, so
-    a memory fault never breaks the turn.
+    query sees. `entity_summaries=None` uses `settings.retrieve_entity_summaries`: append the
+    Dream State summaries of the entities the hits mention. Any failure degrades to an empty
+    (memory-less) result and a `degraded` event, so a memory fault never breaks the turn.
     """
     pool = candidate_pool if candidate_pool is not None else settings.candidate_pool
     started = time.perf_counter()
@@ -432,6 +473,7 @@ def retrieve(
                 rerank_scoring=rerank_scoring,
                 rerank_time_weight=rerank_time_weight,
                 record_access=record_access,
+                entity_summaries=entity_summaries,
             )
     except Exception as exc:  # noqa: BLE001 — §15: memory failures never break the turn
         metrics.emit("degraded", op="retrieve", reason=type(exc).__name__)
@@ -684,6 +726,7 @@ def _retrieve_impl(
     rerank_scoring: str | None = None,
     rerank_time_weight: float | None = None,
     record_access: bool = True,
+    entity_summaries: bool | None = None,
 ) -> RetrieveResult:
     """BM25 (+ vector when trained) → RRF → (rerank) → MMR → tiered token-budget assembly.
 
@@ -767,7 +810,18 @@ def _retrieve_impl(
 
     selected = _mmr(fused, k)
     selected.sort(key=lambda c: -c.fused_score)
-    context, tokens = _assemble_tiered(selected, max_memory_tokens)
+    # Entity summaries (Graphiti's ENTITIES section) take up to the semantic tier's share of
+    # the budget first; the memories fill the rest, so the total stays within max_memory_tokens.
+    entities, entity_tokens = "", 0
+    if settings.retrieve_entity_summaries if entity_summaries is None else entity_summaries:
+        entities, entity_tokens = _entity_block(
+            db, [c.key for c in selected], tenant_id,
+            int(_TIER_FRACTIONS["semantic"] * max_memory_tokens),
+        )
+    context, tokens = _assemble_tiered(selected, max_memory_tokens - entity_tokens)
+    if entities:
+        context = f"{context}\n\n{entities}" if context else entities
+        tokens += entity_tokens
 
     # Spaced repetition (§11): refresh the memories actually surfaced (Δt → 0).
     if record_access:

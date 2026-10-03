@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 from arango.database import StandardDatabase
 
+from arango_memory.config import settings
 from arango_memory.eval.locomo import QA, Sample, Turn, load_dataset
 from arango_memory.eval.longmemeval import (
     _build_parser,
@@ -184,11 +185,15 @@ def test_mcnemar_exact_values() -> None:
 
 
 def test_parse_variant() -> None:
-    assert _parse_variant("") == (None, None)
-    assert _parse_variant("rrf") == ("rrf", None)
-    assert _parse_variant("event_time:0.25") == ("event_time", 0.25)
+    assert _parse_variant("") == (None, None, False)
+    assert _parse_variant("rrf") == ("rrf", None, False)
+    assert _parse_variant("event_time:0.25") == ("event_time", 0.25, False)
+    assert _parse_variant("replace+entities") == ("replace", None, True)
+    assert _parse_variant("+entities") == (None, None, True)
     with pytest.raises(ValueError, match="unknown rerank scoring"):
         _parse_variant("bogus")
+    with pytest.raises(ValueError, match="unknown variant suffix"):
+        _parse_variant("replace+facts")
 
 
 def test_convert_injects_session_and_question_dates() -> None:
@@ -354,6 +359,28 @@ def test_rerank_scoring_variants_are_paired_on_one_ingest(db: StandardDatabase) 
         bind_vars={"t": sample.sample_id},
     ))
     assert counts and all(c == 1 for c in counts)
+
+
+def test_dream_feeds_the_entities_variant(db: StandardDatabase,
+                                          monkeypatch: pytest.MonkeyPatch) -> None:
+    # One ingest + one Dream pass, then "" vs "+entities" paired on the same state.
+    monkeypatch.setattr(settings, "consolidation_mention_threshold", 1)
+
+    def handler(prompt: str, system: str | None) -> str:
+        return "Sam is the user's friend." if system and "Summarize" in system else "x"
+
+    report = run_longmemeval(
+        db, [_sam_sample("lme-dream-sam")], generator=FakeGenerator(handler=handler), k=10,
+        extract=True, dream=True, rerank_scorings=["", "+entities"], judge_answers=False,
+    )
+    assert set(report.by_variant) == {"", "+entities"}
+    summaries = list(db.aql.execute(
+        "FOR e IN entities FILTER e.tenant_id == @t AND e.summary != '' RETURN e.summary",
+        bind_vars={"t": "lme-dream-sam"},
+    ))
+    assert "Sam is the user's friend." in summaries
+    with pytest.raises(ValueError, match="needs extract"):
+        run_longmemeval(db, [_sam_sample("lme-dream-x")], generator=FakeGenerator(), dream=True)
 
 
 def test_single_configuration_report_is_unchanged(db: StandardDatabase) -> None:

@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import pytest
 from arango.database import StandardDatabase
 
+from arango_memory.config import settings
 from arango_memory.generation import FakeGenerator
 from arango_memory.ingest.store import store
 from arango_memory.lifecycle.dream import run_dream_state
@@ -91,3 +93,23 @@ def test_circuit_breaker_halts_mass_deprecation(db: StandardDatabase) -> None:
     assert db.collection("Supersedes").count() == 0
     assert db.collection("entities").get(acme)["needs_review"] is True   # nothing applied
     assert db.collection("entities").get(globex)["invalid_at"] is None
+
+
+def test_distillation_reads_only_the_most_recent_mentions(
+    db: StandardDatabase, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    t = "t_d5"
+    for day in range(1, 6):
+        store(db, content=f"Zeta update {day}", tenant_id=t, agent_id="a",
+              event_time=f"2024-01-0{day}T00:00:00Z")
+    zeta = _key_of(db, t, "Zeta")
+    db.collection("entities").update({"_key": zeta, "mention_count": 5})
+    monkeypatch.setattr(settings, "dream_distill_max_mentions", 2)
+    prompts: list[str] = []
+
+    def handler(prompt: str, system: str | None) -> str:
+        prompts.append(prompt)
+        return "Zeta ships updates."
+
+    run_dream_state(db, tenant_id=t, generator=FakeGenerator(handler=handler))
+    assert prompts == ["- Zeta update 5\n- Zeta update 4"]

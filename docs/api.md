@@ -238,9 +238,12 @@ Hybrid retrieval (BM25 + vector + graph → RRF → MMR → tiered token budget,
     "rerank": false,                // cross-encoder rerank of the fused pool before MMR (RQ-2b).
                                     //   Needs RERANKER_PROVIDER configured (`local` → `rerank`
                                     //   extra); default false. Composable with any mode.
-    "candidate_pool": 100           // per-arm candidates before fusion/rerank/MMR (RT-1). Raise
+    "candidate_pool": 100,          // per-arm candidates before fusion/rerank/MMR (RT-1). Raise
                                     //   (e.g. 500) with rerank on an open/large corpus to recover
                                     //   tail-reachable evidence, at more per-query DB work.
+    "entity_summaries": false       // append an "Entity summaries:" section — Dream State summaries
+                                    //   of the entities the hits mention — within the same
+                                    //   max_memory_tokens budget (≤20% of it). Needs a Dream pass.
   }
 }
 // response
@@ -256,7 +259,7 @@ use `agent_id`) and stays tenant-scoped — a cross-tenant id returns nothing. O
 fault the response is empty (`context: ""`, `hits: []`) — never an error.
 
 Every `opts` field defaults from server config (`MODE`, `K`, `RERANK_ENABLED`,
-`CANDIDATE_POOL`, …); a request value overrides it per call. `mode`/`rerank`/`candidate_pool`
+`CANDIDATE_POOL`, `RETRIEVE_ENTITY_SUMMARIES`, …); a request value overrides it per call. `mode`/`rerank`/`candidate_pool`
 are retrieval-quality knobs — see [ops.md](ops.md#configuration-environment) for defaults, cost,
 and when to raise them, and [DESIGN.md §23](DESIGN.md) for the benchmark results that motivate
 each.
