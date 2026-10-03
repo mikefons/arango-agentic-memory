@@ -1124,6 +1124,49 @@ extractor — but at a real cost (~$45 / 1h wall vs spaCy's keyless seconds), so
 haiku is the accuracy-max option. The run also exercised the #231 fail-soft path (rode through transient
 Anthropic 5xx to 90/90 with no crash). Same answerer/judge-model caveat as above.
 
+**Same-day re-measure + Graphiti head-to-head (rev 97, 2026-10-03).** Run alongside a planned Graphiti
+comparison, the product configuration (spaCy graph + local reranker, `--k 10 --rerank --extract`, OpenAI
+embeddings, Haiku answerer/judge) was re-run on the same stratified-90 slice. It now scores **0.633**:
+
+| question-type | product, Aug (HX-1b) | **product, 2026-10-03** | Δ |
+|---|---|---|---|
+| **overall** | 0.522 | **0.633** | **+0.111** |
+| multi-session | 0.267 | **0.533** | +0.266 |
+| single-session-user | 0.600 | 0.733 | +0.133 |
+| single-session-assistant | 0.867 | 1.000 | +0.133 |
+| single-session-preference | 0.133 | 0.267 | +0.134 |
+| knowledge-update | 0.600 | 0.667 | +0.067 |
+| temporal-reasoning | 0.667 | 0.600 | −0.067 |
+
+The gain is **not attributed**: several retrieval changes landed after HX-1b. The most likely large one
+is the vector-search fix (#236: `n_probe` was never passed, so trained IVF searched one cell, about 30%
+recall loss); others are the entity-resolution fix (#243) and Haiku answerer/judge drift. Treat 0.633 as
+the current number and the HX-1b–1d figures as historical (the haiku-extractor rung was not re-run).
+Results: `core/bench_runs/h2h/` (gitignored).
+
+*Graphiti on our harness* (`core/scripts/graphiti_longmemeval.py`) uses the same questions, answer prompt,
+judge and answerer model, so only the memory system differs, and its rows pair with ours per question.
+Graphiti (graphiti-core 0.30.2) is configured for its best case:
+- one episode per session via `add_episode` (the path with fact invalidation), dated by the session;
+- Haiku 4.5 for extraction;
+- `COMBINED_HYBRID_SEARCH_CROSS_ENCODER` with its local BGE reranker;
+- top 20 facts + 20 entities, rendered in the Zep paper's context template;
+- Neo4j 5.26.
+
+A 2-question pilot measured its ingestion. **One LongMemEval question (~48 sessions) costs Graphiti about
+4.65M input + 73k output LLM tokens, about $5 at Haiku rates, and about 10 minutes**, against **no LLM tokens**
+for our default ingest. Our whole 90-question run, including the answer and judge calls, took 18 minutes
+at concurrency 3. The full Graphiti run (≈ $450, ≈ 4 h) was **not run** (owner's call on cost), so there
+is **no accuracy comparison**. The runner is checkpointed and ready if one is wanted. Graphiti's published
+numbers (Zep paper: 63.8% gpt-4o-mini / 71.2% gpt-4o on the full LongMemEval-S) use a different sample,
+weighting and models, so they are not comparable to ours.
+
+Three integration breaks had to be fixed to run Graphiti at all; all are recorded in the runner:
+- FalkorDB's current image (6.x, used by Graphiti's own compose file) rejects its full-text index query;
+- `graphiti-core[anthropic]` resolves to `anthropic` 1.x, which rejects the `temperature` argument it sends
+  (pinned to 0.111.0, from Graphiti's lockfile);
+- its BGE reranker's concurrent `predict` crashes on Apple MPS (serialized, the same fault as our #253).
+
 ### Recall vs corpus size — the fusion-holds curve (HX-2)
 
 The project's thesis as a chart: on an **open corpus that grows**, graph+vector+BM25 fusion
