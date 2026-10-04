@@ -589,6 +589,25 @@ Dream State confirms contradiction:
   (`MAX(belief, centrality, weight)`), so the agent prioritizes recently-confirmed
   relations; surfaced in `/v1/graph` edges. Knobs: `weight_ewa_alpha`, `weight_lambda`.
 - **Deterministic override:** human-edited config wins over LLM-extracted facts (checked first at retrieval).
+- **Memory-level fact supersession (GX-2):** the diagram above is *entity* conflict
+  (two entities that are the same thing). A changed *fact* — "Sam lives in Boston", later
+  "Sam moved to Denver" — is handled at the memory level, Graphiti-style but without hiding
+  anything (`lifecycle/supersession.py`, behind `FACT_SUPERSESSION`, default off):
+  - **Detect (Dream State, batched):** each not-yet-checked memory is compared with up to 3
+    older memories of the same agent that share an entity with it and reach
+    `SUPERSESSION_MIN_SIMILARITY` (0.5) embedding cosine. One LLM call per memory that has
+    candidates; memories are processed oldest-first, so a chain links each statement to the
+    next. Incremental via `supersession_checked_at`. Measured at ~43 calls / ~43k input tokens
+    per ~500-turn LongMemEval history.
+  - **Record:** the old memory gets `superseded_by` and `valid_to` (the newer memory's time).
+    `invalid_at` stays null: RQ-3 showed temporal reasoning needs the old statements.
+  - **Retrieve:** when a hit is superseded, its current successor (following the chain) is
+    ranked directly above it, pulled in if retrieval missed it (k is kept), and the stale line
+    is annotated `(superseded <time>)`. This is the newness signal *scoped to conflicting
+    statements of the same fact* that RQ-3 called for, instead of a global recency prior.
+    Links are read live from the collection, not through the search view, which lags updates.
+  - **Point-in-time (`as_of`):** retrieval can be restricted to memories that existed by a
+    date; supersession is then judged as of that date (a link made later is ignored).
 
 ---
 

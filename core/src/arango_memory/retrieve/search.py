@@ -10,6 +10,7 @@ Step 2b; graph expansion (needs entities/edges) lands in Step 3.
 
 from __future__ import annotations
 
+import dataclasses
 import math
 import re
 import time
@@ -60,7 +61,7 @@ FOR doc IN {SEARCH_VIEW}
   LIMIT @pool
   RETURN {{ key: doc._key, text: doc.text, score: BM25(doc), agent_id: doc.agent_id,
             embedding: doc.embedding, type: doc.type, event_time: doc.event_time,
-            strength: doc.strength, accessed_at: doc.accessed_at }}
+            strength: doc.strength, accessed_at: doc.accessed_at, created_at: doc.created_at }}
 """
 
 # Force the ArangoSearch view to index pending commits before returning, so a write
@@ -94,7 +95,7 @@ FOR doc IN memories
   LIMIT @pool
   RETURN { key: doc._key, text: doc.text, score: score, agent_id: doc.agent_id,
            embedding: doc.embedding, type: doc.type, event_time: doc.event_time,
-           strength: doc.strength, accessed_at: doc.accessed_at }
+           strength: doc.strength, accessed_at: doc.accessed_at, created_at: doc.created_at }
 """
 
 # Graph expansion (§9 stage 4): from seed memories → their entities → relates_to
@@ -152,7 +153,7 @@ FOR start IN @seed_ids
         LET doc = DOCUMENT("memories", key)
         RETURN { key: key, score: score, agent_id: doc.agent_id,
                  text: doc.text, embedding: doc.embedding, type: doc.type,
-                 event_time: doc.event_time,
+                 event_time: doc.event_time, created_at: doc.created_at,
                  strength: strength, accessed_at: accessed_at }
 """
 
@@ -171,6 +172,28 @@ FOR mem_key IN @keys
     RETURN { name: rep.name, summary: rep.summary }
 """
 _ENTITY_SUMMARY_LIMIT = 5
+
+# GX-2: the memories named by stale hits' `superseded_by`, read-scoped like the arms.
+_SUCCESSORS = """
+FOR key IN @keys
+  LET doc = DOCUMENT("memories", key)
+  FILTER doc != null AND doc.tenant_id == @tenant_id AND doc.agent_id IN @agent_ids
+     AND doc.invalid_at == null
+  RETURN { key: doc._key, text: doc.text, agent_id: doc.agent_id, embedding: doc.embedding,
+           type: doc.type, event_time: doc.event_time, created_at: doc.created_at,
+           strength: doc.strength, accessed_at: doc.accessed_at,
+           superseded_by: doc.superseded_by, valid_to: doc.valid_to }
+"""
+# The links themselves, read live from the collection: the BM25 arm reads through the search
+# view, whose copy of a memory lags an update (Dream's link) until the view's next commit.
+_LINKS = """
+FOR key IN @keys
+  LET doc = DOCUMENT("memories", key)
+  FILTER doc != null
+  RETURN { key: key, superseded_by: doc.superseded_by, valid_to: doc.valid_to }
+"""
+# Hops followed from a stale hit to the statement that is current now (or as of `as_of`).
+_SUCCESSOR_HOPS = 5
 
 _ENCODER = tiktoken.get_encoding("cl100k_base")
 
@@ -214,6 +237,26 @@ class _Candidate:
     accessed_at: str = ""
     agent_id: str = ""
     event_time: str | None = None  # IN-4: surfaced at assembly, never in the matched text
+    created_at: str = ""
+    superseded_by: str | None = None  # GX-2: the newer memory that updates this one
+    valid_to: str | None = None       # GX-2: when it stopped being current
+    stale: bool = False               # GX-2: superseded within this query's time view
+
+
+def _candidate(row: dict[str, Any]) -> _Candidate:
+    return _Candidate(
+        key=row["key"],
+        text=row["text"],
+        embedding=row.get("embedding") or [],
+        type=row.get("type") or "episodic",
+        strength=row.get("strength", 1.0) or 1.0,
+        accessed_at=row.get("accessed_at") or "",
+        agent_id=row.get("agent_id") or "",
+        event_time=row.get("event_time"),
+        created_at=row.get("created_at") or "",
+        superseded_by=row.get("superseded_by"),
+        valid_to=row.get("valid_to"),
+    )
 
 
 def _count_tokens(text: str) -> int:
@@ -222,10 +265,11 @@ def _count_tokens(text: str) -> int:
 
 def _assemble_line(cand: _Candidate) -> str:
     """One injected context line — `- [event_time] text` when the memory carries a provenance
-    time (IN-4), else `- text`. The time lives in a field, so it never affected retrieval."""
-    if cand.event_time:
-        return f"- [{cand.event_time}] {cand.text}"
-    return f"- {cand.text}"
+    time (IN-4), else `- text`. The time lives in a field, so it never affected retrieval. A
+    stale statement (GX-2) is marked with when it was superseded."""
+    when = f"[{cand.event_time}] " if cand.event_time else ""
+    stale = f"(superseded {cand.valid_to}) " if cand.stale else ""
+    return f"- {when}{stale}{cand.text}"
 
 
 def _entity_block(
@@ -310,17 +354,7 @@ def _rrf_fuse(ranked_lists: list[list[dict[str, Any]]], names: list[str]) -> lis
             key = row["key"]
             cand = by_key.get(key)
             if cand is None:
-                cand = _Candidate(
-                    key=key,
-                    text=row["text"],
-                    embedding=row.get("embedding") or [],
-                    type=row.get("type") or "episodic",
-                    strength=row.get("strength", 1.0) or 1.0,
-                    accessed_at=row.get("accessed_at") or "",
-                    agent_id=row.get("agent_id") or "",
-                    event_time=row.get("event_time"),
-                )
-                by_key[key] = cand
+                cand = by_key[key] = _candidate(row)
             cand.signals.add(name)
             cand.fused_score += weight / (_RRF_K + rank)
     return sorted(by_key.values(), key=lambda c: c.fused_score, reverse=True)
@@ -436,6 +470,8 @@ def retrieve(
     rerank_time_weight: float | None = None,
     record_access: bool = True,
     entity_summaries: bool | None = None,
+    supersession: bool | None = None,
+    as_of: str | None = None,
 ) -> RetrieveResult:
     """Instrumented retrieval (DESIGN.md §18): span + metrics + §15 degradation.
 
@@ -446,9 +482,14 @@ def retrieve(
     callers never mutate the shared settings). `record_access=False` skips the spaced-repetition
     access refresh — a read-only probe for evals that must not perturb the decay state the next
     query sees. `entity_summaries=None` uses `settings.retrieve_entity_summaries`: append the
-    Dream State summaries of the entities the hits mention. Any failure degrades to an empty
+    Dream State summaries of the entities the hits mention. `supersession=None` uses
+    `settings.fact_supersession` (GX-2): rank a stale statement's current successor above it
+    and mark it superseded. `as_of` (ISO date/time) restricts the view to memories that
+    existed by then, with supersession judged as of that time. Any failure degrades to an empty
     (memory-less) result and a `degraded` event, so a memory fault never breaks the turn.
     """
+    if as_of and _event_sort_key(as_of) is None:  # a caller error, not a memory fault
+        raise ValueError(f"unparseable as_of {as_of!r}; use an ISO date or date-time")
     pool = candidate_pool if candidate_pool is not None else settings.candidate_pool
     started = time.perf_counter()
     try:
@@ -474,6 +515,8 @@ def retrieve(
                 rerank_time_weight=rerank_time_weight,
                 record_access=record_access,
                 entity_summaries=entity_summaries,
+                supersession=supersession,
+                as_of=as_of,
             )
     except Exception as exc:  # noqa: BLE001 — §15: memory failures never break the turn
         metrics.emit("degraded", op="retrieve", reason=type(exc).__name__)
@@ -585,17 +628,7 @@ def _fuse_candidate_lists(lists: list[list[_Candidate]]) -> list[_Candidate]:
         for rank, cand in enumerate(cands, start=1):
             merged = by_key.get(cand.key)
             if merged is None:
-                merged = _Candidate(
-                    key=cand.key,
-                    text=cand.text,
-                    embedding=cand.embedding,
-                    type=cand.type,
-                    strength=cand.strength,
-                    accessed_at=cand.accessed_at,
-                    agent_id=cand.agent_id,
-                    event_time=cand.event_time,
-                )
-                merged.signals = set(cand.signals)
+                merged = dataclasses.replace(cand, signals=set(cand.signals), fused_score=0.0)
                 by_key[cand.key] = merged
             else:
                 merged.signals |= cand.signals
@@ -620,6 +653,87 @@ def _event_sort_key(event_time: str | None) -> datetime | None:
         return datetime(int(year), int(month), int(day), int(hour or 0), int(minute or 0))
     except ValueError:
         return None
+
+
+def memory_time_key(event_time: str | None, created_at: str | None) -> datetime | None:
+    """A memory's content time: its `event_time` when parseable, else its write time."""
+    return _event_sort_key(event_time) or _event_sort_key(created_at)
+
+
+def _as_of_filter(cands: list[_Candidate], as_of: datetime) -> list[_Candidate]:
+    """Only memories that existed by `as_of` (GX-2 point-in-time view)."""
+    out = []
+    for c in cands:
+        t = memory_time_key(c.event_time, c.created_at)
+        if t is None or t <= as_of:
+            out.append(c)
+    return out
+
+
+def _supersession(
+    db: StandardDatabase,
+    selected: list[_Candidate],
+    k: int,
+    *,
+    tenant_id: str,
+    agent_ids: list[str],
+    as_of: datetime | None,
+) -> list[_Candidate]:
+    """GX-2: for each selected memory superseded within the time view, mark it stale and rank
+    its current successor (followed along the chain) just above it — pulling the successor in
+    when retrieval missed it. Selection stays at k: pulled-in successors displace the lowest
+    others. Nothing is dropped for being stale; the old statement keeps its place below."""
+
+    def in_view(t: str | None, created: str | None = None) -> bool:
+        if as_of is None:
+            return True
+        key = memory_time_key(t, created)
+        return key is not None and key <= as_of
+
+    by_key = {c.key: c for c in selected}
+    for link in _run(db, _LINKS, {"keys": list(by_key)}):
+        cand = by_key[link["key"]]
+        cand.superseded_by, cand.valid_to = link["superseded_by"], link["valid_to"]
+    pulled: set[str] = set()
+    cache: dict[str, _Candidate | None] = {}
+
+    def fetch(key: str) -> _Candidate | None:
+        if key not in cache:
+            rows = _run(db, _SUCCESSORS,
+                        {"keys": [key], "tenant_id": tenant_id, "agent_ids": agent_ids})
+            cache[key] = _candidate(rows[0]) if rows else None
+        return cache[key]
+
+    for cand in list(selected):
+        if not cand.superseded_by or not in_view(cand.valid_to):
+            continue
+        current: _Candidate | None = None
+        nxt: str | None = cand.superseded_by
+        for _ in range(_SUCCESSOR_HOPS):
+            succ = by_key.get(nxt) if nxt else None
+            succ = succ or (fetch(nxt) if nxt else None)
+            if succ is None or not in_view(succ.event_time, succ.created_at):
+                break
+            current = succ
+            if not succ.superseded_by or not in_view(succ.valid_to):
+                break
+            nxt = succ.superseded_by
+        if current is None:
+            continue
+        cand.stale = True
+        if current.key not in by_key:
+            current.signals.add("supersession")
+            by_key[current.key] = current
+            pulled.add(current.key)
+        current.fused_score = max(current.fused_score, cand.fused_score + _RERANK_TAIL_STEP)
+
+    ranked = sorted(by_key.values(), key=lambda c: -c.fused_score)
+    while len(ranked) > k:
+        drop = next((c for c in reversed(ranked) if c.key not in pulled), None)
+        if drop is None:
+            break
+        ranked.remove(drop)
+    return ranked
 
 
 def _newness(event_times: Sequence[str | None]) -> list[float]:
@@ -727,6 +841,8 @@ def _retrieve_impl(
     rerank_time_weight: float | None = None,
     record_access: bool = True,
     entity_summaries: bool | None = None,
+    supersession: bool | None = None,
+    as_of: str | None = None,
 ) -> RetrieveResult:
     """BM25 (+ vector when trained) → RRF → (rerank) → MMR → tiered token-budget assembly.
 
@@ -794,6 +910,10 @@ def _retrieve_impl(
             query_vec = _embed_query(emb, query, tenant_id=tenant_id)
         fused = gather(query, query_vec)
 
+    as_of_key = _event_sort_key(as_of) if as_of else None
+    if as_of_key is not None:
+        fused = _as_of_filter(fused, as_of_key)
+
     if not fused:
         return RetrieveResult()
 
@@ -810,6 +930,9 @@ def _retrieve_impl(
 
     selected = _mmr(fused, k)
     selected.sort(key=lambda c: -c.fused_score)
+    if settings.fact_supersession if supersession is None else supersession:
+        selected = _supersession(db, selected, k, tenant_id=tenant_id, agent_ids=agent_ids,
+                                 as_of=as_of_key)
     # Entity summaries (Graphiti's ENTITIES section) take up to the semantic tier's share of
     # the budget first; the memories fill the rest, so the total stays within max_memory_tokens.
     entities, entity_tokens = "", 0

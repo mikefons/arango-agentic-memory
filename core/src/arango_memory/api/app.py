@@ -16,7 +16,7 @@ from typing import Any, Literal
 
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from .. import __version__
 from ..client import ArangoMemoryClient
@@ -41,7 +41,7 @@ from ..lifecycle.ontology import (
 from ..lifecycle.salience import compute_centrality
 from ..retrieve.enrich import QueryCache
 from ..retrieve.prime import Include, prime
-from ..retrieve.search import force_view_sync, retrieve
+from ..retrieve.search import force_view_sync, memory_time_key, retrieve
 from ..schema.collections import ensure_schema, vector_index_state
 from ..security.auth import agent_allowed, require_principal
 from ..security.forget import forget, purge
@@ -149,6 +149,17 @@ class RetrieveOptions(BaseModel):
     candidate_pool: int = settings.candidate_pool  # per-arm pool before fusion (RT-1)
     # append Dream State entity summaries to the context
     entity_summaries: bool = settings.retrieve_entity_summaries
+    # GX-2: rank a stale statement's current successor above it (FACT_SUPERSESSION)
+    supersession: bool = settings.fact_supersession
+    # GX-2: point-in-time view — only memories that existed by this ISO date/date-time
+    as_of: str | None = None
+
+    @field_validator("as_of")
+    @classmethod
+    def _as_of_parses(cls, v: str | None) -> str | None:
+        if v is not None and memory_time_key(v, None) is None:
+            raise ValueError("as_of must be an ISO date or date-time")
+        return v
 
 
 # ── /v1/store ─────────────────────────────────────────────
@@ -323,6 +334,7 @@ class DreamResponse(BaseModel):
     consolidated: int = 0
     cleared: int = 0
     breaker_tripped: bool = False
+    memories_superseded: int = 0  # GX-2 links made (FACT_SUPERSESSION)
 
 
 # ── /v1/salience (graph centrality, §9/§13) ───────────────
@@ -623,6 +635,7 @@ async def dream_endpoint(
         consolidated=r.consolidated,
         cleared=r.cleared,
         breaker_tripped=r.breaker_tripped,
+        memories_superseded=r.memories_superseded,
     )
 
 
@@ -731,6 +744,8 @@ async def retrieve_endpoint(
         rerank=req.opts.rerank,
         candidate_pool=req.opts.candidate_pool,
         entity_summaries=req.opts.entity_summaries,
+        supersession=req.opts.supersession,
+        as_of=req.opts.as_of,
     )
     return RetrieveResponse(
         context=result.context,

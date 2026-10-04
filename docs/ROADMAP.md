@@ -55,7 +55,7 @@ Status: ✅ shipped · 🔄 built, merge pending · ✖ closed (won't do). Unmar
 | 21 | IMG-1 | Move the image to a newer Python ✅ — 3.14; Grype exception removed | S | — |
 | 22 | OBS | Obsidian adapter: vault ingestion, plugin, example vault (OBS-1–3) | L | — |
 | 23 | GX-1 | Entity summaries in `/v1/retrieve` (Graphiti's ENTITIES section) 🔄 — built in #266, off by default; **benchmark deferred** | S | — |
-| 24 | GX-2 | Fact-level supersession + `as_of` retrieval (the scoped newness signal RQ-3 called for) | L | GX-1 run |
+| 24 | GX-2 | Memory-level fact supersession + `as_of` retrieval (the scoped newness signal RQ-3 called for) 🔄 — built, off by default | L | — |
 | 25 | GX-3 | Fact retrieval arm over typed-relation statements (needs an LLM/GLiREL extractor) | L | GX-2 |
 
 Recommended sequence: **MA-1 → MA-2 → MA-3 → MA-4 → MA-5 → MA-6**, with MA-7/MA-8
@@ -1424,7 +1424,16 @@ arango-memory-longmemeval lme.json --rerank --extract --dream \
   don't know" with the relevant memory already in context. That is an answer-prompt issue entity
   summaries can't fix, and worth its own look.
 
-### GX-2 — Fact-level supersession + `as_of` retrieval
+### GX-2 — Memory-level fact supersession + `as_of` retrieval  🔄 (built; off by default)
+
+**Decision (2026-10-04):** the unit is the *memory*, not an extracted fact. Our typed
+relations are four generic labels (`associated_with`, …), so "Sam associated_with Boston" and
+"… Denver" don't contradict and there is nothing at the relation level to supersede. Atomic
+facts fold into GX-3, which needs a fact store anyway. Design and measured cost: DESIGN §12.
+Validation: tests plus the free knowledge-update ordering metric (`--retrieval-only`); a paired
+accuracy run waits with the GX-1 benchmark.
+
+Original scope note:
 
 Graphiti stores facts with valid/invalid times, and a contradicting fact closes the old one.
 RQ-3 found a global newness prior hurts temporal reasoning, but that a newness signal

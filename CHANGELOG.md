@@ -17,9 +17,16 @@ are versioned together and released from this repository.
   (default off) appends an `Entity summaries:` section to the `/v1/retrieve` context, made
   from the Dream State summaries of the entities the hits mention. It shares
   `max_memory_tokens` with the memories (at most 20% of it).
-- LongMemEval harness: `--dream` runs a Dream State pass per question; a `+entities`
-  variant suffix (e.g. `--rerank-scoring replace,replace+entities`) compares with and
-  without entity summaries on one ingest.
+- Memory-level fact supersession (GX-2), behind `FACT_SUPERSESSION` (default off). Dream State
+  links a memory to the older statements it updates (`superseded_by`, `valid_to`; nothing is
+  hidden). Retrieval (`opts.supersession`) ranks the current statement directly above a stale
+  one it retrieved, pulling it in if missed, and marks the stale line `(superseded <time>)`.
+  `/v1/dream` reports `memories_superseded`.
+- Point-in-time retrieval: `opts.as_of` (ISO date/date-time) limits retrieval to memories
+  that existed by then, with supersession judged as of then.
+- LongMemEval harness: `--dream` runs a Dream State pass per question; `+entities` /
+  `+supersession` variant suffixes (e.g. `--rerank-scoring replace,replace+supersession`)
+  compare those features on one ingest.
 
 ### Fixed
 

@@ -124,6 +124,10 @@ lifecycle: `DECAY_LAMBDA` (0.02),
 `DECAY_FLOOR` (0.1),
 `CONSOLIDATION_MENTION_THRESHOLD` (5), `DREAM_BREAKER_THRESHOLD` (0.5),
 `DREAM_DISTILL_MAX_MENTIONS` (20 — most recent memories one entity summary reads),
+`FACT_SUPERSESSION` (`false` — GX-2: Dream State links a memory to the older statements it updates,
+one LLM call per new memory with candidates, and retrieval ranks current statements above stale
+ones; also `opts.supersession`), `SUPERSESSION_MIN_SIMILARITY` (0.5 — embedding cosine an older
+statement needs to be compared), `SUPERSESSION_MAX_CANDIDATES` (3),
 `CORROBORATION_BASE` (0.5), `ONTOLOGY_EVOLUTION` (`false`),
 `ONTOLOGY_MIN_SUPPORT` (3); working memory: `WORKING_SESSION_TTL_SECONDS` (3600),
 `WORKING_CAPACITY` (7), `TOPIC_SHIFT_THRESHOLD` (0.7), `TOPIC_EWA_ALPHA` (0.5),
