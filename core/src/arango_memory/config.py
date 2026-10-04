@@ -126,6 +126,9 @@ class Settings(BaseSettings):
     # Consolidation / Dream State (DESIGN.md §13).
     consolidation_mention_threshold: int = Field(default=5, ge=1)
     dream_breaker_threshold: float = Field(default=0.5, ge=0.0, le=1.0)
+    # Cap on the memories one distillation reads (most recent first), so a heavily
+    # mentioned entity can't push an unbounded prompt at the LLM.
+    dream_distill_max_mentions: int = Field(default=20, ge=1)
     # Ontology evolution (DESIGN.md §13, v2 research): propose typed relationships
     # from recurring associated_with clusters, human-in-loop. Off by default.
     ontology_evolution: bool = False
@@ -151,6 +154,10 @@ class Settings(BaseSettings):
     # corpus, widening this (+ rerank) recovers the tail-reachable golds BX-3 found (§23) —
     # at more per-query DB work. Default 100 keeps the common (given-context) path cheap.
     candidate_pool: int = Field(default=100, ge=1)
+    # Append the Dream State summaries of the entities the hits mention to the retrieved
+    # context (Graphiti's ENTITIES section). Shares max_memory_tokens with the memories.
+    # Off by default until measured; needs a Dream State pass to have written summaries.
+    retrieve_entity_summaries: bool = False
     # MMR relevance↔diversity balance for the final top-k re-rank (§9). 1.0 = pure
     # relevance (fusion order); lower trades relevance for diversity in the returned set.
     # Defaults to pure relevance: diversity is a *context-window* concern (don't feed the

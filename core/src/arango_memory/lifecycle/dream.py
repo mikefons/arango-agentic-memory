@@ -45,9 +45,13 @@ FOR e IN entities
   RETURN e
 """
 
+# Most recent first (event time, else write time), capped — an entity mentioned by
+# thousands of memories must not become one unbounded distillation prompt.
 _MENTIONING = """
 FOR m IN 1..1 INBOUND @entity_id mentions
   FILTER m.invalid_at == null
+  SORT NOT_NULL(m.event_time, m.created_at) DESC
+  LIMIT @limit
   RETURN m.text
 """
 
@@ -128,8 +132,11 @@ def run_dream_state(
                     clears.append(key)
 
         if entity.get("mention_count", 0) >= threshold:
+            mention_bind: dict[str, Any] = {
+                "entity_id": entity["_id"], "limit": settings.dream_distill_max_mentions,
+            }
             texts = list(
-                cast(Cursor, db.aql.execute(_MENTIONING, bind_vars={"entity_id": entity["_id"]}))
+                cast(Cursor, db.aql.execute(_MENTIONING, bind_vars=mention_bind))
             )
             summary = gen.complete(
                 "\n".join(f"- {t}" for t in texts), system=_DISTILL_SYSTEM

@@ -72,6 +72,8 @@ need no API keys.
 (2), `CANDIDATE_POOL` (100 — per-arm candidates before fusion/rerank/MMR; on an open/large
 corpus, raise it (e.g. 500) **with rerank** to recover the tail-reachable golds BX-3 found
 (§23), at more per-query DB work; also settable per request via `opts.candidate_pool`),
+`RETRIEVE_ENTITY_SUMMARIES` (`false` — append Dream State entity summaries to the retrieved
+context, within `MAX_MEMORY_TOKENS`; also `opts.entity_summaries`),
 `GRAPH_MAX_NEIGHBORS` (200 — SC-1c: caps the graph arm's `relates_to` fan-out so a dense
 single-tenant graph can't blow up retrieval; the arm is a down-weighted expander so a bounded
 neighbourhood costs little), `GRAPH_MAX_MEMORIES_PER_ENTITY` (50 — SC-1d: caps the memories
@@ -121,6 +123,7 @@ unavailable), `RERANK_SCORING` (`replace` — how the reranked block is scored, 
 lifecycle: `DECAY_LAMBDA` (0.02),
 `DECAY_FLOOR` (0.1),
 `CONSOLIDATION_MENTION_THRESHOLD` (5), `DREAM_BREAKER_THRESHOLD` (0.5),
+`DREAM_DISTILL_MAX_MENTIONS` (20 — most recent memories one entity summary reads),
 `CORROBORATION_BASE` (0.5), `ONTOLOGY_EVOLUTION` (`false`),
 `ONTOLOGY_MIN_SUPPORT` (3); working memory: `WORKING_SESSION_TTL_SECONDS` (3600),
 `WORKING_CAPACITY` (7), `TOPIC_SHIFT_THRESHOLD` (0.7), `TOPIC_EWA_ALPHA` (0.5),

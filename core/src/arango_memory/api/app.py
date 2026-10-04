@@ -147,6 +147,8 @@ class RetrieveOptions(BaseModel):
     k: int = settings.k
     rerank: bool = settings.rerank_enabled  # cross-encoder rerank of the fused pool (RQ-2b)
     candidate_pool: int = settings.candidate_pool  # per-arm pool before fusion (RT-1)
+    # append Dream State entity summaries to the context
+    entity_summaries: bool = settings.retrieve_entity_summaries
 
 
 # ── /v1/store ─────────────────────────────────────────────
@@ -728,6 +730,7 @@ async def retrieve_endpoint(
         cache=cache,
         rerank=req.opts.rerank,
         candidate_pool=req.opts.candidate_pool,
+        entity_summaries=req.opts.entity_summaries,
     )
     return RetrieveResponse(
         context=result.context,

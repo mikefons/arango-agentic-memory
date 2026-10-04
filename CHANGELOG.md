@@ -9,6 +9,23 @@ ships. Until then (`0.x`), minor versions may carry breaking changes; see
 The Python core (`arango-memory`) and the Vercel adapter (`@arango-memory/vercel`)
 are versioned together and released from this repository.
 
+## [Unreleased]
+
+### Added
+
+- Entity summaries in retrieval: `RETRIEVE_ENTITY_SUMMARIES` / `opts.entity_summaries`
+  (default off) appends an `Entity summaries:` section to the `/v1/retrieve` context, made
+  from the Dream State summaries of the entities the hits mention. It shares
+  `max_memory_tokens` with the memories (at most 20% of it).
+- LongMemEval harness: `--dream` runs a Dream State pass per question; a `+entities`
+  variant suffix (e.g. `--rerank-scoring replace,replace+entities`) compares with and
+  without entity summaries on one ingest.
+
+### Fixed
+
+- Dream State distillation reads at most `DREAM_DISTILL_MAX_MENTIONS` (20) of an entity's
+  most recent memories. Before, it sent every mentioning memory in one LLM prompt.
+
 ## [0.1.0] — 2026-09-30
 
 First public release. Everything below is the initial public surface, published to
