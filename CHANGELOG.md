@@ -9,6 +9,27 @@ ships. Until then (`0.x`), minor versions may carry breaking changes; see
 The Python core (`arango-memory`) and the Vercel adapter (`@arango-memory/vercel`)
 are versioned together and released from this repository.
 
+## [Unreleased]
+
+### Added
+- **MCP OAuth mode (MCP-1).** `python -m arango_memory.mcp --transport http --auth oauth` makes the
+  MCP server an OAuth 2.1 resource server per the MCP authorization spec, for clients that connect
+  to remote servers only through OAuth. It publishes RFC 9728 protected-resource metadata (and points
+  to it from the 401), accepts only IdP-issued JWTs whose audience is the MCP resource URL, and
+  **never passes that token through**: it calls the core with its own delegate key, asserting the
+  verified tenant, scope and agents. A Keycloak reference setup (`core/scripts/keycloak_mcp_realm.py`)
+  was verified end to end: dynamic client registration, PKCE login, role-based write access, tenant
+  enforcement. `core/scripts/mcp_oauth_e2e.py` reproduces it.
+- **Core delegate keys.** An `API_KEYS` entry with `"delegate": true` acts on behalf of a caller it
+  asserts in `X-On-Behalf-Of-Tenant` / `-Scope` / `-Agents`, capped by the key's tenant (or `"*"`),
+  scope and agents. A delegate that asserts nothing, or a non-delegate credential sending those
+  headers, gets `403`.
+
+### Changed
+- The `mcp` extra's floor rises to **`mcp>=1.17.0`**, the first release serving path-inserted RFC 9728
+  metadata, which OAuth mode needs. `make mcp-floor` now smoke-tests both bearer and OAuth mode at the
+  floor.
+
 ## [0.1.0] — 2026-09-30
 
 First public release. Everything below is the initial public surface, published to

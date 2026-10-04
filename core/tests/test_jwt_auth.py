@@ -196,3 +196,12 @@ def test_jwt_read_scope_cannot_write(api: TestClient) -> None:
     res = api.post("/v1/store", json={"content": "x", "ctx": ctx},
                    headers={"authorization": f"Bearer {token}"})
     assert res.status_code == 403
+
+
+def test_a_jwt_caller_cannot_assert_another_identity() -> None:
+    # Only delegate *keys* may send X-On-Behalf-Of-* (MCP-1); a valid JWT trying it is refused.
+    req = _request(token=_sign(_claims()))
+    req.headers["x-on-behalf-of-tenant"] = "someone-else"
+    with pytest.raises(HTTPException) as exc:
+        require_principal(req)
+    assert exc.value.status_code == 403
