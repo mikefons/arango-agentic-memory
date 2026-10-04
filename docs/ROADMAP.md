@@ -1433,6 +1433,10 @@ facts fold into GX-3, which needs a fact store anyway. Design and measured cost:
 Validation: tests plus the free knowledge-update ordering metric (`--retrieval-only`); a paired
 accuracy run waits with the GX-1 benchmark.
 
+**Measured (2026-10-04, DESIGN §23 rev 98):** knowledge-update newest-above-stale went from 0.614 to
+**0.659** (+2/−0 of 44, p = 0.50), with recall unchanged, for about $2.50. The limit is detection: 9 of
+16 missed stale/new pairs share no spaCy entity. Follow-up: a similarity-only candidate gate.
+
 Original scope note:
 
 Graphiti stores facts with valid/invalid times, and a contradicting fact closes the old one.
