@@ -129,6 +129,15 @@ class Settings(BaseSettings):
     # Cap on the memories one distillation reads (most recent first), so a heavily
     # mentioned entity can't push an unbounded prompt at the LLM.
     dream_distill_max_mentions: int = Field(default=20, ge=1)
+    # GX-2 memory-level fact supersession: Dream State links a memory to the older statements
+    # it updates (`superseded_by`/`valid_to`, nothing hidden), and retrieval ranks the current
+    # statement above a stale one it retrieved. One LLM call per new memory that has candidates.
+    # Off by default until measured.
+    fact_supersession: bool = False
+    # Older statements must share an entity AND reach this embedding cosine to be compared.
+    supersession_min_similarity: float = Field(default=0.5, ge=-1.0, le=1.0)
+    # Most similar older statements shown to the LLM per new memory.
+    supersession_max_candidates: int = Field(default=3, ge=1)
     # Ontology evolution (DESIGN.md §13, v2 research): propose typed relationships
     # from recurring associated_with clusters, human-in-loop. Off by default.
     ontology_evolution: bool = False

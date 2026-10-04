@@ -589,6 +589,25 @@ Dream State confirms contradiction:
   (`MAX(belief, centrality, weight)`), so the agent prioritizes recently-confirmed
   relations; surfaced in `/v1/graph` edges. Knobs: `weight_ewa_alpha`, `weight_lambda`.
 - **Deterministic override:** human-edited config wins over LLM-extracted facts (checked first at retrieval).
+- **Memory-level fact supersession (GX-2):** the diagram above is *entity* conflict
+  (two entities that are the same thing). A changed *fact* — "Sam lives in Boston", later
+  "Sam moved to Denver" — is handled at the memory level, Graphiti-style but without hiding
+  anything (`lifecycle/supersession.py`, behind `FACT_SUPERSESSION`, default off):
+  - **Detect (Dream State, batched):** each not-yet-checked memory is compared with up to 3
+    older memories of the same agent that share an entity with it and reach
+    `SUPERSESSION_MIN_SIMILARITY` (0.5) embedding cosine. One LLM call per memory that has
+    candidates; memories are processed oldest-first, so a chain links each statement to the
+    next. Incremental via `supersession_checked_at`. Measured at ~43 calls / ~43k input tokens
+    per ~500-turn LongMemEval history.
+  - **Record:** the old memory gets `superseded_by` and `valid_to` (the newer memory's time).
+    `invalid_at` stays null: RQ-3 showed temporal reasoning needs the old statements.
+  - **Retrieve:** when a hit is superseded, its current successor (following the chain) is
+    ranked directly above it, pulled in if retrieval missed it (k is kept), and the stale line
+    is annotated `(superseded <time>)`. This is the newness signal *scoped to conflicting
+    statements of the same fact* that RQ-3 called for, instead of a global recency prior.
+    Links are read live from the collection, not through the search view, which lags updates.
+  - **Point-in-time (`as_of`):** retrieval can be restricted to memories that existed by a
+    date; supersession is then judged as of that date (a link made later is ignored).
 
 ---
 
@@ -1166,6 +1185,32 @@ Three integration breaks had to be fixed to run Graphiti at all; all are recorde
 - `graphiti-core[anthropic]` resolves to `anthropic` 1.x, which rejects the `temperature` argument it sends
   (pinned to 0.111.0, from Graphiti's lockfile);
 - its BGE reranker's concurrent `predict` crashes on Apple MPS (serialized, the same fault as our #253).
+
+**GX-2 memory-level supersession — knowledge-update ordering (rev 98, 2026-10-04).** The
+Graphiti-inspired supersession pass (§12) was measured on the RQ-3 knowledge-update set
+(`bench_runs/ku_test.json`, 52 questions, 44 with ordering defined). The run used the product retrieval
+configuration (spaCy graph + reranker) and one ingest per question, with Dream State supersession only
+(distillation off). It was `--retrieval-only`, so no answer or judge calls. Cost was about $2.50 in
+Haiku, with an average of 9.4 links per question.
+
+| metric | `replace` | `replace+supersession` | paired |
+|---|---|---|---|
+| newest-above-stale | 0.614 | **0.659** | +2 / −0 of 44, p = 0.50 |
+| newest-in-top-k | 0.955 | 0.955 | — |
+| evidence recall@k | 0.978 | 0.978 | — |
+
+**Positive in direction, small, and not significant. It costs nothing elsewhere:** recall is unchanged
+and no question got worse. Unlike the global `event_time` prior (RQ-3), it cannot collapse temporal
+reasoning, because it only reorders linked pairs. The 15 questions still failing were diagnosed pair by
+pair. The bottleneck is **detection, not ranking**: of 16 stale/new evidence pairs, only 1 was linked.
+- **9 share no entity.** spaCy's named entities miss what the fact is about ("27 birds" → "32
+  birds", workout days), so the shared-entity gate never offers the pair.
+- **2 fall below** the 0.5 cosine threshold (0.39 and 0.46).
+- **4 were candidates but not linked.** The LLM said NONE, or the pair was outside the top 3.
+
+Next lever, if pursued: gate candidates on embedding similarity alone (top-N nearest older memories,
+dropping the shared-entity requirement), measured the same way. It costs more LLM calls. The default stays
+**off**; an accuracy run waits with the GX-1 benchmark. Results: `core/bench_runs/gx2/` (gitignored).
 
 ### Recall vs corpus size — the fusion-holds curve (HX-2)
 

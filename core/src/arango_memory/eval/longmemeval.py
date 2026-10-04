@@ -129,19 +129,37 @@ class _Evidence:
     newest_above_stale: bool | None = None
 
 
-def _parse_variant(spec: str) -> tuple[str | None, float | None, bool]:
-    """`"event_time:0.2"` → ("event_time", 0.2, False); `"rrf"` → ("rrf", None, False);
-    `""` → (None, None, False). A `+entities` suffix also appends entity summaries:
-    `"replace+entities"` → ("replace", None, True); `"+entities"` → (None, None, True)."""
-    spec, plus, flag = spec.partition("+")
-    if plus and flag != "entities":
-        raise ValueError(f"unknown variant suffix +{flag!r} (only +entities)")
-    if not spec:
-        return None, None, bool(plus)
-    name, _, weight = spec.partition(":")
-    if name not in SCORINGS:
-        raise ValueError(f"unknown rerank scoring {name!r} (choose from {', '.join(SCORINGS)})")
-    return name, float(weight) if weight else None, bool(plus)
+#: Retrieval features a variant may switch on with a `+name` suffix.
+VARIANT_FLAGS = ("entities", "supersession")
+
+
+@dataclass(frozen=True)
+class _Variant:
+    scoring: str | None = None
+    weight: float | None = None
+    entities: bool = False      # GX-1 entity summaries
+    supersession: bool = False  # GX-2 memory-level supersession
+
+
+def _parse_variant(spec: str) -> _Variant:
+    """`"event_time:0.2"` → scoring event_time, weight 0.2; `"rrf"`; `""` → the defaults.
+    `+entities` / `+supersession` suffixes switch those features on, e.g.
+    `"replace+entities+supersession"` or `"+supersession"` (no rerank scoring override)."""
+    head, *flags = spec.split("+")
+    for flag in flags:
+        if flag not in VARIANT_FLAGS:
+            raise ValueError(
+                f"unknown variant suffix +{flag!r} (choose from {', '.join(VARIANT_FLAGS)})"
+            )
+    scoring, weight = None, None
+    if head:
+        name, _, w = head.partition(":")
+        if name not in SCORINGS:
+            raise ValueError(
+                f"unknown rerank scoring {name!r} (choose from {', '.join(SCORINGS)})"
+            )
+        scoring, weight = name, float(w) if w else None
+    return _Variant(scoring, weight, "entities" in flags, "supersession" in flags)
 
 
 def _evidence_metrics(
@@ -254,11 +272,12 @@ def _process_sample(
     out: list[LongMemScore] = []
     for qa in sample.qa:
         for variant in variants:
-            scoring, weight, entities = _parse_variant(variant)
+            v = _parse_variant(variant)
             retrieved = retrieve(
                 db, query=qa.question, tenant_id=sample.sample_id,
-                agent_id=agent_id, mode=mode, k=k, rerank=rerank or scoring is not None,
-                rerank_scoring=scoring, rerank_time_weight=weight, entity_summaries=entities,
+                agent_id=agent_id, mode=mode, k=k, rerank=rerank or v.scoring is not None,
+                rerank_scoring=v.scoring, rerank_time_weight=v.weight,
+                entity_summaries=v.entities, supersession=v.supersession,
                 # Variants compare scorings on identical state: a read-only probe, so one
                 # variant's spaced-repetition refresh can't shift the decay the next one sees.
                 record_access=not variant,
@@ -612,8 +631,9 @@ def _build_parser() -> argparse.ArgumentParser:
                         help="RQ-3: comma-separated rerank-scoring variants to compare on ONE "
                              "ingest, e.g. replace,rrf,event_time or event_time:0.2 (weight). "
                              "The first is the baseline for the paired tests. Implies --rerank. "
-                             "A +entities suffix also appends entity summaries "
-                             "(e.g. replace,replace+entities; needs --dream)")
+                             "+entities / +supersession suffixes switch on entity summaries / "
+                             "GX-2 supersession (e.g. replace,replace+supersession; needs "
+                             "--dream, and FACT_SUPERSESSION=true for the supersession links)")
     parser.add_argument("--dream", action="store_true",
                         help="run one Dream State pass per question after ingest (LLM: one "
                              "summary call per entity with >= CONSOLIDATION_MENTION_THRESHOLD "

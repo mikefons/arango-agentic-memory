@@ -241,9 +241,14 @@ Hybrid retrieval (BM25 + vector + graph → RRF → MMR → tiered token budget,
     "candidate_pool": 100,          // per-arm candidates before fusion/rerank/MMR (RT-1). Raise
                                     //   (e.g. 500) with rerank on an open/large corpus to recover
                                     //   tail-reachable evidence, at more per-query DB work.
-    "entity_summaries": false       // append an "Entity summaries:" section — Dream State summaries
+    "entity_summaries": false,      // append an "Entity summaries:" section — Dream State summaries
                                     //   of the entities the hits mention — within the same
                                     //   max_memory_tokens budget (≤20% of it). Needs a Dream pass.
+    "supersession": false,          // GX-2: rank a stale statement's current successor above it
+                                    //   and mark the stale line "(superseded <time>)". Needs a
+                                    //   Dream pass with FACT_SUPERSESSION=true to make the links.
+    "as_of": null                   // ISO date/date-time: only memories that existed by then,
+                                    //   supersession judged as of then. Unparseable → 422.
   }
 }
 // response
@@ -259,7 +264,7 @@ use `agent_id`) and stays tenant-scoped — a cross-tenant id returns nothing. O
 fault the response is empty (`context: ""`, `hits: []`) — never an error.
 
 Every `opts` field defaults from server config (`MODE`, `K`, `RERANK_ENABLED`,
-`CANDIDATE_POOL`, `RETRIEVE_ENTITY_SUMMARIES`, …); a request value overrides it per call. `mode`/`rerank`/`candidate_pool`
+`CANDIDATE_POOL`, `RETRIEVE_ENTITY_SUMMARIES`, `FACT_SUPERSESSION`, …); a request value overrides it per call. `mode`/`rerank`/`candidate_pool`
 are retrieval-quality knobs — see [ops.md](ops.md#configuration-environment) for defaults, cost,
 and when to raise them, and [DESIGN.md §23](DESIGN.md) for the benchmark results that motivate
 each.
