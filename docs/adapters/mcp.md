@@ -75,7 +75,8 @@ Cursor (`.cursor/mcp.json`):
 ```
 Claude Desktop keeps using stdio (above).
 
-Requires `mcp>=1.14.0` (the `[mcp]` extra pins it); `make mcp-floor` smoke-tests that floor.
+Requires `mcp>=1.21.1,<2` (the `[mcp]` extra pins it): 1.21.1 is the first release that imports
+with pydantic 2.14, and mcp 2.0 renamed FastMCP. `make mcp-floor` smoke-tests both ends of the range.
 
 ### Deploy
 The core's container image includes the `mcp` extra, so **one image runs either service**: the

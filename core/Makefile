@@ -40,10 +40,15 @@ test-crewai:     ## CrewAI adapter tests + types against a real crewai install
 	$(UVRUN) pytest tests/test_crewai.py tests/test_crewai_unified.py
 	$(UVRUN) mypy src/arango_memory/crewai
 
-# Keep in step with the `mcp>=` floor in pyproject.toml.
-MCP_FLOOR ?= 1.14.0
-mcp-floor:       ## MCP Streamable HTTP smoke against the lowest supported mcp release
+# Keep in step with the `mcp>=…,<2` range in pyproject.toml. Both runs resolve everything else
+# fresh (no lockfile), like a user's `pip install arango-memory[mcp]` — which is what catches
+# upstream breaks such as pydantic 2.14 (old mcp) or mcp 2.0 (FastMCP renamed).
+MCP_FLOOR ?= 1.21.1
+MCP_RANGE ?= mcp>=$(MCP_FLOOR),<2
+mcp-floor:       ## MCP Streamable HTTP smoke against the lowest AND newest allowed mcp release
 	uv run --no-project --with "mcp==$(MCP_FLOOR)" --with httpx --with uvicorn \
+	  python scripts/mcp_floor_smoke.py src
+	uv run --no-project --with "$(MCP_RANGE)" --with httpx --with uvicorn \
 	  python scripts/mcp_floor_smoke.py src
 
 lint:            ## Ruff lint
