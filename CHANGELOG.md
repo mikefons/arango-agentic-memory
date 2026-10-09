@@ -45,6 +45,11 @@ are versioned together and released from this repository.
 
 ### Fixed
 
+- The `[mcp]` extra now requires `mcp>=1.21.1,<2` (was `>=1.14.0`). A fresh install resolved
+  mcp 2.x, which renamed FastMCP (`mcp.server.fastmcp` no longer exists), so the MCP server
+  failed on import. mcp releases before 1.21.1 also fail to import with pydantic 2.14. `make
+  mcp-floor` now smoke-tests both the lowest and the newest allowed release, resolved fresh as a
+  user's install would be.
 - Dream State distillation reads at most `DREAM_DISTILL_MAX_MENTIONS` (20) of an entity's
   most recent memories. Before, it sent every mentioning memory in one LLM prompt.
 

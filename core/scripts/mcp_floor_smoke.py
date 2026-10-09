@@ -1,9 +1,9 @@
-"""Smoke-test the MCP server's Streamable HTTP mode against the lowest supported `mcp` release.
+"""Smoke-test the MCP server's Streamable HTTP mode against the allowed `mcp` range.
 
-Run via `make mcp-floor`, an isolated `uv run --with mcp==<floor>`: it builds the HTTP app, does
-a real initialize + tools/list round-trip, and checks the bearer gate. 1.14.0 is the first
-release where this passes (`transport_security` arrived in 1.10; parametrised `Context`
-injection in 1.14), so the pyproject floor is `mcp>=1.14.0`.
+Run via `make mcp-floor`, isolated `uv run`s with the floor (`mcp==1.21.1`) and the newest 1.x: it
+builds the HTTP app, does a real initialize + tools/list round-trip, and checks the bearer gate.
+The floor is 1.21.1 because older releases import a private pydantic helper that pydantic 2.14
+removed (the features we need arrived in 1.14). The ceiling is <2: mcp 2.0 renamed FastMCP.
 
 Usage: python scripts/mcp_floor_smoke.py <path-to-core-src>
 """
