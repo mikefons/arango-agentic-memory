@@ -11,7 +11,7 @@ import type { LanguageModel } from "ai";
 export type Provider = "gateway" | "anthropic";
 
 /** A small, cheap model is plenty for claim extraction. */
-const DEFAULT_MODEL = "claude-haiku-4-5";
+const DEFAULT_MODEL = "claude-haiku-5-5";
 
 /**
  * Per-agent LLM-call timeout. On a durable workflow, a *hung* model call is worse than a failed

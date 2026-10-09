@@ -24,7 +24,7 @@ dependencies = [
     "pydantic-settings>=2.6.0",
     "httpx>=0.27.0",
     "openai>=1.54.0",
-    "anthropic>=0.39.0",
+    "anthropic>=0.47.0",  # `thinking` param (BACKGROUND_THINKING=false sends disabled)
     "tiktoken>=0.8.0",
     "numpy>=1.26.0",  # vectorized entity resolution on the store path (IN-6)
     "opentelemetry-api>=1.28.0",

@@ -52,6 +52,7 @@ from arango_memory.eval.longmemeval import judge_correct
 from arango_memory.generation import get_generator
 from arango_memory.retrieve.search import _event_sort_key
 
+# Stays on Haiku 4.5: graphiti-core sends `temperature`, which Haiku 5.5 rejects (400).
 MODEL = "claude-haiku-4-5"
 EMBEDDING_MODEL = "text-embedding-3-small"
 
