@@ -54,7 +54,9 @@ extraction-spacy = [
     "spacy>=3.8.0",
 ]
 mcp = [
-    "mcp>=1.14.0",
+    # 1.21.1: first release importable with pydantic 2.14 (older ones import a private helper
+    # it removed). <2: mcp 2.0 renamed FastMCP (`mcp.server.fastmcp` is gone).
+    "mcp>=1.21.1,<2",
 ]
 langchain = [
     "langchain-core>=0.3.0",
@@ -79,7 +81,7 @@ dev = [
     "testcontainers>=4.8.0",
     "ruff>=0.7.0",
     "mypy>=1.13.0",
-    "mcp>=1.14.0",
+    "mcp>=1.21.1,<2",
     "langchain-core>=0.3.0",
     "langgraph>=0.2.0",
     "redis>=5.0.0",

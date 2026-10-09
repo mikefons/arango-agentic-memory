@@ -37,9 +37,9 @@ jobs:
       - name: Lint, type-check, test
         run: make ci
 
-      # The MCP server's HTTP mode against the lowest `mcp` release the extra allows — a
-      # floor check, so it runs on the floor Python only.
-      - name: MCP floor smoke (mcp>=1.14.0)
+      # The MCP server's HTTP mode against the lowest and the newest `mcp` release the extra
+      # allows, with fresh (unlocked) dependencies — a range check, so floor Python only.
+      - name: MCP range smoke (mcp>=1.21.1,<2)
         if: matrix.python == '3.11'
         run: make mcp-floor
 
