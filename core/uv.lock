@@ -301,7 +301,7 @@ rerank = [
 
 [package.metadata]
 requires-dist = [
-    { name = "anthropic", specifier = ">=0.39.0" },
+    { name = "anthropic", specifier = ">=0.47.0" },
     { name = "crewai", marker = "extra == 'crewai'", specifier = ">=0.80.0" },
     { name = "fakeredis", marker = "extra == 'dev'", specifier = ">=2.25.0" },
     { name = "fastapi", specifier = ">=0.115.0" },

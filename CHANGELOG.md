@@ -28,6 +28,21 @@ are versioned together and released from this repository.
   `+supersession` variant suffixes (e.g. `--rerank-scoring replace,replace+supersession`)
   compare those features on one ingest.
 
+### Changed
+
+- The background LLM moves to Claude Haiku 5.5: `BACKGROUND_MODEL` now defaults to
+  `claude-haiku-5-5` (was `claude-haiku-4-5`). It is used for HyDE, the gate, Dream State,
+  supersession, the Haiku extractor and the eval answerer/judge.
+  - Haiku 5.5 thinks by default, so these short calls now send `thinking: disabled`.
+    `BACKGROUND_THINKING=true` restores the model's default; use it for models that reject
+    `disabled` (Opus 5.5, Sonnet 5.5).
+  - The `anthropic` floor rises to `>=0.47.0`, the first SDK version with the `thinking` parameter.
+  - The diligence-room demo defaults to `claude-haiku-5-5`.
+  - The Graphiti benchmark runner stays on Haiku 4.5, because graphiti-core sends `temperature`,
+    which Haiku 5.5 rejects.
+  - Benchmark figures recorded before this change (LongMemEval 0.633, GX-2's 0.659) used Haiku
+    4.5 as answerer and judge. Re-baseline before comparing.
+
 ### Fixed
 
 - Dream State distillation reads at most `DREAM_DISTILL_MAX_MENTIONS` (20) of an entity's

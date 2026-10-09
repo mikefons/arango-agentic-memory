@@ -6,7 +6,7 @@ core path. Two implementations:
                           lets tests script responses. Default returns "", which
                           the enrichment layer treats as "no opinion" (gate →
                           retrieve, HyDE → fall back to the raw query). No key.
-  - `AnthropicGenerator`— real completions via `claude-haiku-4-5`, with prompt
+  - `AnthropicGenerator`— real completions via `claude-haiku-5-5`, with prompt
                           caching on the system block (background work, §16).
 
 `get_generator(settings)` selects one; "anthropic" without a key is a hard error.
@@ -15,7 +15,7 @@ core path. Two implementations:
 from __future__ import annotations
 
 from collections.abc import Callable
-from typing import Protocol, runtime_checkable
+from typing import Any, Protocol, runtime_checkable
 
 from .config import Settings, settings
 
@@ -43,13 +43,18 @@ class FakeGenerator:
 
 
 class AnthropicGenerator:
-    """Real completions via the Anthropic API (default `claude-haiku-4-5`)."""
+    """Real completions via the Anthropic API (default `claude-haiku-5-5`). `thinking=False`
+    sends `thinking: disabled` (see `settings.background_thinking`); a refusal or a reply with
+    no text returns "", which every caller already treats as "no opinion"."""
 
-    def __init__(self, api_key: str, model: str = "claude-haiku-4-5") -> None:
+    def __init__(
+        self, api_key: str, model: str = "claude-haiku-5-5", *, thinking: bool = False
+    ) -> None:
         from anthropic import Anthropic
 
         self._client = Anthropic(api_key=api_key)
         self.model = model
+        self._thinking = thinking
 
     def complete(self, prompt: str, *, system: str | None = None, max_tokens: int = 512) -> str:
         system_blocks = (
@@ -57,11 +62,13 @@ class AnthropicGenerator:
             if system
             else []
         )
+        extra: dict[str, Any] = {} if self._thinking else {"thinking": {"type": "disabled"}}
         resp = self._client.messages.create(
             model=self.model,
             max_tokens=max_tokens,
             system=system_blocks,  # type: ignore[arg-type]
             messages=[{"role": "user", "content": prompt}],
+            **extra,
         )
         parts = [block.text for block in resp.content if block.type == "text"]
         return "".join(parts)
@@ -77,4 +84,6 @@ def get_generator(config: Settings | None = None) -> Generator:
             "generation_provider='anthropic' but ANTHROPIC_API_KEY is unset; "
             "set the key or use generation_provider='fake'."
         )
-    return AnthropicGenerator(api_key=cfg.anthropic_api_key, model=cfg.background_model)
+    return AnthropicGenerator(
+        api_key=cfg.anthropic_api_key, model=cfg.background_model, thinking=cfg.background_thinking
+    )
