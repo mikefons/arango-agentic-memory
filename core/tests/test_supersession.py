@@ -169,3 +169,23 @@ def test_bad_as_of_is_a_caller_error(db: StandardDatabase, api: TestClient) -> N
         "opts": {"as_of": "last tuesday"},
     })
     assert r.status_code == 422
+
+
+def test_similarity_gate_compares_without_a_shared_entity(
+    db: StandardDatabase, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # "27 birds" → "32 birds": no shared named entity, so the entity gate never offers the pair.
+    t = "t_ss10"
+    old = _put(db, t, "my count of yard birds is twenty seven", JAN)
+    new = _put(db, t, "my count of yard birds is now thirty two", MAR)
+    gen, prompts = _answers("1")
+    run_supersession(db, tenant_id=t, generator=gen)
+    assert prompts == []  # entity gate (default): no candidates
+
+    db.aql.execute("FOR m IN memories FILTER m.tenant_id == @t "
+                   "UPDATE m WITH { supersession_checked_at: null } IN memories",
+                   bind_vars={"t": t})
+    monkeypatch.setattr(settings, "supersession_gate", "similarity")
+    result = run_supersession(db, tenant_id=t, generator=gen)
+    assert result.superseded == 1
+    assert _doc(db, old)["superseded_by"] == new
