@@ -22,6 +22,7 @@ are versioned together and released from this repository.
   hidden). Retrieval (`opts.supersession`) ranks the current statement directly above a stale
   one it retrieved, pulling it in if missed, and marks the stale line `(superseded <time>)`.
   `/v1/dream` reports `memories_superseded`.
+- `SUPERSESSION_GATE=similarity`: GX-2 candidates by embedding similarity alone (default `entity`).
 - Point-in-time retrieval: `opts.as_of` (ISO date/date-time) limits retrieval to memories
   that existed by then, with supersession judged as of then.
 - LongMemEval harness: `--dream` runs a Dream State pass per question; `+entities` /

@@ -1212,6 +1212,56 @@ Next lever, if pursued: gate candidates on embedding similarity alone (top-N nea
 dropping the shared-entity requirement), measured the same way. It costs more LLM calls. The default stays
 **off**; an accuracy run waits with the GX-1 benchmark. Results: `core/bench_runs/gx2/` (gitignored).
 
+**GX-2 candidate gate on Haiku 5.5: entity vs similarity (rev 99, 2026-10-09).** Rev 98 found that
+detection was the limit, so `SUPERSESSION_GATE=similarity` was added. It offers the nearest older
+memories by embedding alone, with no shared entity required. A no-LLM simulation on the stored
+embeddings put **37/45** labelled stale/new pairs in front of the LLM at cosine ≥ 0.5, top 5, against
+**18/45** for the entity gate.
+
+Both gates were then run on Haiku 5.5, now the background model:
+- the same 52 knowledge-update questions as rev 98;
+- one fresh database per gate, so each run has its own ingest and Dream pass;
+- distillation off, `--retrieval-only`;
+- about $1 for both runs.
+
+| gate (Haiku 5.5) | links made | newest-above-stale, `replace` → `+supersession` | paired |
+|---|---|---|---|
+| entity (0.5, top 3) | 40 | 0.614 → 0.636 | +1 / −0 of 44, p = 1.00 |
+| similarity (0.5, top 5) | 73 | 0.614 → **0.659** | +2 / −0 of 44, p = 0.50 |
+
+Evidence recall (0.978) and newest-in-top-k (0.955) were unchanged in both runs, and neither gate
+made any question worse. The baseline (0.614) matches rev 98's: `replace` makes no LLM calls, so
+changing the model doesn't move it. The 0.636 for the entity gate is below rev 98's 0.659 on
+Haiku 4.5, but the bigger difference is in links made: **40 links on Haiku 5.5 against 490 on
+Haiku 4.5** with the same gate.
+
+**Why the wider gate barely helped: a verdict-format bug, not a judgement failure.** In the
+similarity run, every stale evidence statement in the 15 still-failing questions was *unlinked*.
+Replaying those 15 pairs directly showed what happened:
+- The prompt asks for a bare list of numbers, with thinking off and a 32-token cap. Haiku 5.5
+  often answers in prose instead ("The new statement says 30 videos; the older one says 20. That
+  is an update…") and runs out of tokens before giving the number, so `_parse` finds nothing
+  usable.
+- In 6 of the 15 pairs, Haiku 5.5 named the update in that prose and the link was still lost.
+- The parser is also unsafe: it accepts any digit in the reply, so prose like "statement 1
+  says…" could create a link the model never asked for.
+
+Fixing the format alone ("output only the numbers or NONE") parses cleanly but drops 5.5 to 6/15:
+it then answers NONE on pairs it called updates when it could explain, so with thinking off the
+prose was doing the reasoning. **Explain-then-answer** works. The prompt asks for one or two
+sentences on whether the new statement changes the fact, then a final `ANSWER: <numbers|NONE>`
+line; the cap is 256 tokens and only that line is parsed. This marks **13/15** pairs superseded on
+Haiku 5.5 (12/15 on Haiku 4.5).
+
+All 15 probe pairs are true updates, so the probe measures recall only; how often the new format
+links things that aren't updates is not yet measured. Proposed next step, cheap on Haiku 5.5:
+1. adopt explain-then-answer with strict `ANSWER:`-line parsing (it fixes the false-link parse
+   risk regardless of gate);
+2. re-run both gates on this set;
+3. sample the links for false positives before considering a default.
+
+The default stays **off**. Results: `core/bench_runs/gx2b/` (gitignored).
+
 ### Recall vs corpus size — the fusion-holds curve (HX-2)
 
 The project's thesis as a chart: on an **open corpus that grows**, graph+vector+BM25 fusion

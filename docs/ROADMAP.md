@@ -1437,6 +1437,13 @@ accuracy run waits with the GX-1 benchmark.
 **0.659** (+2/−0 of 44, p = 0.50), with recall unchanged, for about $2.50. The limit is detection: 9 of
 16 missed stale/new pairs share no spaCy entity. Follow-up: a similarity-only candidate gate.
 
+**Similarity gate (2026-10-09, DESIGN §23 rev 99):** `SUPERSESSION_GATE=similarity` is built. On Haiku
+5.5 it reached 0.659 (entity gate: 0.636), from a baseline of 0.614, despite offering twice the
+pairs. The cause is a reply-format bug: with a bare-number reply format and a 32-token cap, Haiku 5.5
+explains in prose and runs out of tokens before the number. An explain-then-`ANSWER:`-line prompt
+links 13 of 15 missed pairs in a probe. Next: adopt it with strict parsing, re-run both gates, and
+check the links for false positives.
+
 Original scope note:
 
 Graphiti stores facts with valid/invalid times, and a contradicting fact closes the old one.
