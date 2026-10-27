@@ -73,18 +73,21 @@ _PER_ENTITY = 200
 _FETCH = 20
 
 # Similarity gate: the nearest memories of the same agent by embedding alone, no shared entity
-# required. Exact scan over the agent's memories (the scope index narrows it to the tenant).
+# required. Exact scan over the agent's memories (idx_mem_scope narrows it to tenant + agent).
+# Rows run oldest-first and each is stamped, so every older memory is already checked: skipping
+# unchecked ones keeps newer near-duplicates from crowding the older candidates out of the LIMIT.
 _SIMILAR = """
 FOR o IN memories
   FILTER o.tenant_id == @tenant_id AND o.agent_id == @agent_id AND o.invalid_at == null
      AND o._key != @key AND o.superseded_by == null AND o.type != "working"
+     AND o.supersession_checked_at != null
   LET sim = COSINE_SIMILARITY(o.embedding, @vec)
   FILTER sim >= @min_sim
   SORT sim DESC
   LIMIT @limit
   RETURN { key: o._key, text: o.text, event_time: o.event_time, created_at: o.created_at }
 """
-# The scan can't tell older from newer (times are parsed in Python), so fetch deeper.
+# Equal or mixed-format times are still sorted out in Python, so fetch a little deeper.
 _SIMILAR_FETCH = 50
 
 
