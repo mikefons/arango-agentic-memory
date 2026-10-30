@@ -63,7 +63,9 @@ langchain = [
     "langgraph>=0.2.0",
 ]
 crewai = [
-    "crewai>=0.80.0",
+    # crewai declares requires-python <3.14 (its chromadb dependency's pydantic-v1 settings fail
+    # to import on 3.14). Without this marker, pip on 3.14 falls back to an old, uncapped crewai.
+    "crewai>=0.80.0; python_version < '3.14'",
 ]
 # Optional cross-encoder reranker (RQ-2b, DESIGN.md §9). Install to enable
 # `reranker_provider="local"`; the core reranks with the keyless FakeReranker without it.

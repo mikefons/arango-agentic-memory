@@ -15,6 +15,8 @@ two entry points, by crewai version:
 ```bash
 pip install "arango-memory[crewai]"
 ```
+Needs Python **3.10–3.13**: crewai declares `requires-python <3.14` (its chromadb dependency fails
+to import on 3.14), so on Python 3.14 the extra installs no crewai.
 
 ## crewai ≥ 1.10 — unified memory
 ```python
