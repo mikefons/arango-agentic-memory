@@ -1445,8 +1445,17 @@ links 13 of 15 missed pairs in a probe. Next: adopt it with strict parsing, re-r
 check the links for false positives.
 
 **Explain-then-answer adopted (2026-10-30):** the verdict prompt now ends with a strictly parsed
-`ANSWER:` line (256-token cap), and unparseable replies link nothing. Still to do: re-run both gates
-and sample the new links for false positives.
+`ANSWER:` line (256-token cap), and unparseable replies link nothing.
+
+**Re-run (2026-10-30, DESIGN §23 rev 100):** newest-above-stale went from 0.614 to
+- **0.773** with the entity gate (+7/−0 of 44, p = 0.016);
+- **0.864** with the similarity gate (+11/−0 of 44, p = 0.001).
+
+Recall held in both runs. A hand-judged sample of links puts precision at about 9/15 for the
+entity gate and about 4/15 for the similarity gate; the false links share a topic but not a fact.
+The default stays off. Next:
+- a "same attribute, changed value" verdict;
+- a full-mix paired accuracy run (with GX-1) to price false links on the other question types.
 
 Original scope note:
 
