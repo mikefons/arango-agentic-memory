@@ -46,6 +46,9 @@ jobs:
   crewai:
     name: Core — CrewAI adapter vs real crewai
     runs-on: ubuntu-latest
+    env:
+      # crewai supports Python <3.14, and ubuntu-latest's default python3 is now 3.14.
+      UV_PYTHON: "3.12"
     defaults:
       run:
         working-directory: core
