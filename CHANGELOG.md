@@ -46,6 +46,11 @@ are versioned together and released from this repository.
 
 ### Fixed
 
+- GX-2 supersession verdicts: the LLM now explains in one or two sentences, then ends with an
+  `ANSWER: <numbers|NONE>` line (256-token cap, was 32). Only that line is parsed, strictly. The
+  bare-number format made Haiku 5.5 reply in prose that the cap cut off before the number, and
+  the old parser accepted any digit in a reply, so prose like "statement 1 says…" could create a
+  link. Replies without a well-formed answer line link nothing and are counted as `unparsed`.
 - The `[crewai]` extra is now marked `python_version < '3.14'`, matching crewai's own cap. On
   Python 3.14, pip skipped every current crewai and fell back to an old, uncapped release that
   crashes on import (chromadb's pydantic-v1 settings). The CrewAI CI job is pinned to Python 3.12,

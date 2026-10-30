@@ -393,7 +393,7 @@ def test_supersession_variant_fixes_update_ordering(db: StandardDatabase,
     monkeypatch.setattr(settings, "supersession_min_similarity", -1.0)
 
     def handler(prompt: str, system: str | None) -> str:
-        return "1" if system and "SUPERSEDED" in system else ""
+        return "Older 1 is the stale city.\nANSWER: 1" if system and "SUPERSEDED" in system else ""
 
     report = run_longmemeval(
         db, [_sam_sample("lme-gx2-sam")], generator=FakeGenerator(handler=handler), k=10,

@@ -34,9 +34,17 @@ _SUPERSEDE_SYSTEM = (
     "You compare a NEW statement with OLDER statements from the same history. An older "
     "statement is SUPERSEDED when the new one gives a newer value for the same fact (a change, "
     "update or correction), so the older one is no longer current. Statements that only "
-    "relate, add detail, or concern different facts are not superseded. Reply with the numbers "
-    "of the superseded older statements, comma-separated, or NONE."
+    "relate, add detail, or concern different facts are not superseded. First say in one or two "
+    "sentences which fact each older statement states and whether the new statement changes its "
+    "value. Then end with a final line `ANSWER: ` followed by the numbers of the superseded older "
+    "statements, comma-separated, or NONE."
 )
+# Explain-then-answer (DESIGN §23 rev 99): with thinking off, the short explanation is where the
+# model reasons — a bare-numbers reply made Haiku 5.5 miss most updates, and a 32-token cap cut
+# its prose off before the number. Room for the explanation plus the answer line.
+_VERDICT_MAX_TOKENS = 256
+_ANSWER_LINE = re.compile(r"^\s*ANSWER:\s*(.*?)\s*\.?\s*$", re.MULTILINE)
+_ANSWER_VALUE = re.compile(r"NONE|\d+(?:\s*,\s*\d+)*")
 
 # Each statement is clipped before it reaches the prompt: long chat turns would otherwise make
 # one comparison cost as much as a whole distillation.
@@ -96,15 +104,23 @@ class SupersessionResult:
     checked: int = 0
     compared: int = 0  # LLM comparisons made
     superseded: int = 0
+    unparsed: int = 0  # replies with no well-formed ANSWER line — no links made
 
 
 def _clip(text: str) -> str:
     return text if len(text) <= _MAX_CHARS else text[:_MAX_CHARS] + "…"
 
 
-def _parse(reply: str, n: int) -> list[int]:
-    """1-based indices from the LLM reply, kept only when in range; NONE → []."""
-    return sorted({i for i in map(int, re.findall(r"\d+", reply)) if 1 <= i <= n})
+def _parse(reply: str, n: int) -> list[int] | None:
+    """1-based indices from the reply's last `ANSWER:` line, kept only when in range; `NONE` →
+    []. None when there is no well-formed answer line: digits in the explanation ("statement 1
+    says…") must never become links."""
+    lines = _ANSWER_LINE.findall(reply)
+    if not lines or not _ANSWER_VALUE.fullmatch(lines[-1]):
+        return None
+    if lines[-1] == "NONE":
+        return []
+    return sorted({i for i in map(int, re.findall(r"\d+", lines[-1])) if 1 <= i <= n})
 
 
 def run_supersession(
@@ -140,10 +156,14 @@ def run_supersession(
             prompt = f"NEW: {_clip(row['text'])}\nOLDER:\n" + "\n".join(
                 f"{i}. {_clip(o['text'])}" for i, o in enumerate(older, 1)
             )
-            reply = gen.complete(prompt, system=_SUPERSEDE_SYSTEM, max_tokens=32)
+            reply = gen.complete(prompt, system=_SUPERSEDE_SYSTEM, max_tokens=_VERDICT_MAX_TOKENS)
             result.compared += 1
+            picked = _parse(reply, len(older))
+            if picked is None:
+                result.unparsed += 1
+                picked = []
             valid_to = row.get("event_time") or row.get("created_at")
-            for i in _parse(reply, len(older)):
+            for i in picked:
                 memories.update({"_key": older[i - 1]["key"], "superseded_by": row["key"],
                                  "valid_to": valid_to, "superseded_at": now})
                 result.superseded += 1
@@ -151,5 +171,5 @@ def run_supersession(
         result.checked += 1
 
     metrics.emit("supersession", checked=result.checked, compared=result.compared,
-                 superseded=result.superseded)
+                 superseded=result.superseded, unparsed=result.unparsed)
     return result

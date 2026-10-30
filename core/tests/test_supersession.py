@@ -45,10 +45,25 @@ def _answers(reply: str) -> tuple[FakeGenerator, list[str]]:
     return FakeGenerator(handler=handler), prompts
 
 
-def test_parse_reply() -> None:
-    assert _parse("NONE", 3) == []
-    assert _parse("1, 3", 3) == [1, 3]
-    assert _parse("2 and 9", 3) == [2]  # out of range ignored
+def test_parse_reply_reads_only_the_answer_line() -> None:
+    assert _parse("No change.\nANSWER: NONE", 3) == []
+    assert _parse("Both updated.\nANSWER: 1, 3", 3) == [1, 3]
+    assert _parse("ANSWER: 2, 9.", 3) == [2]  # out of range ignored, trailing period ok
+    assert _parse("ANSWER: 1\nOn reflection, 1 and 2 differ.\nANSWER: NONE", 3) == []  # last wins
+    # No well-formed answer line → None, never links from digits in the prose:
+    assert _parse("The new statement says statement 1 is now 30, not 20.", 3) is None
+    assert _parse("ANSWER: probably 1", 3) is None
+    assert _parse("ANSWER:", 3) is None
+
+
+def test_prose_without_an_answer_line_links_nothing(db: StandardDatabase) -> None:
+    t = "t_ss14"
+    boston = _put(db, t, "Sam lives in Boston", JAN)
+    _put(db, t, "Sam moved to Denver", MAR)
+    gen, prompts = _answers("The new statement says statement 1 is out of date")  # truncated
+    result = run_supersession(db, tenant_id=t, generator=gen)
+    assert (result.compared, result.superseded, result.unparsed) == (1, 0, 1)
+    assert _doc(db, boston).get("superseded_by") is None
 
 
 # ── Dream State pass ──────────────────────────────────────
@@ -56,7 +71,7 @@ def test_links_the_older_statement_and_is_incremental(db: StandardDatabase) -> N
     t = "t_ss1"
     boston = _put(db, t, "Sam lives in Boston", JAN)
     denver = _put(db, t, "Sam moved to Denver", MAR)
-    gen, prompts = _answers("1")
+    gen, prompts = _answers("Older 1 states the old value; the new one changes it.\nANSWER: 1")
     result = run_supersession(db, tenant_id=t, generator=gen)
     assert (result.checked, result.compared, result.superseded) == (2, 1, 1)
     assert prompts == ["NEW: Sam moved to Denver\nOLDER:\n1. Sam lives in Boston"]
@@ -73,7 +88,7 @@ def test_none_verdict_links_nothing(db: StandardDatabase) -> None:
     t = "t_ss2"
     boston = _put(db, t, "Sam lives in Boston", JAN)
     _put(db, t, "Sam likes Denver jazz", MAR)
-    gen, _ = _answers("NONE")
+    gen, _ = _answers("Different facts.\nANSWER: NONE")
     assert run_supersession(db, tenant_id=t, generator=gen).superseded == 0
     assert _doc(db, boston).get("superseded_by") is None
 
@@ -83,7 +98,7 @@ def test_other_agents_and_same_time_are_not_compared(db: StandardDatabase) -> No
     _put(db, t, "Sam lives in Boston", JAN, agent="other")
     _put(db, t, "Sam lives in Austin", MAR)
     _put(db, t, "Sam visits Austin", MAR)  # same time: neither is older
-    gen, prompts = _answers("1")
+    gen, prompts = _answers("Older 1 states the old value; the new one changes it.\nANSWER: 1")
     run_supersession(db, tenant_id=t, generator=gen)
     assert prompts == []
 
@@ -93,7 +108,7 @@ def test_chain_links_each_statement_to_the_next(db: StandardDatabase) -> None:
     boston = _put(db, t, "Sam lives in Boston", JAN)
     chicago = _put(db, t, "Sam moved to Chicago", FEB)
     denver = _put(db, t, "Sam moved to Denver", MAR)
-    gen, _ = _answers("1")
+    gen, _ = _answers("Older 1 states the old value; the new one changes it.\nANSWER: 1")
     run_supersession(db, tenant_id=t, generator=gen)
     assert _doc(db, boston)["superseded_by"] == chicago
     assert _doc(db, chicago)["superseded_by"] == denver
@@ -105,7 +120,7 @@ def test_dream_runs_it_only_when_enabled(
     t = "t_ss5"
     _put(db, t, "Sam lives in Boston", JAN)
     _put(db, t, "Sam moved to Denver", MAR)
-    gen, prompts = _answers("1")
+    gen, prompts = _answers("Older 1 states the old value; the new one changes it.\nANSWER: 1")
     assert run_dream_state(db, tenant_id=t, generator=gen).memories_superseded == 0
     assert prompts == []
     monkeypatch.setattr(settings, "fact_supersession", True)
@@ -179,7 +194,7 @@ def test_similarity_gate_compares_without_a_shared_entity(
     t = "t_ss10"
     old = _put(db, t, "my count of yard birds is twenty seven", JAN)
     new = _put(db, t, "my count of yard birds is now thirty two", MAR)
-    gen, prompts = _answers("1")
+    gen, prompts = _answers("Older 1 states the old value; the new one changes it.\nANSWER: 1")
     run_supersession(db, tenant_id=t, generator=gen)
     assert prompts == []  # entity gate (default): no candidates
 
@@ -196,7 +211,7 @@ def test_similarity_gate_keeps_agent_scope_and_threshold(
     db: StandardDatabase, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(settings, "supersession_gate", "similarity")
-    gen, prompts = _answers("1")
+    gen, prompts = _answers("Older 1 states the old value; the new one changes it.\nANSWER: 1")
     _put(db, "t_ss11", "my count of yard birds is twenty seven", JAN, agent="b")
     _put(db, "t_ss11", "my count of yard birds is now thirty two", MAR)
     run_supersession(db, tenant_id="t_ss11", generator=gen)
@@ -219,7 +234,7 @@ def test_similarity_gate_newer_memories_do_not_crowd_out_older(
     mid = _put(db, t, "my count of yard birds is now thirty two", FEB)
     # Same tokens as `mid` (fake embeddings are bags of words): its nearest match, but newer.
     _put(db, t, "now my count of yard birds is thirty two", MAR)
-    gen, prompts = _answers("1")
+    gen, prompts = _answers("Older 1 states the old value; the new one changes it.\nANSWER: 1")
     run_supersession(db, tenant_id=t, generator=gen)
     assert prompts[0].startswith("NEW: my count of yard birds is now thirty two\nOLDER:\n1. my")
     assert _doc(db, old)["superseded_by"] == mid
