@@ -51,6 +51,12 @@ are versioned together and released from this repository.
   bare-number format made Haiku 5.5 reply in prose that the cap cut off before the number, and
   the old parser accepted any digit in a reply, so prose like "statement 1 says…" could create a
   link. Replies without a well-formed answer line link nothing and are counted as `unparsed`.
+- GX-2 supersession verdicts: the cap rises from 256 to 640 tokens. The explanation covers each
+  older statement, and with 4–5 candidates about one reply in ten was cut off before its answer
+  line. The prompt now also requires the *same fact about the same thing*: a shared topic, a
+  different item or occasion, or a statement with no fact (a request or small talk) is not an
+  update, while a clearly implied new value ("added another one") is. In a labelled replay,
+  precision went from 0.79 to 0.88 and recall from 0.79 to 0.82 (DESIGN §23 rev 101).
 - The `[crewai]` extra is now marked `python_version < '3.14'`, matching crewai's own cap. On
   Python 3.14, pip skipped every current crewai and fell back to an old, uncapped release that
   crashes on import (chromadb's pydantic-v1 settings). The CrewAI CI job is pinned to Python 3.12,
