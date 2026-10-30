@@ -1444,6 +1444,10 @@ explains in prose and runs out of tokens before the number. An explain-then-`ANS
 links 13 of 15 missed pairs in a probe. Next: adopt it with strict parsing, re-run both gates, and
 check the links for false positives.
 
+**Explain-then-answer adopted (2026-10-30):** the verdict prompt now ends with a strictly parsed
+`ANSWER:` line (256-token cap), and unparseable replies link nothing. Still to do: re-run both gates
+and sample the new links for false positives.
+
 Original scope note:
 
 Graphiti stores facts with valid/invalid times, and a contradicting fact closes the old one.
