@@ -45,6 +45,10 @@ are versioned together and released from this repository.
 
 ### Fixed
 
+- The `[crewai]` extra is now marked `python_version < '3.14'`, matching crewai's own cap. On
+  Python 3.14, pip skipped every current crewai and fell back to an old, uncapped release that
+  crashes on import (chromadb's pydantic-v1 settings). The CrewAI CI job is pinned to Python 3.12,
+  since `ubuntu-latest`'s default `python3` moved to 3.14.
 - The `[mcp]` extra now requires `mcp>=1.21.1,<2` (was `>=1.14.0`). A fresh install resolved
   mcp 2.x, which renamed FastMCP (`mcp.server.fastmcp` no longer exists), so the MCP server
   failed on import. mcp releases before 1.21.1 also fail to import with pydantic 2.14. `make
