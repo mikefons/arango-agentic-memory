@@ -71,7 +71,13 @@ class Settings(BaseSettings):
 
     # Background / extraction LLM
     anthropic_api_key: str | None = None
-    background_model: str = "claude-haiku-4-5"
+    background_model: str = "claude-haiku-5-5"
+    # Every background call is a short single-shot completion (a one-word verdict, a summary,
+    # extraction JSON). Haiku 5.5 thinks by default, and thinking counts toward max_tokens, so a
+    # small cap can end with no text at all. False sends `thinking: disabled` (accepted by Haiku
+    # 5.5 at effort <= high and by Haiku 4.5); set True to leave thinking to the model's default
+    # — required for models that reject `disabled` (Opus 5.5, Sonnet 5.5, Fable).
+    background_thinking: bool = False
     # "anthropic" (real) or "fake" (deterministic, no key — tests/sim). Used by
     # full-mode enrichment (HyDE, adaptive gate). Default "fake" so dev/CI run keyless.
     generation_provider: Literal["anthropic", "fake"] = "fake"
@@ -137,6 +143,18 @@ class Settings(BaseSettings):
     # Consolidation / Dream State (DESIGN.md §13).
     consolidation_mention_threshold: int = Field(default=5, ge=1)
     dream_breaker_threshold: float = Field(default=0.5, ge=0.0, le=1.0)
+    # Cap on the memories one distillation reads (most recent first), so a heavily
+    # mentioned entity can't push an unbounded prompt at the LLM.
+    dream_distill_max_mentions: int = Field(default=20, ge=1)
+    # GX-2 memory-level fact supersession: Dream State links a memory to the older statements
+    # it updates (`superseded_by`/`valid_to`, nothing hidden), and retrieval ranks the current
+    # statement above a stale one it retrieved. One LLM call per new memory that has candidates.
+    # Off by default until measured.
+    fact_supersession: bool = False
+    # Older statements must share an entity AND reach this embedding cosine to be compared.
+    supersession_min_similarity: float = Field(default=0.5, ge=-1.0, le=1.0)
+    # Most similar older statements shown to the LLM per new memory.
+    supersession_max_candidates: int = Field(default=3, ge=1)
     # Ontology evolution (DESIGN.md §13, v2 research): propose typed relationships
     # from recurring associated_with clusters, human-in-loop. Off by default.
     ontology_evolution: bool = False
@@ -162,6 +180,10 @@ class Settings(BaseSettings):
     # corpus, widening this (+ rerank) recovers the tail-reachable golds BX-3 found (§23) —
     # at more per-query DB work. Default 100 keeps the common (given-context) path cheap.
     candidate_pool: int = Field(default=100, ge=1)
+    # Append the Dream State summaries of the entities the hits mention to the retrieved
+    # context (Graphiti's ENTITIES section). Shares max_memory_tokens with the memories.
+    # Off by default until measured; needs a Dream State pass to have written summaries.
+    retrieve_entity_summaries: bool = False
     # MMR relevance↔diversity balance for the final top-k re-rank (§9). 1.0 = pure
     # relevance (fusion order); lower trades relevance for diversity in the returned set.
     # Defaults to pure relevance: diversity is a *context-window* concern (don't feed the

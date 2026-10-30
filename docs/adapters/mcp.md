@@ -75,7 +75,8 @@ Cursor (`.cursor/mcp.json`):
 ```
 Claude Desktop keeps using stdio (above).
 
-Requires `mcp>=1.17.0` (the `[mcp]` extra pins it); `make mcp-floor` smoke-tests that floor.
+Requires `mcp>=1.21.1,<2` (the `[mcp]` extra pins it): 1.21.1 is the first release that imports
+with pydantic 2.14, and mcp 2.0 renamed FastMCP. `make mcp-floor` smoke-tests both ends of the range.
 
 ### OAuth mode (MCP authorization spec)
 For clients that connect to remote MCP servers **only through OAuth** — they can't be given a
@@ -130,6 +131,8 @@ Keycloak behaviours the script handles: dynamically registered clients don't get
 roles must be scope-mapped onto a client scope; and a scope that *has* role mappings is applied
 only to users holding one of them — which is why the roles live in their own scope (on `memory`
 they'd strip the audience and tenant from every role-less user's token).
+Use a **dedicated realm** for this: `memory` is a realm *default* scope, so in a shared realm
+(`--realm <existing>`) every client's access tokens would carry the MCP server as audience.
 `core/scripts/mcp_oauth_e2e.py` drives the whole flow with the SDK's OAuth client for a test.
 
 ### Deploy

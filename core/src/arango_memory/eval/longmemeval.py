@@ -44,6 +44,7 @@ from ..client import ArangoMemoryClient
 from ..config import settings
 from ..generation import Generator, get_generator
 from ..ingest.store import StoreItem, store_many
+from ..lifecycle.dream import run_dream_state
 from ..retrieve.search import _event_sort_key, force_view_sync, retrieve
 from ..schema.collections import ensure_schema
 from ..security.forget import purge
@@ -128,14 +129,37 @@ class _Evidence:
     newest_above_stale: bool | None = None
 
 
-def _parse_variant(spec: str) -> tuple[str | None, float | None]:
-    """`"event_time:0.2"` → ("event_time", 0.2); `"rrf"` → ("rrf", None); `""` → (None, None)."""
-    if not spec:
-        return None, None
-    name, _, weight = spec.partition(":")
-    if name not in SCORINGS:
-        raise ValueError(f"unknown rerank scoring {name!r} (choose from {', '.join(SCORINGS)})")
-    return name, float(weight) if weight else None
+#: Retrieval features a variant may switch on with a `+name` suffix.
+VARIANT_FLAGS = ("entities", "supersession")
+
+
+@dataclass(frozen=True)
+class _Variant:
+    scoring: str | None = None
+    weight: float | None = None
+    entities: bool = False      # GX-1 entity summaries
+    supersession: bool = False  # GX-2 memory-level supersession
+
+
+def _parse_variant(spec: str) -> _Variant:
+    """`"event_time:0.2"` → scoring event_time, weight 0.2; `"rrf"`; `""` → the defaults.
+    `+entities` / `+supersession` suffixes switch those features on, e.g.
+    `"replace+entities+supersession"` or `"+supersession"` (no rerank scoring override)."""
+    head, *flags = spec.split("+")
+    for flag in flags:
+        if flag not in VARIANT_FLAGS:
+            raise ValueError(
+                f"unknown variant suffix +{flag!r} (choose from {', '.join(VARIANT_FLAGS)})"
+            )
+    scoring, weight = None, None
+    if head:
+        name, _, w = head.partition(":")
+        if name not in SCORINGS:
+            raise ValueError(
+                f"unknown rerank scoring {name!r} (choose from {', '.join(SCORINGS)})"
+            )
+        scoring, weight = name, float(w) if w else None
+    return _Variant(scoring, weight, "entities" in flags, "supersession" in flags)
 
 
 def _evidence_metrics(
@@ -229,6 +253,7 @@ def _process_sample(
     extract: bool,
     variants: Sequence[str] = ("",),
     judge_answers: bool = True,
+    dream: bool = False,
 ) -> list[LongMemScore]:
     """Ingest one question's history ONCE, then retrieve (+ answer + judge) each QA under every
     rerank-scoring variant. Self-contained on the given `db` and the question's own tenant
@@ -237,16 +262,22 @@ def _process_sample(
 
     Variants are evaluated against the same ingest — the paired design RQ-3 needs, and required
     anyway: re-ingesting into the same DB would double-count graph beliefs (`store_many` has no
-    replay guard). The default `("",)` is the single legacy configuration."""
+    replay guard). The default `("",)` is the single legacy configuration.
+
+    `dream=True` runs one Dream State pass after ingest (with `gen`), so entities carry the
+    summaries a `+entities` variant appends."""
     _ingest_sample(db, sample, agent_id, extract=extract)
+    if dream:
+        run_dream_state(db, tenant_id=sample.sample_id, generator=gen)
     out: list[LongMemScore] = []
     for qa in sample.qa:
         for variant in variants:
-            scoring, weight = _parse_variant(variant)
+            v = _parse_variant(variant)
             retrieved = retrieve(
                 db, query=qa.question, tenant_id=sample.sample_id,
-                agent_id=agent_id, mode=mode, k=k, rerank=rerank or scoring is not None,
-                rerank_scoring=scoring, rerank_time_weight=weight,
+                agent_id=agent_id, mode=mode, k=k, rerank=rerank or v.scoring is not None,
+                rerank_scoring=v.scoring, rerank_time_weight=v.weight,
+                entity_summaries=v.entities, supersession=v.supersession,
                 # Variants compare scorings on identical state: a read-only probe, so one
                 # variant's spaced-repetition refresh can't shift the decay the next one sees.
                 record_access=not variant,
@@ -309,6 +340,7 @@ def run_longmemeval(
     checkpoint: str | Path | None = None,
     resume: bool = False,
     progress: bool = False,
+    dream: bool = False,
 ) -> LongMemReport:
     """Ingest each question's history, answer from memory, judge accuracy; aggregate.
 
@@ -325,7 +357,9 @@ def run_longmemeval(
     `rerank_scorings` (RQ-3), e.g. `["replace", "rrf", "event_time:0.2"]`, evaluates every
     rerank-scoring variant against ONE ingest per question and reports each, plus paired tests
     of each variant against the first. `judge_answers=False` (`--retrieval-only`) skips the
-    answer + judge LLM calls, reporting only the deterministic evidence metrics.
+    answer + judge LLM calls, reporting only the deterministic evidence metrics. `dream=True`
+    runs a Dream State pass per question after ingest (needs `extract`), so a `+entities`
+    variant has summaries to append.
 
     `checkpoint` (JSONL) appends each question's scores the moment it finishes, so a crash
     (e.g. the DB going away an hour in) costs one question, not the run. `resume=True` loads
@@ -334,6 +368,8 @@ def run_longmemeval(
     tenant, and re-ingesting over it would double-count graph beliefs."""
     gen = generator or get_generator()
     jdg = judge or gen
+    if dream and not extract:
+        raise ValueError("dream=True needs extract=True — Dream State summarizes graph entities")
     variants: tuple[str, ...] = tuple(rerank_scorings) if rerank_scorings else ("",)
     for spec in variants:
         _parse_variant(spec)  # validate up front — never fail minutes into a paid run
@@ -372,6 +408,7 @@ def run_longmemeval(
         return _process_sample(
             conn, sample, gen=gen, jdg=jdg, agent_id=agent_id, mode=mode, k=k,
             rerank=rerank, extract=extract, variants=variants, judge_answers=judge_answers,
+            dream=dream,
         )
 
     def _done(done: int, sample: Sample, scores: list[LongMemScore]) -> None:
@@ -593,7 +630,14 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--rerank-scoring", default=None,
                         help="RQ-3: comma-separated rerank-scoring variants to compare on ONE "
                              "ingest, e.g. replace,rrf,event_time or event_time:0.2 (weight). "
-                             "The first is the baseline for the paired tests. Implies --rerank")
+                             "The first is the baseline for the paired tests. Implies --rerank. "
+                             "+entities / +supersession suffixes switch on entity summaries / "
+                             "GX-2 supersession (e.g. replace,replace+supersession; needs "
+                             "--dream, and FACT_SUPERSESSION=true for the supersession links)")
+    parser.add_argument("--dream", action="store_true",
+                        help="run one Dream State pass per question after ingest (LLM: one "
+                             "summary call per entity with >= CONSOLIDATION_MENTION_THRESHOLD "
+                             "mentions). Needs --extract")
     parser.add_argument("--retrieval-only", action="store_true",
                         help="skip answer + judge (no LLM calls): report only the deterministic "
                              "evidence metrics (needs a dataset converted with --evidence)")
@@ -622,7 +666,7 @@ def main(argv: list[str] | None = None) -> int:
         rerank=args.rerank, extract=args.extract, min_accuracy=args.min_accuracy,
         concurrency=args.concurrency, rerank_scorings=scorings,
         judge_answers=not args.retrieval_only, checkpoint=args.checkpoint, resume=args.resume,
-        progress=True,
+        progress=True, dream=args.dream,
     )
     print(_format(report, gated=args.min_accuracy is not None))
     return 0 if report.passed else 1

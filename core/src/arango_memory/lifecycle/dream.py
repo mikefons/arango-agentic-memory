@@ -27,6 +27,7 @@ from ..generation import Generator, get_generator
 from ..models import utcnow_iso
 from ..telemetry import metrics
 from .conflict import supersede
+from .supersession import run_supersession
 
 _CONFLICT_SYSTEM = (
     "Two entities were flagged as similar. Decide if they are the SAME real-world "
@@ -45,9 +46,13 @@ FOR e IN entities
   RETURN e
 """
 
+# Most recent first (event time, else write time), capped — an entity mentioned by
+# thousands of memories must not become one unbounded distillation prompt.
 _MENTIONING = """
 FOR m IN 1..1 INBOUND @entity_id mentions
   FILTER m.invalid_at == null
+  SORT NOT_NULL(m.event_time, m.created_at) DESC
+  LIMIT @limit
   RETURN m.text
 """
 
@@ -59,6 +64,7 @@ class DreamResult:
     consolidated: int = 0
     cleared: int = 0
     breaker_tripped: bool = False
+    memories_superseded: int = 0  # GX-2 memory-level links (FACT_SUPERSESSION)
 
 
 def _different_community(a: dict[str, Any], b: dict[str, Any]) -> bool:
@@ -88,10 +94,16 @@ def run_dream_state(
         else settings.dream_breaker_threshold
     )
 
+    # GX-2: independent of the entity review below (and of its breaker — it hides nothing).
+    linked = (
+        run_supersession(db, tenant_id=tenant_id, generator=gen).superseded
+        if settings.fact_supersession else 0
+    )
+
     bind: dict[str, Any] = {"tenant_id": tenant_id, "threshold": threshold}
     candidates = list(cast(Cursor, db.aql.execute(_CANDIDATES, bind_vars=bind)))
     if not candidates:
-        return DreamResult()
+        return DreamResult(memories_superseded=linked)
 
     supersessions: list[tuple[str, str]] = []  # (new_key, old_key)
     clears: list[str] = []
@@ -128,8 +140,11 @@ def run_dream_state(
                     clears.append(key)
 
         if entity.get("mention_count", 0) >= threshold:
+            mention_bind: dict[str, Any] = {
+                "entity_id": entity["_id"], "limit": settings.dream_distill_max_mentions,
+            }
             texts = list(
-                cast(Cursor, db.aql.execute(_MENTIONING, bind_vars={"entity_id": entity["_id"]}))
+                cast(Cursor, db.aql.execute(_MENTIONING, bind_vars=mention_bind))
             )
             summary = gen.complete(
                 "\n".join(f"- {t}" for t in texts), system=_DISTILL_SYSTEM
@@ -140,7 +155,7 @@ def run_dream_state(
     reviewed = len(candidates)
     if reviewed and len(supersessions) / reviewed > breaker:
         metrics.emit("consolidation", promoted=0, superseded=0, cleared=0, breaker_tripped=True)
-        return DreamResult(reviewed=reviewed, breaker_tripped=True)
+        return DreamResult(reviewed=reviewed, breaker_tripped=True, memories_superseded=linked)
 
     now = utcnow_iso()
     entities = db.collection("entities")
@@ -164,4 +179,5 @@ def run_dream_state(
         superseded=len(supersessions),
         consolidated=len(summaries),
         cleared=len(clears),
+        memories_superseded=linked,
     )

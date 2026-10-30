@@ -589,6 +589,25 @@ Dream State confirms contradiction:
   (`MAX(belief, centrality, weight)`), so the agent prioritizes recently-confirmed
   relations; surfaced in `/v1/graph` edges. Knobs: `weight_ewa_alpha`, `weight_lambda`.
 - **Deterministic override:** human-edited config wins over LLM-extracted facts (checked first at retrieval).
+- **Memory-level fact supersession (GX-2):** the diagram above is *entity* conflict
+  (two entities that are the same thing). A changed *fact* — "Sam lives in Boston", later
+  "Sam moved to Denver" — is handled at the memory level, Graphiti-style but without hiding
+  anything (`lifecycle/supersession.py`, behind `FACT_SUPERSESSION`, default off):
+  - **Detect (Dream State, batched):** each not-yet-checked memory is compared with up to 3
+    older memories of the same agent that share an entity with it and reach
+    `SUPERSESSION_MIN_SIMILARITY` (0.5) embedding cosine. One LLM call per memory that has
+    candidates; memories are processed oldest-first, so a chain links each statement to the
+    next. Incremental via `supersession_checked_at`. Measured at ~43 calls / ~43k input tokens
+    per ~500-turn LongMemEval history.
+  - **Record:** the old memory gets `superseded_by` and `valid_to` (the newer memory's time).
+    `invalid_at` stays null: RQ-3 showed temporal reasoning needs the old statements.
+  - **Retrieve:** when a hit is superseded, its current successor (following the chain) is
+    ranked directly above it, pulled in if retrieval missed it (k is kept), and the stale line
+    is annotated `(superseded <time>)`. This is the newness signal *scoped to conflicting
+    statements of the same fact* that RQ-3 called for, instead of a global recency prior.
+    Links are read live from the collection, not through the search view, which lags updates.
+  - **Point-in-time (`as_of`):** retrieval can be restricted to memories that existed by a
+    date; supersession is then judged as of that date (a link made later is ignored).
 
 ---
 
@@ -1123,6 +1142,75 @@ spans miss. So the graph's contribution (HX-1c: +0.089 of the product gain) grow
 extractor — but at a real cost (~$45 / 1h wall vs spaCy's keyless seconds), so spaCy stays the default and
 haiku is the accuracy-max option. The run also exercised the #231 fail-soft path (rode through transient
 Anthropic 5xx to 90/90 with no crash). Same answerer/judge-model caveat as above.
+
+**Same-day re-measure + Graphiti head-to-head (rev 97, 2026-10-03).** Run alongside a planned Graphiti
+comparison, the product configuration (spaCy graph + local reranker, `--k 10 --rerank --extract`, OpenAI
+embeddings, Haiku answerer/judge) was re-run on the same stratified-90 slice. It now scores **0.633**:
+
+| question-type | product, Aug (HX-1b) | **product, 2026-10-03** | Δ |
+|---|---|---|---|
+| **overall** | 0.522 | **0.633** | **+0.111** |
+| multi-session | 0.267 | **0.533** | +0.266 |
+| single-session-user | 0.600 | 0.733 | +0.133 |
+| single-session-assistant | 0.867 | 1.000 | +0.133 |
+| single-session-preference | 0.133 | 0.267 | +0.134 |
+| knowledge-update | 0.600 | 0.667 | +0.067 |
+| temporal-reasoning | 0.667 | 0.600 | −0.067 |
+
+The gain is **not attributed**: several retrieval changes landed after HX-1b. The most likely large one
+is the vector-search fix (#236: `n_probe` was never passed, so trained IVF searched one cell, about 30%
+recall loss); others are the entity-resolution fix (#243) and Haiku answerer/judge drift. Treat 0.633 as
+the current number and the HX-1b–1d figures as historical (the haiku-extractor rung was not re-run).
+Results: `core/bench_runs/h2h/` (gitignored).
+
+*Graphiti on our harness* (`core/scripts/graphiti_longmemeval.py`) uses the same questions, answer prompt,
+judge and answerer model, so only the memory system differs, and its rows pair with ours per question.
+Graphiti (graphiti-core 0.30.2) is configured for its best case:
+- one episode per session via `add_episode` (the path with fact invalidation), dated by the session;
+- Haiku 4.5 for extraction;
+- `COMBINED_HYBRID_SEARCH_CROSS_ENCODER` with its local BGE reranker;
+- top 20 facts + 20 entities, rendered in the Zep paper's context template;
+- Neo4j 5.26.
+
+A 2-question pilot measured its ingestion. **One LongMemEval question (~48 sessions) costs Graphiti about
+4.65M input + 73k output LLM tokens, about $5 at Haiku rates, and about 10 minutes**, against **no LLM tokens**
+for our default ingest. Our whole 90-question run, including the answer and judge calls, took 18 minutes
+at concurrency 3. The full Graphiti run (≈ $450, ≈ 4 h) was **not run** (owner's call on cost), so there
+is **no accuracy comparison**. The runner is checkpointed and ready if one is wanted. Graphiti's published
+numbers (Zep paper: 63.8% gpt-4o-mini / 71.2% gpt-4o on the full LongMemEval-S) use a different sample,
+weighting and models, so they are not comparable to ours.
+
+Three integration breaks had to be fixed to run Graphiti at all; all are recorded in the runner:
+- FalkorDB's current image (6.x, used by Graphiti's own compose file) rejects its full-text index query;
+- `graphiti-core[anthropic]` resolves to `anthropic` 1.x, which rejects the `temperature` argument it sends
+  (pinned to 0.111.0, from Graphiti's lockfile);
+- its BGE reranker's concurrent `predict` crashes on Apple MPS (serialized, the same fault as our #253).
+
+**GX-2 memory-level supersession — knowledge-update ordering (rev 98, 2026-10-04).** The
+Graphiti-inspired supersession pass (§12) was measured on the RQ-3 knowledge-update set
+(`bench_runs/ku_test.json`, 52 questions, 44 with ordering defined). The run used the product retrieval
+configuration (spaCy graph + reranker) and one ingest per question, with Dream State supersession only
+(distillation off). It was `--retrieval-only`, so no answer or judge calls. Cost was about $2.50 in
+Haiku, with an average of 9.4 links per question.
+
+| metric | `replace` | `replace+supersession` | paired |
+|---|---|---|---|
+| newest-above-stale | 0.614 | **0.659** | +2 / −0 of 44, p = 0.50 |
+| newest-in-top-k | 0.955 | 0.955 | — |
+| evidence recall@k | 0.978 | 0.978 | — |
+
+**Positive in direction, small, and not significant. It costs nothing elsewhere:** recall is unchanged
+and no question got worse. Unlike the global `event_time` prior (RQ-3), it cannot collapse temporal
+reasoning, because it only reorders linked pairs. The 15 questions still failing were diagnosed pair by
+pair. The bottleneck is **detection, not ranking**: of 16 stale/new evidence pairs, only 1 was linked.
+- **9 share no entity.** spaCy's named entities miss what the fact is about ("27 birds" → "32
+  birds", workout days), so the shared-entity gate never offers the pair.
+- **2 fall below** the 0.5 cosine threshold (0.39 and 0.46).
+- **4 were candidates but not linked.** The LLM said NONE, or the pair was outside the top 3.
+
+Next lever, if pursued: gate candidates on embedding similarity alone (top-N nearest older memories,
+dropping the shared-entity requirement), measured the same way. It costs more LLM calls. The default stays
+**off**; an accuracy run waits with the GX-1 benchmark. Results: `core/bench_runs/gx2/` (gitignored).
 
 ### Recall vs corpus size — the fusion-holds curve (HX-2)
 

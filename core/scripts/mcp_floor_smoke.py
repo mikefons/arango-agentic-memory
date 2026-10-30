@@ -1,13 +1,16 @@
-"""Smoke-test the MCP server's Streamable HTTP mode against the lowest supported `mcp` release.
+"""Smoke-test the MCP server's Streamable HTTP mode against the allowed `mcp` range.
 
-Run via `make mcp-floor`, an isolated `uv run --with mcp==<floor>`. It builds the HTTP app, does
-a real initialize + tools/list round-trip and checks the bearer gate, then repeats in OAuth mode
-(MCP-1) against a local test issuer: protected-resource metadata, an audience-bound token, and a
-tool call that must reach the core with the delegate key.
+Run via `make mcp-floor`: isolated `uv run`s of a real `.[mcp]` install, with mcp pinned to the
+floor (`mcp==1.21.1`) and to the newest 1.x. Each builds the HTTP app, does a real initialize +
+tools/list round-trip and checks the bearer gate, then repeats in OAuth mode (MCP-1) against a
+local test issuer: protected-resource metadata, an audience-bound token, and a tool call that
+must reach the core with the delegate key.
 
-1.17.0 is the floor (`mcp>=1.17.0`): `transport_security` arrived in 1.10, parametrised
+The floor is 1.21.1 because older releases import a private pydantic helper that pydantic 2.14
+removed. The features we need arrived earlier: `transport_security` in 1.10, parametrised
 `Context` injection in 1.14, and RFC 9728 path-inserted protected-resource metadata
-(`/.well-known/oauth-protected-resource/mcp`), which OAuth mode needs, in 1.17.
+(`/.well-known/oauth-protected-resource/mcp`), which OAuth mode needs, in 1.17. The ceiling is
+<2: mcp 2.0 renamed FastMCP.
 
 Usage: python scripts/mcp_floor_smoke.py <path-to-core-src>
 """

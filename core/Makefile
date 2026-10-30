@@ -40,12 +40,17 @@ test-crewai:     ## CrewAI adapter tests + types against a real crewai install
 	$(UVRUN) pytest tests/test_crewai.py tests/test_crewai_unified.py
 	$(UVRUN) mypy src/arango_memory/crewai
 
-# Keep in step with the `mcp>=` floor in pyproject.toml.
-MCP_FLOOR ?= 1.17.0
-# A real install of the package (`.[mcp]`) with mcp pinned to the floor; --isolated so no
-# local environment can mask a missing dependency.
-mcp-floor:       ## MCP Streamable HTTP smoke against the lowest supported mcp release
+# Keep in step with the `mcp>=…,<2` range in pyproject.toml. Each run is a real install of the
+# package (`.[mcp]`, which the OAuth smoke needs) with mcp pinned to one end of the range; the
+# rest resolves fresh (no lockfile), like a user's `pip install arango-memory[mcp]` — which is
+# what catches upstream breaks such as pydantic 2.14 (old mcp) or mcp 2.0 (FastMCP renamed).
+# --isolated so no local environment can mask a missing dependency.
+MCP_FLOOR ?= 1.21.1
+MCP_RANGE ?= mcp>=$(MCP_FLOOR),<2
+mcp-floor:       ## MCP Streamable HTTP smoke (bearer + OAuth) against the lowest AND newest allowed mcp release
 	uv run --isolated --no-project --with "mcp==$(MCP_FLOOR)" --with ".[mcp]" \
+	  python scripts/mcp_floor_smoke.py src
+	uv run --isolated --no-project --with "$(MCP_RANGE)" --with ".[mcp]" \
 	  python scripts/mcp_floor_smoke.py src
 
 lint:            ## Ruff lint

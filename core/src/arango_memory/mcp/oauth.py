@@ -30,7 +30,7 @@ logger = logging.getLogger(__name__)
 class VerifiedToken(AccessToken):
     """An access token plus the claims it was verified with. A subclass field (the SDK allows
     them) rather than `AccessToken.claims`, which only exists from mcp 1.28 — older releases
-    within our `mcp>=1.14` floor would silently drop it."""
+    within our `mcp>=1.21.1` floor would silently drop it."""
 
     verified_claims: dict[str, Any]
 

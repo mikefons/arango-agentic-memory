@@ -12,6 +12,21 @@ are versioned together and released from this repository.
 ## [Unreleased]
 
 ### Added
+
+- Entity summaries in retrieval: `RETRIEVE_ENTITY_SUMMARIES` / `opts.entity_summaries`
+  (default off) appends an `Entity summaries:` section to the `/v1/retrieve` context, made
+  from the Dream State summaries of the entities the hits mention. It shares
+  `max_memory_tokens` with the memories (at most 20% of it).
+- Memory-level fact supersession (GX-2), behind `FACT_SUPERSESSION` (default off). Dream State
+  links a memory to the older statements it updates (`superseded_by`, `valid_to`; nothing is
+  hidden). Retrieval (`opts.supersession`) ranks the current statement directly above a stale
+  one it retrieved, pulling it in if missed, and marks the stale line `(superseded <time>)`.
+  `/v1/dream` reports `memories_superseded`.
+- Point-in-time retrieval: `opts.as_of` (ISO date/date-time) limits retrieval to memories
+  that existed by then, with supersession judged as of then.
+- LongMemEval harness: `--dream` runs a Dream State pass per question; `+entities` /
+  `+supersession` variant suffixes (e.g. `--rerank-scoring replace,replace+supersession`)
+  compare those features on one ingest.
 - **MCP OAuth mode (MCP-1).** `python -m arango_memory.mcp --transport http --auth oauth` makes the
   MCP server an OAuth 2.1 resource server per the MCP authorization spec, for clients that connect
   to remote servers only through OAuth. It publishes RFC 9728 protected-resource metadata (and points
@@ -26,9 +41,29 @@ are versioned together and released from this repository.
   headers, gets `403`.
 
 ### Changed
-- The `mcp` extra's floor rises to **`mcp>=1.17.0`**, the first release serving path-inserted RFC 9728
-  metadata, which OAuth mode needs. `make mcp-floor` now smoke-tests both bearer and OAuth mode at the
-  floor.
+
+- The background LLM moves to Claude Haiku 5.5: `BACKGROUND_MODEL` now defaults to
+  `claude-haiku-5-5` (was `claude-haiku-4-5`). It is used for HyDE, the gate, Dream State,
+  supersession, the Haiku extractor and the eval answerer/judge.
+  - Haiku 5.5 thinks by default, so these short calls now send `thinking: disabled`.
+    `BACKGROUND_THINKING=true` restores the model's default; use it for models that reject
+    `disabled` (Opus 5.5, Sonnet 5.5).
+  - The `anthropic` floor rises to `>=0.47.0`, the first SDK version with the `thinking` parameter.
+  - The diligence-room demo defaults to `claude-haiku-5-5`.
+  - The Graphiti benchmark runner stays on Haiku 4.5, because graphiti-core sends `temperature`,
+    which Haiku 5.5 rejects.
+  - Benchmark figures recorded before this change (LongMemEval 0.633, GX-2's 0.659) used Haiku
+    4.5 as answerer and judge. Re-baseline before comparing.
+
+### Fixed
+
+- The `[mcp]` extra now requires `mcp>=1.21.1,<2` (was `>=1.14.0`). A fresh install resolved
+  mcp 2.x, which renamed FastMCP (`mcp.server.fastmcp` no longer exists), so the MCP server
+  failed on import. mcp releases before 1.21.1 also fail to import with pydantic 2.14. `make
+  mcp-floor` now smoke-tests both the lowest and the newest allowed release, resolved fresh as a
+  user's install would be.
+- Dream State distillation reads at most `DREAM_DISTILL_MAX_MENTIONS` (20) of an entity's
+  most recent memories. Before, it sent every mentioning memory in one LLM prompt.
 
 ## [0.1.0] — 2026-09-30
 

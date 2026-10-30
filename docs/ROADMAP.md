@@ -54,6 +54,9 @@ Status: ✅ shipped · 🔄 built, merge pending · ✖ closed (won't do). Unmar
 | 20 | MCP-3 | Legacy HTTP+SSE transport — ✖ closed, won't do (no client needs it) | S | #255 |
 | 21 | IMG-1 | Move the image to a newer Python ✅ — 3.14; Grype exception removed | S | — |
 | 22 | OBS | Obsidian adapter: vault ingestion, plugin, example vault (OBS-1–3) | L | — |
+| 23 | GX-1 | Entity summaries in `/v1/retrieve` (Graphiti's ENTITIES section) 🔄 — built in #266, off by default; **benchmark deferred** | S | — |
+| 24 | GX-2 | Memory-level fact supersession + `as_of` retrieval (the scoped newness signal RQ-3 called for) 🔄 — built, off by default | L | — |
+| 25 | GX-3 | Fact retrieval arm over typed-relation statements (needs an LLM/GLiREL extractor) | L | GX-2 |
 
 Recommended sequence: **MA-1 → MA-2 → MA-3 → MA-4 → MA-5 → MA-6**, with MA-7/MA-8
 schedulable any time (no dependencies on the others). MA-1…MA-8 are **shipped**. **RQ-1**
@@ -1345,8 +1348,8 @@ only surfaced against the real IdP:
 - Keycloak drops a role-mapped scope for users without those roles (roles moved to their own scope).
 
 The SDK's `AccessToken.claims` only exists from mcp 1.28, so the verifier uses its own subclass
-field, and the floor rose to `mcp>=1.17.0` for path-inserted RFC 9728 metadata. Both are covered by
-the floor smoke test.
+field. Path-inserted RFC 9728 metadata needs mcp 1.17, which the extra's range (`mcp>=1.21.1,<2`,
+set by #269) already covers. Both are covered by the range smoke test.
 
 ### MCP-2 — Packaged MCP HTTP deployment  ✅
 
@@ -1407,4 +1410,64 @@ than kept. Fixable image findings: 4 Medium/Low, down from 10 with a High. Every
 has a 3.14 wheel; the slim build compiles nothing but our own package. The full core suite passes on 3.14,
 both image roles boot healthy, and an MCP round-trip works. CI runs the core job on 3.11 (wheel floor) and
 3.14 (image). `requires-python` stays `>=3.11`; ruff/mypy keep targeting 3.11 so the floor stays honest.
+
+---
+
+## GX — Ideas taken from Graphiti (from the 2026-10 comparison, DESIGN §23 rev 97)
+
+Three Graphiti designs aimed at our weakest LongMemEval types (stratified-90, 2026-10-03:
+preference 0.267, multi-session 0.533, temporal 0.600, knowledge update 0.667; overall 0.633).
+We take the designs, not Graphiti's synchronous per-episode LLM pipeline (~$5 per question
+measured). Any LLM work runs batched in Dream State or in the opt-in extraction tier.
+
+### GX-1 — Entity summaries in the retrieved context  🔄 (code in #266; benchmark deferred)
+
+**Built.** `RETRIEVE_ENTITY_SUMMARIES` / `opts.entity_summaries` (default **off**) appends up to 5
+Dream State entity summaries for the entities the hits mention, within 20% of
+`max_memory_tokens`. Also capped Dream distillation input (`DREAM_DISTILL_MAX_MENTIONS`, 20); it
+was unbounded.
+
+**Deferred, to run after the current tasks:** the paired benchmark that decides the default.
+```
+arango-memory-longmemeval lme.json --rerank --extract --dream \
+  --rerank-scoring replace,replace+entities --concurrency 8 \
+  --checkpoint bench_runs/gx1/run.jsonl
+```
+- **Cost:** ~$25–35 in Haiku (Dream summaries ~250k input tokens/question with the cap, plus
+  answer and judge for both variants) and ~1h. This is a user spend decision.
+- **Decision rule:** flip the default on if `replace+entities` beats `replace` on accuracy
+  (paired McNemar) without losing on single-session types. Record the result in DESIGN §23.
+- **Expectation:** modest. About half of the 11 preference misses are the answerer saying "I
+  don't know" with the relevant memory already in context. That is an answer-prompt issue entity
+  summaries can't fix, and worth its own look.
+
+### GX-2 — Memory-level fact supersession + `as_of` retrieval  🔄 (built; off by default)
+
+**Decision (2026-10-04):** the unit is the *memory*, not an extracted fact. Our typed
+relations are four generic labels (`associated_with`, …), so "Sam associated_with Boston" and
+"… Denver" don't contradict and there is nothing at the relation level to supersede. Atomic
+facts fold into GX-3, which needs a fact store anyway. Design and measured cost: DESIGN §12.
+Validation: tests plus the free knowledge-update ordering metric (`--retrieval-only`); a paired
+accuracy run waits with the GX-1 benchmark.
+
+**Measured (2026-10-04, DESIGN §23 rev 98):** knowledge-update newest-above-stale went from 0.614 to
+**0.659** (+2/−0 of 44, p = 0.50), with recall unchanged, for about $2.50. The limit is detection: 9 of
+16 missed stale/new pairs share no spaCy entity. Follow-up: a similarity-only candidate gate.
+
+Original scope note:
+
+Graphiti stores facts with valid/invalid times, and a contradicting fact closes the old one.
+RQ-3 found a global newness prior hurts temporal reasoning, but that a newness signal
+scoped to conflicting statements of the same fact is what knowledge-update needs. That is this
+mechanism. Today supersession is entity-level, decided in Dream State
+(`lifecycle/conflict.py`). Scope: typed relations as facts with valid-from/valid-to;
+same-fact contradiction detection in Dream State; newest-first only among conflicting facts;
+an `as_of` retrieve filter. Measure with the RQ-3 ordering metric plus accuracy.
+
+### GX-3 — Fact retrieval arm
+
+Graphiti searches short fact sentences rather than raw turns, which gathers scattered
+multi-session evidence. Our GLiREL/Haiku extractors already produce typed relations, but only as
+graph edges. Scope: render them as fact sentences, embed them, and add a fourth arm to the
+fusion. Only active when an LLM or GLiREL extractor is configured, so the keyless default is unchanged.
 
