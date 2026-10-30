@@ -1262,6 +1262,59 @@ links things that aren't updates is not yet measured. Proposed next step, cheap 
 
 The default stays **off**. Results: `core/bench_runs/gx2b/` (gitignored).
 
+**GX-2 gates re-run with explain-then-answer verdicts (rev 100, 2026-10-30).** Both gates were run
+again after #272. Everything matched rev 99 (same 52 questions, Haiku 5.5, one fresh database per
+gate, distillation off, `--retrieval-only`) except the verdict prompt, which now asks for a short
+explanation and then a strictly parsed `ANSWER:` line, capped at 256 tokens.
+
+| gate (Haiku 5.5) | links made (rev 99) | newest-above-stale, `replace` → `+supersession` | paired |
+|---|---|---|---|
+| entity (0.5, top 3) | 75 (40) | 0.614 → **0.773** | +7 / −0 of 44, p = 0.016 |
+| similarity (0.5, top 5) | 156 (73) | 0.614 → **0.864** | +11 / −0 of 44, p = 0.001 |
+
+Neither gate made any question worse. Evidence recall held: 0.967 → 0.978 with the entity gate,
+0.967 → 0.967 with the similarity gate. These are the first GX-2 results that are significant on
+this set. The format fix, not the gate, gave most of the gain.
+
+**False positives (hand-judged, 15 random links per gate; a small sample).**
+
+*Entity gate: about 9 of 15 were true updates.* The true ones gave a new value for the same
+fact:
+- Instagram followers rising to 600;
+- 3 → 4 Korean restaurants tried;
+- a Ticket to Ride high score of 124 → 132;
+- 3 → 4 weeks of a tidying routine;
+- wake-up time moving from 7:30 to 6:15.
+
+The false ones share a topic but not a fact. Examples: a BBQ sauce statement linked to a new
+grill, and an old trip itinerary linked to a new trip.
+
+*Similarity gate: about 4 of 15 were true updates.* Examples of true ones: favourite BBQ sauce
+changed; 4 → 5 painting projects. Most of its links join statements that are alike in form but
+unrelated in fact:
+- "I think I've got everything" → "I think I'm good to go now";
+- "continue" → "No response is needed";
+- one book recommendation request → another;
+- a ski-trip question → a sightseeing plan in the same state.
+
+So the similarity gate wins on ordering because it links more, and it does so at low precision.
+A false link only reorders: nothing is hidden, and a "superseded" mark is added. The cost of that
+reordering does not show on a knowledge-update-only set. On the other question types it could:
+- push a still-valid statement below an unrelated "successor";
+- label a current statement stale in the context the answerer reads.
+
+**Decision.** The default stays **off**. If it is turned on, the entity gate is the candidate:
+roughly 0.6 precision against roughly 0.3, and most of the gain.
+
+Before either becomes a default, two steps:
+1. Tighten the verdict to require a *changed value of the same attribute*, since most false
+   positives are same-topic, different-fact.
+2. Run the paired accuracy measurement on the full LongMemEval mix, not just knowledge-update, to
+   price false links on the other question types. It goes with the deferred GX-1 run.
+
+The `unparsed` count is emitted as a metric but was not captured by the harness. Results:
+`core/bench_runs/gx2c/` (gitignored).
+
 ### Recall vs corpus size — the fusion-holds curve (HX-2)
 
 The project's thesis as a chart: on an **open corpus that grows**, graph+vector+BM25 fusion
