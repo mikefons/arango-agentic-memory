@@ -2,8 +2,9 @@
 
 Graphiti closes a fact's validity window when a newer fact contradicts it. Our unit is the
 memory: a Dream State pass compares each not-yet-checked memory with the older memories of the
-same agent that share an entity with it and read alike, and asks the LLM which of them it
-updates. An updated memory gets `superseded_by` (the newer memory's key) and `valid_to` (the
+same agent that share an entity with it and read alike (`SUPERSESSION_GATE=entity`) — or, with
+`SUPERSESSION_GATE=similarity`, the nearest ones by embedding alone — and asks the LLM which of
+them it updates. An updated memory gets `superseded_by` (the newer memory's key) and `valid_to` (the
 newer memory's time). Nothing is hidden — `invalid_at` stays null — because RQ-3 showed
 temporal reasoning needs the old statements; retrieval uses the link only to rank the current
 statement above a stale one it retrieved, and to annotate the stale line.
@@ -71,6 +72,24 @@ FOR eid IN ents
 _PER_ENTITY = 200
 _FETCH = 20
 
+# Similarity gate: the nearest memories of the same agent by embedding alone, no shared entity
+# required. Exact scan over the agent's memories (idx_mem_scope narrows it to tenant + agent).
+# Rows run oldest-first and each is stamped, so every older memory is already checked: skipping
+# unchecked ones keeps newer near-duplicates from crowding the older candidates out of the LIMIT.
+_SIMILAR = """
+FOR o IN memories
+  FILTER o.tenant_id == @tenant_id AND o.agent_id == @agent_id AND o.invalid_at == null
+     AND o._key != @key AND o.superseded_by == null AND o.type != "working"
+     AND o.supersession_checked_at != null
+  LET sim = COSINE_SIMILARITY(o.embedding, @vec)
+  FILTER sim >= @min_sim
+  SORT sim DESC
+  LIMIT @limit
+  RETURN { key: o._key, text: o.text, event_time: o.event_time, created_at: o.created_at }
+"""
+# Equal or mixed-format times are still sorted out in Python, so fetch a little deeper.
+_SIMILAR_FETCH = 50
+
 
 @dataclass
 class SupersessionResult:
@@ -110,9 +129,12 @@ def run_supersession(
             bind: dict[str, Any] = {
                 "key": row["key"], "tenant_id": tenant_id, "agent_id": row["agent_id"],
                 "vec": row["embedding"], "min_sim": settings.supersession_min_similarity,
-                "per_entity": _PER_ENTITY, "limit": _FETCH,
             }
-            found = cast(Cursor, db.aql.execute(_CANDIDATES, bind_vars=bind))
+            if settings.supersession_gate == "similarity":
+                query, bind["limit"] = _SIMILAR, _SIMILAR_FETCH
+            else:
+                query, bind["limit"], bind["per_entity"] = _CANDIDATES, _FETCH, _PER_ENTITY
+            found = cast(Cursor, db.aql.execute(query, bind_vars=bind))
             older = [o for o in found if when(o) < mine][: settings.supersession_max_candidates]
         if older:
             prompt = f"NEW: {_clip(row['text'])}\nOLDER:\n" + "\n".join(

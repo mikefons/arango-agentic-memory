@@ -13,6 +13,7 @@ from fastapi.testclient import TestClient
 from arango_memory.config import settings
 from arango_memory.generation import FakeGenerator
 from arango_memory.ingest.store import store
+from arango_memory.lifecycle import supersession
 from arango_memory.lifecycle.dream import run_dream_state
 from arango_memory.lifecycle.supersession import _parse, run_supersession
 from arango_memory.retrieve.search import force_view_sync, retrieve
@@ -169,3 +170,56 @@ def test_bad_as_of_is_a_caller_error(db: StandardDatabase, api: TestClient) -> N
         "opts": {"as_of": "last tuesday"},
     })
     assert r.status_code == 422
+
+
+def test_similarity_gate_compares_without_a_shared_entity(
+    db: StandardDatabase, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # "27 birds" → "32 birds": no shared named entity, so the entity gate never offers the pair.
+    t = "t_ss10"
+    old = _put(db, t, "my count of yard birds is twenty seven", JAN)
+    new = _put(db, t, "my count of yard birds is now thirty two", MAR)
+    gen, prompts = _answers("1")
+    run_supersession(db, tenant_id=t, generator=gen)
+    assert prompts == []  # entity gate (default): no candidates
+
+    db.aql.execute("FOR m IN memories FILTER m.tenant_id == @t "
+                   "UPDATE m WITH { supersession_checked_at: null } IN memories",
+                   bind_vars={"t": t})
+    monkeypatch.setattr(settings, "supersession_gate", "similarity")
+    result = run_supersession(db, tenant_id=t, generator=gen)
+    assert result.superseded == 1
+    assert _doc(db, old)["superseded_by"] == new
+
+
+def test_similarity_gate_keeps_agent_scope_and_threshold(
+    db: StandardDatabase, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(settings, "supersession_gate", "similarity")
+    gen, prompts = _answers("1")
+    _put(db, "t_ss11", "my count of yard birds is twenty seven", JAN, agent="b")
+    _put(db, "t_ss11", "my count of yard birds is now thirty two", MAR)
+    run_supersession(db, tenant_id="t_ss11", generator=gen)
+    assert prompts == []  # the older statement is another agent's
+
+    monkeypatch.setattr(settings, "supersession_min_similarity", 0.99)
+    _put(db, "t_ss12", "my count of yard birds is twenty seven", JAN)
+    _put(db, "t_ss12", "my count of yard birds is now thirty two", MAR)
+    run_supersession(db, tenant_id="t_ss12", generator=gen)
+    assert prompts == []  # below the similarity threshold
+
+
+def test_similarity_gate_newer_memories_do_not_crowd_out_older(
+    db: StandardDatabase, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(settings, "supersession_gate", "similarity")
+    monkeypatch.setattr(supersession, "_SIMILAR_FETCH", 1)
+    t = "t_ss13"
+    old = _put(db, t, "my count of yard birds is twenty seven", JAN)
+    mid = _put(db, t, "my count of yard birds is now thirty two", FEB)
+    # Same tokens as `mid` (fake embeddings are bags of words): its nearest match, but newer.
+    _put(db, t, "now my count of yard birds is thirty two", MAR)
+    gen, prompts = _answers("1")
+    run_supersession(db, tenant_id=t, generator=gen)
+    assert prompts[0].startswith("NEW: my count of yard birds is now thirty two\nOLDER:\n1. my")
+    assert _doc(db, old)["superseded_by"] == mid
