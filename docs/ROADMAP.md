@@ -1462,7 +1462,11 @@ The default stays off. Next:
 about the same thing, a stated or clearly implied new value, and nothing for a shared topic alone.
 The cap rose from 256 to 640 tokens, because with 4–5 candidates the 256 cap cut off about one
 reply in ten. In a labelled in-context replay, precision went from 0.79 to 0.88 and recall from
-0.79 to 0.82. Next: re-run both gates on the KU set as the out-of-sample check.
+0.79 to 0.82. On the KU re-run nothing measurable changed: 0.773 for the entity gate and 0.864
+for similarity, the same as before. Similarity-gate precision is still about 4 in 13, so prompt
+wording is exhausted as a lever. Next options are structural: a higher similarity floor, fewer
+candidates, or requiring a shared entity or value. The entity gate (about 0.8 precision) remains
+the default candidate.
 
 Original scope note:
 

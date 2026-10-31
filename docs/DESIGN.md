@@ -1352,9 +1352,35 @@ Caveats:
 - Every probe pair was linked in rev 100, so recall here means keeping links the old prompt made.
   It does not measure finding new ones.
 
-The KU ordering re-run of both gates is the out-of-sample check, and it has not been run yet.
 Cost: a reply uses only the tokens it needs, so the larger cap costs nothing extra on short
-replies. The default stays **off**.
+replies.
+
+**Out-of-sample check: no measurable change.** Both gates were re-run on the KU set, set up as in
+rev 100 with fresh databases.
+
+| gate (Haiku 5.5) | links (rev 100) | newest-above-stale, `replace` → `+supersession` | sampled links that were real updates (rev 100, full text) |
+|---|---|---|---|
+| entity | 71 (75) | 0.614 → 0.773, +7 / −0 | 12 / 15 (12 / 14) |
+| similarity | 155 (156) | 0.614 → 0.864, +11 / −0 | 4 / 13, 2 ambiguous (6 / 15) |
+
+The ordering numbers are identical, recall is 0.978 in both, and the link counts barely moved. The
+new sample was drawn with a different seed and judged on full text.
+
+The similarity gate's false links are still mostly same-topic, different-fact pairs. Examples:
+two drafts of the same story; a misplaced screwdriver against a request for one; a beginner trail
+against a harder one.
+
+So the replay's precision gain did not carry over: it was in-sample, and on the real pass the
+prompt change is neutral. The 640-token cap stays for the truncation it removes.
+
+Prompt wording looks exhausted as a lever for the similarity gate. The next options are
+structural:
+- a higher similarity floor;
+- fewer candidates;
+- requiring the entity gate or a shared value-bearing span.
+
+The default stays **off**, and the entity gate (about 0.8 precision on two samples) remains the
+candidate if it is ever turned on. Results: `core/bench_runs/gx2d/` (gitignored).
 
 ### Recall vs corpus size — the fusion-holds curve (HX-2)
 

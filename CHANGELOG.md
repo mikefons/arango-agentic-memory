@@ -56,7 +56,8 @@ are versioned together and released from this repository.
   line. The prompt now also requires the *same fact about the same thing*: a shared topic, a
   different item or occasion, or a statement with no fact (a request or small talk) is not an
   update, while a clearly implied new value ("added another one") is. In a labelled replay,
-  precision went from 0.79 to 0.88 and recall from 0.79 to 0.82 (DESIGN §23 rev 101).
+  precision went from 0.79 to 0.88 and recall from 0.79 to 0.82, but on a fresh KU run the
+  ordering metric and link counts did not change (DESIGN §23 rev 101).
 - The `[crewai]` extra is now marked `python_version < '3.14'`, matching crewai's own cap. On
   Python 3.14, pip skipped every current crewai and fell back to an old, uncapped release that
   crashes on import (chromadb's pydantic-v1 settings). The CrewAI CI job is pinned to Python 3.12,
