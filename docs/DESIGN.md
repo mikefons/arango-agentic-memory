@@ -1425,7 +1425,32 @@ Two other filters were tried and rejected:
   memories have no speaker field to filter on.
 - **A cosine floor alone**, which costs gold links at the same rate as false ones (table above).
 
-The KU re-run with the anchored gate is the out-of-sample check, and it has not been run yet.
+**Out-of-sample KU run.** The setup matched rev 101: Haiku 5.5, a fresh database, top 5,
+cosine ≥ 0.5, `--retrieval-only`.
+
+| gate (Haiku 5.5) | links | gold links | newest-above-stale | paired | sampled links that were real updates |
+|---|---|---|---|---|---|
+| entity (rev 101) | 71 | — | 0.773 | +7 / −0, p = 0.016 | 12 / 15 |
+| similarity (rev 101) | 155 | 31 | 0.864 | +11 / −0, p = 0.001 | 4 / 13 |
+| **anchored** | **99** | **26** | **0.818** | **+9 / −0, p = 0.004** | **12 / 15** |
+
+Recall was 0.978 and no question got worse. Compared with the similarity gate, the anchored gate:
+- makes 36% fewer links;
+- keeps 26 of 31 gold links, close to the offline estimate of 83%;
+- reaches the entity gate's sampled precision (12 of 15, judged on full text).
+
+On ordering it lands between the two older gates. The true links sampled include egg stock (30 →
+20 dozen), a 5K personal best, signed baseballs (15 → 20), and therapy frequency. The false ones:
+an assistant's laptop recommendation against a later storage question, two different trip
+itineraries, and two Instagram post drafts.
+
+It costs 2 ordering wins against the similarity gate and has about twice its precision. It gains
+2 against the entity gate at the same precision. **The anchored gate is the best balance of the
+three and the candidate if supersession is turned on.**
+
+The default stays **off**. Turning it on waits on the full-mix paired accuracy run with GX-1,
+which prices any false link on the other question types. Results: `core/bench_runs/gx2e/`
+(gitignored).
 
 ### Recall vs corpus size — the fusion-holds curve (HX-2)
 
