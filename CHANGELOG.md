@@ -33,6 +33,10 @@ are versioned together and released from this repository.
 - LongMemEval harness: `--dream` runs a Dream State pass per question; `+entities` /
   `+supersession` variant suffixes (e.g. `--rerank-scoring replace,replace+supersession`)
   compare those features on one ingest.
+- LongMemEval harness: `--answer-only` reuses the ingest and Dream pass an earlier run left in
+  `ARANGO_DB`, and only retrieves, answers and judges. Repeat passes measure answerer and judge
+  noise for cents rather than a re-ingest. It refuses `--extract`, `--dream` and `--resume`,
+  and checks every question's tenant before any LLM call.
 
 ### Changed
 
