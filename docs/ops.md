@@ -130,7 +130,8 @@ ones; also `opts.supersession`), `SUPERSESSION_MIN_SIMILARITY` (0.5 — embeddin
 statement needs to be compared), `SUPERSESSION_MAX_CANDIDATES` (3), `SUPERSESSION_GATE` (`entity` —
 older statements must share an entity; `similarity` compares the nearest ones by embedding alone,
 an exact scan of the agent's memories per new memory, and more memories find candidates, so
-expect more LLM comparisons per Dream pass),
+expect more LLM comparisons per Dream pass; `anchored` keeps only the similarity candidates that
+share an entity or a number with the new memory),
 `CORROBORATION_BASE` (0.5), `ONTOLOGY_EVOLUTION` (`false`),
 `ONTOLOGY_MIN_SUPPORT` (3); working memory: `WORKING_SESSION_TTL_SECONDS` (3600),
 `WORKING_CAPACITY` (7), `TOPIC_SHIFT_THRESHOLD` (0.7), `TOPIC_EWA_ALPHA` (0.5),

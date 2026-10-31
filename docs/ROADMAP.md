@@ -1468,6 +1468,19 @@ wording is exhausted as a lever. Next options are structural: a higher similarit
 candidates, or requiring a shared entity or value. The entity gate (about 0.8 precision) remains
 the default candidate.
 
+**Anchored gate (2026-10-31, DESIGN §23 rev 102):** `SUPERSESSION_GATE=anchored` keeps similarity
+candidates only when they share an entity or both contain a number. Applied to the existing links,
+it keeps 50 of 60 gold links and 125 of 251 others; hand-labelled precision rises from about 0.36
+to about 0.57. A cosine floor cuts gold and false links alike.
+
+KU run: newest-above-stale went from 0.614 to **0.818** (+9/−0 of 44, p = 0.004), with 99 links
+and sampled precision of 12/15. For comparison:
+- entity gate: 0.773, 71 links, 12/15;
+- similarity gate: 0.864, 155 links, 4/13.
+
+That makes the anchored gate the candidate if supersession is turned on. Next: the full-mix paired
+accuracy run, with GX-1.
+
 Original scope note:
 
 Graphiti stores facts with valid/invalid times, and a contradicting fact closes the old one.
