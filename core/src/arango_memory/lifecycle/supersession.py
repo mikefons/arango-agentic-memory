@@ -33,16 +33,20 @@ from ..telemetry import metrics
 _SUPERSEDE_SYSTEM = (
     "You compare a NEW statement with OLDER statements from the same history. An older "
     "statement is SUPERSEDED when the new one gives a newer value for the same fact (a change, "
-    "update or correction), so the older one is no longer current. Statements that only "
-    "relate, add detail, or concern different facts are not superseded. First say in one or two "
-    "sentences which fact each older statement states and whether the new statement changes its "
-    "value. Then end with a final line `ANSWER: ` followed by the numbers of the superseded older "
-    "statements, comma-separated, or NONE."
+    "update or correction), so the older one is no longer current. The new value may be stated "
+    "or clearly implied (one more item added, a plan now done, a time moved). Sharing a topic is "
+    "not enough: it must be the same fact about the same thing. A different item, occasion or "
+    "choice, a statement that only relates or adds detail, and requests, questions or small talk "
+    "that state no fact are not superseded. First say in one or two sentences which fact each "
+    "older statement states and whether the new statement changes its value. Then end with a "
+    "final line `ANSWER: ` followed by the numbers of the superseded older statements, "
+    "comma-separated, or NONE."
 )
 # Explain-then-answer (DESIGN §23 rev 99): with thinking off, the short explanation is where the
 # model reasons — a bare-numbers reply made Haiku 5.5 miss most updates, and a 32-token cap cut
-# its prose off before the number. Room for the explanation plus the answer line.
-_VERDICT_MAX_TOKENS = 256
+# its prose off before the number. The explanation runs per older statement, so the cap must fit
+# five of them: at 256, about one reply in ten was cut off before its answer line (rev 101).
+_VERDICT_MAX_TOKENS = 640
 _ANSWER_LINE = re.compile(r"^\s*ANSWER:\s*(.*?)\s*\.?\s*$", re.MULTILINE)
 _ANSWER_VALUE = re.compile(r"NONE|\d+(?:\s*,\s*\d+)*")
 

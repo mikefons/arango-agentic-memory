@@ -1451,11 +1451,22 @@ check the links for false positives.
 - **0.773** with the entity gate (+7/−0 of 44, p = 0.016);
 - **0.864** with the similarity gate (+11/−0 of 44, p = 0.001).
 
-Recall held in both runs. A hand-judged sample of links puts precision at about 9/15 for the
-entity gate and about 4/15 for the similarity gate; the false links share a topic but not a fact.
+Recall held in both runs. A hand-judged sample of links puts precision at about 12/14 for the
+entity gate and about 6/15 for the similarity gate (re-judged on full text in rev 101); the false
+links share a topic but not a fact.
 The default stays off. Next:
 - a "same attribute, changed value" verdict;
 - a full-mix paired accuracy run (with GX-1) to price false links on the other question types.
+
+**Same-fact verdict (2026-10-30, DESIGN §23 rev 101):** the prompt now requires the same fact
+about the same thing, a stated or clearly implied new value, and nothing for a shared topic alone.
+The cap rose from 256 to 640 tokens, because with 4–5 candidates the 256 cap cut off about one
+reply in ten. In a labelled in-context replay, precision went from 0.79 to 0.88 and recall from
+0.79 to 0.82. On the KU re-run nothing measurable changed: 0.773 for the entity gate and 0.864
+for similarity, the same as before. Similarity-gate precision is still about 4 in 13, so prompt
+wording is exhausted as a lever. Next options are structural: a higher similarity floor, fewer
+candidates, or requiring a shared entity or value. The entity gate (about 0.8 precision) remains
+the default candidate.
 
 Original scope note:
 

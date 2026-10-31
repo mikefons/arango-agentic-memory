@@ -1276,7 +1276,10 @@ Neither gate made any question worse. Evidence recall held: 0.967 → 0.978 with
 0.967 → 0.967 with the similarity gate. These are the first GX-2 results that are significant on
 this set. The format fix, not the gate, gave most of the gain.
 
-**False positives (hand-judged, 15 random links per gate; a small sample).**
+**False positives (hand-judged, 15 random links per gate; a small sample).** *Corrected in rev
+101:* these labels were made from 220-character previews of each statement. Re-judged on the full
+text, the entity gate's sample is **12 of 14** true updates (one is ambiguous) and the similarity
+gate's is **6 of 15**. The counts quoted below are the original, too-low ones.
 
 *Entity gate: about 9 of 15 were true updates.* The true ones gave a new value for the same
 fact:
@@ -1314,6 +1317,70 @@ Before either becomes a default, two steps:
 
 The `unparsed` count is emitted as a metric but was not captured by the harness. Results:
 `core/bench_runs/gx2c/` (gitignored).
+
+**GX-2 same-fact verdict and a larger cap (rev 101, 2026-10-30).** Rev 100's false links share a
+topic but not a fact, so the verdict prompt was tightened. Rev 100's 30 sampled links were
+re-judged on full text and used as a labelled probe: 18 true updates, 11 false, 1 ambiguous and
+unscored.
+
+Each link was replayed with its gate's real candidate list (up to 3 older statements for the
+entity gate, 5 for similarity), on Haiku 5.5 with thinking off, 2 runs each. This adds two
+findings to rev 100:
+- **The 256-token cap still truncates.** The explanation runs per older statement, so with 4–5
+  candidates the reply often ran out of tokens before its `ANSWER:` line: 5 of 58 replies were
+  unparsed. At 640 tokens, none were.
+- **A literal "same attribute, changed value" rule overshoots.** Its first draft required the new
+  value to be stated. That rejected most of this benchmark's updates, which are implied ("I just
+  added a new coin" against "37 coins"; "I finished it" against a reading plan), and cut recall to
+  0.78.
+
+The adopted prompt keeps rev 99's explain-then-answer shape and adds three rules:
+- the new value may be stated or clearly implied;
+- sharing a topic is not enough, it must be the same fact about the same thing;
+- a different item, occasion or choice, and requests, questions or small talk that state no fact,
+  are not superseded.
+
+| verdict (in context, 2 runs × 28 scored links) | precision | recall | links per call | unparsed |
+|---|---|---|---|---|
+| rev 99 prompt, 256 cap (shipped in #272) | 0.79 | 0.79 | 1.31 | 5 / 58 |
+| rev 99 prompt, 640 cap | 0.76 | 0.91 | 1.47 | 0 / 58 |
+| **same-fact prompt, 640 cap (adopted)** | **0.88** | **0.82** | 1.02 | 0 / 58 |
+
+Caveats:
+- The sample is small and in-sample: the prompt was written after reading these false links. Its
+  wording uses generic examples, not the probe's own.
+- Every probe pair was linked in rev 100, so recall here means keeping links the old prompt made.
+  It does not measure finding new ones.
+
+Cost: a reply uses only the tokens it needs, so the larger cap costs nothing extra on short
+replies.
+
+**Out-of-sample check: no measurable change.** Both gates were re-run on the KU set, set up as in
+rev 100 with fresh databases.
+
+| gate (Haiku 5.5) | links (rev 100) | newest-above-stale, `replace` → `+supersession` | sampled links that were real updates (rev 100, full text) |
+|---|---|---|---|
+| entity | 71 (75) | 0.614 → 0.773, +7 / −0 | 12 / 15 (12 / 14) |
+| similarity | 155 (156) | 0.614 → 0.864, +11 / −0 | 4 / 13, 2 ambiguous (6 / 15) |
+
+The ordering numbers are identical, recall is 0.978 in both, and the link counts barely moved. The
+new sample was drawn with a different seed and judged on full text.
+
+The similarity gate's false links are still mostly same-topic, different-fact pairs. Examples:
+two drafts of the same story; a misplaced screwdriver against a request for one; a beginner trail
+against a harder one.
+
+So the replay's precision gain did not carry over: it was in-sample, and on the real pass the
+prompt change is neutral. The 640-token cap stays for the truncation it removes.
+
+Prompt wording looks exhausted as a lever for the similarity gate. The next options are
+structural:
+- a higher similarity floor;
+- fewer candidates;
+- requiring the entity gate or a shared value-bearing span.
+
+The default stays **off**, and the entity gate (about 0.8 precision on two samples) remains the
+candidate if it is ever turned on. Results: `core/bench_runs/gx2d/` (gitignored).
 
 ### Recall vs corpus size — the fusion-holds curve (HX-2)
 
