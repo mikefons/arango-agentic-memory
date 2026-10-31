@@ -27,11 +27,15 @@ from typing import Any, cast
 
 import anyio
 import httpx
+from mcp.server.auth.middleware.auth_context import get_access_token
+from mcp.server.auth.settings import AuthSettings
 from mcp.server.fastmcp import Context, FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
+from pydantic import AnyHttpUrl
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from . import tools
+from .oauth import JwtTokenVerifier, OAuthConfig, VerifiedToken, delegation_headers
 from .tools import CoreClient
 
 _LOCAL_HOSTS = ("127.0.0.1", "localhost", "::1")
@@ -40,12 +44,13 @@ _LOCAL_HOSTS = ("127.0.0.1", "localhost", "::1")
 Ctx = Context[Any, Any, Any]
 
 
-class _ForwardAuth:
-    """A `CoreClient` that forwards one caller's `Authorization` header to the core."""
+class _WithHeaders:
+    """A `CoreClient` that adds per-caller headers to every core request: the caller's own
+    `Authorization` (bearer mode) or the delegate key + asserted identity (OAuth mode)."""
 
-    def __init__(self, inner: Any, authorization: str | None) -> None:
+    def __init__(self, inner: Any, headers: dict[str, str]) -> None:
         self._inner = inner
-        self._headers = {"authorization": authorization} if authorization else {}
+        self._headers = headers
 
     def post(self, url: str, *, json: Any) -> Any:
         return self._inner.post(url, json=json, headers=self._headers)
@@ -63,12 +68,16 @@ def build_server(
     path: str = "/mcp",
     allowed_hosts: Sequence[str] = (),
     allowed_origins: Sequence[str] = (),
+    oauth: OAuthConfig | None = None,
 ) -> FastMCP:
     """Build the MCP server. Tests inject a client; production uses httpx over HTTP.
 
     `http=True` configures Streamable HTTP (stateless) and switches tool calls to forwarding
-    each caller's own credential instead of the server's env key.
+    each caller's own credential instead of the server's env key. `oauth` (HTTP only) makes it
+    an OAuth resource server (MCP-1): IdP-issued tokens for this server, delegated to the core.
     """
+    if oauth is not None and not http:
+        raise ValueError("OAuth mode requires the HTTP transport")
     base_url = os.environ.get("ARANGO_MEMORY_CORE_URL", "http://localhost:8080")
     # stdio: the server's own bearer key when the core enforces auth (§17). HTTP: never —
     # callers bring their own, so an anonymous network caller can't borrow the server's.
@@ -85,6 +94,16 @@ def build_server(
             allowed_hosts=list(allowed_hosts),
             allowed_origins=list(allowed_origins),
         )
+    auth: dict[str, Any] = {}
+    if oauth is not None:
+        auth = {
+            "auth": AuthSettings(
+                issuer_url=AnyHttpUrl(oauth.issuer),
+                resource_server_url=AnyHttpUrl(oauth.resource_url),
+                required_scopes=list(oauth.required_scopes) or None,
+            ),
+            "token_verifier": JwtTokenVerifier(oauth),
+        }
     server = FastMCP(
         "arango-memory",
         host=host,
@@ -92,14 +111,24 @@ def build_server(
         streamable_http_path=path,
         stateless_http=True,
         transport_security=security,  # None on localhost → the SDK's own localhost guard
+        **auth,
     )
 
     def core_for(ctx: Ctx) -> CoreClient:
         if not http:
             return base
+        if oauth is not None:
+            # The SDK's auth middleware verified the token before any tool runs; never forward
+            # it (MCP spec: no token passthrough) — delegate with our own key instead.
+            token = get_access_token()
+            if not isinstance(token, VerifiedToken):
+                raise PermissionError("no verified access token for this request")
+            return cast(CoreClient,
+                        _WithHeaders(base, delegation_headers(oauth, token.verified_claims)))
         request = ctx.request_context.request
-        auth = request.headers.get("authorization") if request is not None else None
-        return cast(CoreClient, _ForwardAuth(base, auth))
+        auth_header = request.headers.get("authorization") if request is not None else None
+        headers = {"authorization": auth_header} if auth_header else {}
+        return cast(CoreClient, _WithHeaders(base, headers))
 
     async def call(fn: Callable[..., Any], ctx: Ctx, **kwargs: Any) -> Any:
         # Tool logic is sync httpx; run it off the event loop so one slow call (e.g. `flush`)
@@ -252,11 +281,16 @@ class _Health:
         await self.app(scope, receive, send)
 
 
-def build_http_app(server: FastMCP, *, allow_anonymous: bool = False) -> ASGIApp:
-    """The Streamable HTTP ASGI app, behind the bearer gate unless `allow_anonymous`, with an
-    unauthenticated `/health`."""
+def build_http_app(
+    server: FastMCP, *, allow_anonymous: bool = False, oauth: bool = False
+) -> ASGIApp:
+    """The Streamable HTTP ASGI app with an unauthenticated `/health`. Bearer mode gates it with
+    `_RequireBearer` (unless `allow_anonymous`); OAuth mode relies on the SDK's own auth, which
+    401s with the RFC 9728 metadata pointer and leaves the metadata route public."""
     app: ASGIApp = server.streamable_http_app()
-    return _Health(app if allow_anonymous else _RequireBearer(app))
+    if oauth or allow_anonymous:
+        return _Health(app)
+    return _Health(_RequireBearer(app))
 
 
 def _csv(value: str | None) -> list[str]:
@@ -280,7 +314,48 @@ def _parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
     p.add_argument("--allow-anonymous", action="store_true",
                    default=env("ARANGO_MEMORY_MCP_ALLOW_ANONYMOUS", "") == "1",
                    help="accept requests without a bearer credential (localhost only)")
+    p.add_argument("--auth", choices=("bearer", "oauth"),
+                   default=env("ARANGO_MEMORY_MCP_AUTH", "bearer"),
+                   help="bearer: forward the caller's core credential; oauth: MCP OAuth "
+                        "resource server delegating to the core (needs ARANGO_MEMORY_DELEGATE_KEY)")
+    p.add_argument("--oauth-issuer", default=env("ARANGO_MEMORY_MCP_OAUTH_ISSUER"))
+    p.add_argument("--resource-url", default=env("ARANGO_MEMORY_MCP_RESOURCE_URL"),
+                   help="this server's public MCP URL (the token audience)")
+    p.add_argument("--oauth-audience", default=env("ARANGO_MEMORY_MCP_OAUTH_AUDIENCE"))
+    p.add_argument("--oauth-jwks-uri", default=env("ARANGO_MEMORY_MCP_OAUTH_JWKS_URI"))
+    p.add_argument("--oauth-tenant-claim",
+                   default=env("ARANGO_MEMORY_MCP_OAUTH_TENANT_CLAIM", "tenant_id"))
+    p.add_argument("--oauth-scope-claim",
+                   default=env("ARANGO_MEMORY_MCP_OAUTH_SCOPE_CLAIM", "scope"))
+    p.add_argument("--oauth-agent-claim", default=env("ARANGO_MEMORY_MCP_OAUTH_AGENT_CLAIM"))
+    p.add_argument("--required-scopes", default=env("ARANGO_MEMORY_MCP_REQUIRED_SCOPES"),
+                   help="comma-separated scopes every token must carry")
     return p.parse_args(argv)
+
+
+def _oauth_config(args: argparse.Namespace) -> OAuthConfig:
+    # The delegate key is read from the environment only — never a flag, so it can't leak
+    # into process listings or shell history.
+    delegate_key = os.environ.get("ARANGO_MEMORY_DELEGATE_KEY")
+    missing = [name for name, value in (
+        ("--oauth-issuer", args.oauth_issuer),
+        ("--resource-url", args.resource_url),
+        ("ARANGO_MEMORY_DELEGATE_KEY", delegate_key),
+    ) if not value]
+    if missing:
+        raise SystemExit(f"--auth oauth needs: {', '.join(missing)}")
+    assert delegate_key is not None
+    return OAuthConfig(
+        issuer=args.oauth_issuer,
+        resource_url=args.resource_url,
+        delegate_key=delegate_key,
+        audience=args.oauth_audience,
+        jwks_uri=args.oauth_jwks_uri,
+        tenant_claim=args.oauth_tenant_claim,
+        scope_claim=args.oauth_scope_claim,
+        agent_claim=args.oauth_agent_claim,
+        required_scopes=tuple(_csv(args.required_scopes)),
+    )
 
 
 def main(argv: Sequence[str] | None = None) -> None:
@@ -298,15 +373,20 @@ def main(argv: Sequence[str] | None = None) -> None:
         )
     if args.allow_anonymous and not local:
         raise SystemExit("--allow-anonymous is only permitted on a localhost bind")
+    oauth = None
+    if args.auth == "oauth":
+        if args.allow_anonymous:
+            raise SystemExit("--allow-anonymous cannot be combined with --auth oauth")
+        oauth = _oauth_config(args)
 
     import uvicorn
 
     server = build_server(
         http=True, host=args.host, port=args.port, path=args.path,
-        allowed_hosts=hosts, allowed_origins=origins,
+        allowed_hosts=hosts, allowed_origins=origins, oauth=oauth,
     )
     uvicorn.run(
-        build_http_app(server, allow_anonymous=args.allow_anonymous),
+        build_http_app(server, allow_anonymous=args.allow_anonymous, oauth=oauth is not None),
         host=args.host, port=args.port,
     )
 
