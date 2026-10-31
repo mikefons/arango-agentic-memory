@@ -147,8 +147,9 @@ class Settings(BaseSettings):
     # How older statements become candidates: "entity" = must share an entity with the new
     # memory (cheap, but misses facts whose subject isn't a named entity, DESIGN §23 rev 98);
     # "similarity" = the nearest older memories by embedding alone (an exact scan of the
-    # agent's memories per new memory — O(tenant size), so watch it on large tenants).
-    supersession_gate: Literal["entity", "similarity"] = "entity"
+    # agent's memories per new memory — O(tenant size), so watch it on large tenants);
+    # "anchored" = the similarity candidates that also share an entity or a number with it.
+    supersession_gate: Literal["entity", "similarity", "anchored"] = "entity"
     # Ontology evolution (DESIGN.md §13, v2 research): propose typed relationships
     # from recurring associated_with clusters, human-in-loop. Off by default.
     ontology_evolution: bool = False

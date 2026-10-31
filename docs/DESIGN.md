@@ -1382,6 +1382,51 @@ structural:
 The default stays **off**, and the entity gate (about 0.8 precision on two samples) remains the
 candidate if it is ever turned on. Results: `core/bench_runs/gx2d/` (gitignored).
 
+**GX-2 anchored gate (rev 102, 2026-10-31).** Rev 101 showed that prompt wording does not fix the
+similarity gate's false links, so the next lever is structural: change which candidates reach the
+LLM.
+
+Every link from the rev 100 and rev 101 similarity runs (156 and 155) was classified:
+- **gold:** a stale knowledge-update evidence statement linked to the newest one; 29 and 31 links.
+  These are what the ordering metric scores.
+- **non-gold:** the rest, mostly false but not all.
+- **hand-labelled:** the 28 non-ambiguous links sampled in rev 100–101, 10 true and 18 false,
+  judged on full text.
+
+A candidate filter only removes candidates, so applying it to existing links estimates what it
+keeps. It ignores two effects: a removed candidate can free a slot for a lower-ranked one, and the
+LLM may answer differently with a shorter list.
+
+| filter on similarity links (both runs) | gold kept | non-gold kept | hand-true kept | hand-false kept |
+|---|---|---|---|---|
+| none (similarity gate) | 60 / 60 | 251 / 251 | 10 / 10 | 18 / 18 |
+| cosine ≥ 0.6 | 41 | 122 | 6 | 8 |
+| cosine ≥ 0.7 | 20 | 33 | 1 | 2 |
+| shares an entity | 33 | 99 | 7 | 4 |
+| both contain a number | 37 | 85 | 6 | 5 |
+| **shares an entity, or both contain a number** | **50** | **125** | **8** | **6** |
+
+Raising the cosine floor cuts gold and false links at about the same rate: the false links are as
+alike as the true ones, which is the whole problem. A shared anchor separates them better:
+- an update restates its subject, giving a shared entity;
+- or it restates its value: counts, scores, times, levels.
+
+"Shares an entity, or both contain a number" keeps 83% of gold links and half of the rest. On the
+hand labels it keeps 8 of 10 true links and 6 of 18 false ones, so sampled precision goes from
+about 0.36 to about 0.57.
+
+**`SUPERSESSION_GATE=anchored`** implements this: the similarity gate's candidates, keeping only
+those that share an entity with the new memory or where both statements contain a digit. The filter
+runs before the top-N cap, so a dropped candidate frees its slot.
+
+Two other filters were tried and rejected:
+- **Restrict to user turns** (keep a link only when both statements are user turns). It kept every
+  gold link, but that follows from LongMemEval marking evidence on user turns, and the product's
+  memories have no speaker field to filter on.
+- **A cosine floor alone**, which costs gold links at the same rate as false ones (table above).
+
+The KU re-run with the anchored gate is the out-of-sample check, and it has not been run yet.
+
 ### Recall vs corpus size — the fusion-holds curve (HX-2)
 
 The project's thesis as a chart: on an **open corpus that grows**, graph+vector+BM25 fusion

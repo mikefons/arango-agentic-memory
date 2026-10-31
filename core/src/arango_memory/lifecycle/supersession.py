@@ -3,8 +3,9 @@
 Graphiti closes a fact's validity window when a newer fact contradicts it. Our unit is the
 memory: a Dream State pass compares each not-yet-checked memory with the older memories of the
 same agent that share an entity with it and read alike (`SUPERSESSION_GATE=entity`) — or, with
-`SUPERSESSION_GATE=similarity`, the nearest ones by embedding alone — and asks the LLM which of
-them it updates. An updated memory gets `superseded_by` (the newer memory's key) and `valid_to` (the
+`SUPERSESSION_GATE=similarity`, the nearest ones by embedding alone, or with `anchored`, the
+nearest ones that also share an entity or a number with it — and asks the LLM which of them it
+updates. An updated memory gets `superseded_by` (the newer memory's key) and `valid_to` (the
 newer memory's time). Nothing is hidden — `invalid_at` stays null — because RQ-3 showed
 temporal reasoning needs the old statements; retrieval uses the link only to rank the current
 statement above a stale one it retrieved, and to annotate the stale line.
@@ -102,6 +103,19 @@ FOR o IN memories
 # Equal or mixed-format times are still sorted out in Python, so fetch a little deeper.
 _SIMILAR_FETCH = 50
 
+# Anchored gate: the similarity candidates, each flagged with whether it shares an entity with the
+# new memory. Most of the similarity gate's false links share a topic but no fact (DESIGN §23 rev
+# 102); an update restates its subject (a shared entity) or a value (a number on both sides).
+_ANCHORED = (
+    "LET mine = (FOR e IN 1..1 OUTBOUND CONCAT('memories/', @key) mentions RETURN e._id)\n"
+    + _SIMILAR.replace(
+        "  RETURN { key: o._key,",
+        "  LET shared = LENGTH((FOR e IN 1..1 OUTBOUND o mentions FILTER e._id IN mine LIMIT 1 "
+        "RETURN 1)) > 0\n  RETURN { shared, key: o._key,",
+    )
+)
+_NUMBER = re.compile(r"\d")
+
 
 @dataclass
 class SupersessionResult:
@@ -109,6 +123,10 @@ class SupersessionResult:
     compared: int = 0  # LLM comparisons made
     superseded: int = 0
     unparsed: int = 0  # replies with no well-formed ANSWER line — no links made
+
+
+def _anchored(new_text: str, old: dict[str, Any]) -> bool:
+    return bool(old["shared"]) or bool(_NUMBER.search(new_text) and _NUMBER.search(old["text"]))
 
 
 def _clip(text: str) -> str:
@@ -150,12 +168,16 @@ def run_supersession(
                 "key": row["key"], "tenant_id": tenant_id, "agent_id": row["agent_id"],
                 "vec": row["embedding"], "min_sim": settings.supersession_min_similarity,
             }
-            if settings.supersession_gate == "similarity":
-                query, bind["limit"] = _SIMILAR, _SIMILAR_FETCH
-            else:
+            gate = settings.supersession_gate
+            if gate == "entity":
                 query, bind["limit"], bind["per_entity"] = _CANDIDATES, _FETCH, _PER_ENTITY
+            else:
+                query = _ANCHORED if gate == "anchored" else _SIMILAR
+                bind["limit"] = _SIMILAR_FETCH
             found = cast(Cursor, db.aql.execute(query, bind_vars=bind))
-            older = [o for o in found if when(o) < mine][: settings.supersession_max_candidates]
+            older = [o for o in found if when(o) < mine
+                     and (gate != "anchored" or _anchored(row["text"], o))]
+            older = older[: settings.supersession_max_candidates]
         if older:
             prompt = f"NEW: {_clip(row['text'])}\nOLDER:\n" + "\n".join(
                 f"{i}. {_clip(o['text'])}" for i, o in enumerate(older, 1)

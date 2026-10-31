@@ -23,6 +23,9 @@ are versioned together and released from this repository.
   one it retrieved, pulling it in if missed, and marks the stale line `(superseded <time>)`.
   `/v1/dream` reports `memories_superseded`.
 - `SUPERSESSION_GATE=similarity`: GX-2 candidates by embedding similarity alone (default `entity`).
+- `SUPERSESSION_GATE=anchored`: GX-2 similarity candidates that also share an entity or a number
+  with the new memory. This drops most same-topic, different-fact pairs before any LLM call
+  (DESIGN §23 rev 102).
 - Point-in-time retrieval: `opts.as_of` (ISO date/date-time) limits retrieval to memories
   that existed by then, with supersession judged as of then.
 - LongMemEval harness: `--dream` runs a Dream State pass per question; `+entities` /

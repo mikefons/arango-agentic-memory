@@ -238,3 +238,22 @@ def test_similarity_gate_newer_memories_do_not_crowd_out_older(
     run_supersession(db, tenant_id=t, generator=gen)
     assert prompts[0].startswith("NEW: my count of yard birds is now thirty two\nOLDER:\n1. my")
     assert _doc(db, old)["superseded_by"] == mid
+
+
+def test_anchored_gate_needs_a_shared_entity_or_numbers_on_both_sides(
+    db: StandardDatabase, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(settings, "supersession_gate", "anchored")
+    gen, prompts = _answers("Older 1 states the old value; the new one changes it.\nANSWER: 1")
+    t = "t_ss15"
+    _put(db, t, "i think i have got everything for the trip", JAN)  # no entity, no number
+    _put(db, t, "Sam lives in Boston", JAN)
+    birds = _put(db, t, "my count of yard birds is 27", JAN)
+    _put(db, t, "my count of yard birds is now 32", MAR)  # anchored by the numbers
+    _put(db, t, "Sam moved to Denver", MAR)  # anchored by the shared entity
+    _put(db, t, "i think i am good to go for the trip", MAR)
+    run_supersession(db, tenant_id=t, generator=gen)
+    olders = {p.split("\n1. ")[1] for p in prompts}
+    assert "my count of yard birds is 27" in olders and "Sam lives in Boston" in olders
+    assert not any("got everything" in p for p in prompts)
+    assert _doc(db, birds)["superseded_by"] is not None
