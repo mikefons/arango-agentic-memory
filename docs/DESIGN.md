@@ -1452,6 +1452,54 @@ The default stays **off**. Turning it on waits on the full-mix paired accuracy r
 which prices any false link on the other question types. Results: `core/bench_runs/gx2e/`
 (gitignored).
 
+**GX-1 + GX-2 full-mix paired accuracy (rev 103, 2026-10-31).** This is the run that rev 102
+and the GX-1 entry deferred. Setup:
+- the 90 stratified LongMemEval-S questions (`lme.json`, 15 per type);
+- Haiku 5.5 as the background model, answerer and judge, thinking off;
+- spaCy extraction, the local reranker, one fresh database;
+- one Dream pass per question with distillation on (default threshold 5) and anchored
+  supersession (cosine ≥ 0.5, top 5).
+
+Four variants share that one ingest and Dream pass. Dream wrote 5,522 entity summaries (about 61
+per question) and 62 supersession links. The run took about 1 h 12 min at concurrency 8 and cost
+an estimated $4: about 63 distill calls and 48 verdict calls per question, about 330k input tokens.
+
+| variant | accuracy | paired vs `replace` | KU | MS | SSA | SSP | SSU | TR |
+|---|---|---|---|---|---|---|---|---|
+| `replace` (Haiku 5.5 baseline) | 0.644 | — | 0.800 | 0.467 | 0.867 | 0.200 | 0.867 | 0.667 |
+| `replace+entities` | **0.700** | +7 / −2, p = 0.18 | 0.867 | 0.600 | 0.867 | 0.267 | 0.867 | 0.733 |
+| `replace+supersession` | 0.656 | +2 / −1, p = 1.00 | **0.933** | 0.400 | 0.867 | 0.200 | 0.867 | 0.667 |
+| `replace+entities+supersession` | 0.656 | +4 / −3, p = 1.00 | 0.933 | 0.400 | 0.867 | 0.200 | 0.867 | 0.667 |
+
+No answer failed. The baseline (0.644) is the new Haiku 5.5 reference. The h2h run's 0.633 used
+Haiku 4.5 as answerer and judge, with no Dream pass.
+
+- **Entity summaries (GX-1)** gain in four types: multi-session +2; knowledge-update,
+  temporal-reasoning and preference +1 each. They lose nothing on the single-session types, so
+  the decision rule's safety condition holds. But +7/−2 is not significant (p = 0.18), so the
+  rule is not met.
+- **Supersession (GX-2)** lifts knowledge-update from 0.800 to 0.933 (+2) and costs one
+  multi-session question.
+
+**The losses are answerer noise, not false links.** In every lost question inspected, the
+variants retrieved the same facts and the answer differed in arithmetic or reading. The
+multi-session loss, for example, saw the same three purchases ($800, $1,200, $500) in all four
+variants: two summed them correctly and two did not. Combining both features scores below entity
+summaries alone. Its 4 gains and 3 losses fall on different questions from either feature alone,
+which is the same noise, not an interaction.
+
+So a single run's variant-to-variant scatter is about ±3–4 questions, the same size as the
+effects being measured.
+
+**Decision.** Both defaults stay **off** for now. The next step measures that noise floor. A new
+harness flag, `--answer-only`, reuses this run's ingest and Dream pass and repeats only
+retrieve, answer and judge. Several repeats per variant then give a paired comparison with a
+known noise level, for a few cents each instead of re-ingesting.
+
+The preference type (0.20–0.27) is still the weakest. GX-1's note stands: about half its misses
+are the answerer declining with the memory in context, an answer-prompt issue. Results:
+`core/bench_runs/gx1/` (gitignored), database `bench_gx1`.
+
 ### Recall vs corpus size — the fusion-holds curve (HX-2)
 
 The project's thesis as a chart: on an **open corpus that grows**, graph+vector+BM25 fusion
