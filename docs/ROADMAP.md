@@ -1430,6 +1430,10 @@ losses. That is not significant, so the default stays off for now. A run's answe
 scatter is about ±3–4 questions. Next: repeat answer passes with the new `--answer-only` flag on
 the same ingest to measure that noise floor, then decide.
 
+**Held-out re-run (2026-11-11, DESIGN §23 rev 104):** the +7/−2 did not reproduce. On 91 fresh
+questions under the fixed harness, `replace+entities` averaged 0.861 against 0.875 over three
+answer passes (+9/−13 pooled), inside the run-to-run scatter. The default stays off.
+
 ### GX-2 — Memory-level fact supersession + `as_of` retrieval  🔄 (built; off by default)
 
 **Decision (2026-10-04):** the unit is the *memory*, not an extracted fact. Our typed
@@ -1490,14 +1494,22 @@ accuracy run, with GX-1.
 **Full-mix run (2026-10-31, DESIGN §23 rev 103):** with the anchored gate, `replace+supersession`
 scored 0.656 against 0.644 (+2/−1). Knowledge-update went from 0.800 to **0.933**. The one loss
 was a multi-session question, and it came from answerer arithmetic over identical context, not a
-false link. The default stays off pending the `--answer-only` noise-floor repeats.
+false link. The default stays off (see the held-out validation below).
 
 **Harness assessment (2026-11-11, DESIGN §23 rev 104):** the rev 103 numbers were held down by
 the answer step, not retrieval. With a LongMemEval answer prompt, the official per-type judge and
-a top-20, 8,000-token context, the same ingest scores 0.844 (0.644 before). GX-1 and GX-2 are to
-be re-judged under the fixed harness, on a held-out sample with abstention questions.
+a top-20, 8,000-token context, the same ingest scores 0.844 (0.644 before).
 
-The remaining gap is multi-session retrieval. Candidate items, in order:
+**Held-out validation (2026-11-11, same section):** on 91 fresh questions, 13 of them abstention
+questions, the fixed harness scores 0.875 (mean of three answer passes) against 0.747 for the old
+one, and declines 12 of 13 unanswerable questions. Under it, neither GX-1 nor GX-2 shows an
+answer gain: every variant is within the run-to-run scatter of `replace` (the same variant
+re-answered changes on 2–11 questions). Supersession still orders knowledge updates (7 → 10 of
+13), but knowledge-update answers are already 13 of 13 without it. Both defaults stay off.
+
+The remaining gap is multi-session questions (about 0.65). On the held-out sample about half of
+their misses lack evidence and half are counting errors over complete evidence. Candidate items,
+in order:
 - round and neighbour expansion;
 - fact-augmented keys;
 - graph enumeration for counting questions;

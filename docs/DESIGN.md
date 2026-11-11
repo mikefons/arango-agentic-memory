@@ -1563,6 +1563,7 @@ Other findings:
 
 Caveats:
 - The prompt was written after reading these 90 questions' failures, so the table is in-sample.
+  The held-out validation below addresses this.
 - The judge is Haiku 5.5, not the GPT-4o the benchmark specifies.
 - Published competitor scores are mostly self-reported, with stronger answer models and 7k–30k
   tokens of context.
@@ -1575,7 +1576,61 @@ Ranked next levers for the multi-session gap:
 5. a Dream-maintained observation log;
 6. a numpy MMR.
 
-Scripts and per-question results: `core/bench_runs/assess/` (gitignored).
+*Held-out validation (2026-11-11).* The table above is in-sample, so the adopted harness was
+checked on 91 questions it had never seen: a stratified draw with `--exclude lme.json`, 13 of
+them abstention questions (7 multi-session, 6 single-session-user), evidence labels on. One
+ingest and Dream pass (anchored gate), then four answer passes over it with `--answer-only`:
+one with the rev 103 harness (top 10, 1,500 tokens) and three with the rev 104 harness.
+
+`replace` variant, Haiku 5.5 as answerer and judge:
+
+| harness | overall | answerable (78) | abstention (13) | KU | MS | SSA | SSP | SSU | TR |
+|---|---|---|---|---|---|---|---|---|---|
+| rev 103 | 0.747 | 0.705 | 13 | 0.85 | 0.70 | 1.00 | 0.15 | 1.00 | 0.69 |
+| rev 104, pass 1 | 0.879 | 0.872 | 12 | 1.00 | 0.60 | 1.00 | 0.85 | 1.00 | 0.92 |
+| rev 104, pass 2 | 0.868 | 0.859 | 12 | 1.00 | 0.70 | 0.92 | 0.77 | 1.00 | 0.85 |
+| rev 104, pass 3 | 0.879 | 0.872 | 12 | 1.00 | 0.65 | 1.00 | 0.77 | 1.00 | 0.92 |
+
+Paired against the rev 103 pass, the three rev 104 passes are +15/−3 (p = 0.008), +15/−4
+(p = 0.019) and +14/−2 (p = 0.004).
+
+- **The gain holds out of sample.** Overall 0.747 → 0.875 (mean of three), and 0.705 → 0.868 on
+  answerable questions. The overall step is smaller than the in-sample one because the old
+  prompt, which declines readily, gets all 13 abstention questions for free.
+- **The looser prompt does not guess.** It declines 12 of 13 unanswerable questions in every
+  pass. The one miss is the same question each time: the answer says the Master's degree is not
+  on record, but still gives a total for the other degrees.
+- **Multi-session did not move.** Answerable multi-session questions score 7 of 13 with the old
+  harness and 6, 8 and 7 of 13 with the new one. This is the gap the answer step cannot close.
+- **What the misses are.** Of the 11–12 misses per pass, 6–9 have all the evidence in context
+  (counting and totalling errors, and two preference questions), 2–4 lack evidence, and 1 is the
+  abstention question. All the evidence is in context for 72 of 79 labelled questions at top 20
+  (68 at top 10).
+
+*GX-1 and GX-2 under the fixed harness.* The same three passes scored all four variants:
+
+| variant | pass 1 | pass 2 | pass 3 | mean | paired vs `replace`, pooled |
+|---|---|---|---|---|---|
+| `replace` | 0.879 | 0.868 | 0.879 | 0.875 | — |
+| `replace+entities` | 0.890 | 0.835 | 0.857 | 0.861 | +9/−13 |
+| `replace+supersession` | 0.868 | 0.835 | 0.857 | 0.853 | +8/−14 |
+| `replace+entities+supersession` | 0.835 | 0.890 | 0.879 | 0.868 | +9/−11 |
+
+- **Noise floor.** The same variant, answered again over identical retrieval, changes verdict on
+  2 to 11 of the 91 questions, and its accuracy moves by up to 0.055. A variant differs from
+  `replace` on 7 to 10 questions within a pass, which is the same size.
+- **Neither feature shows an answer gain.** No variant beats `replace` on the mean, and rev 103's
+  +7/−2 for entity summaries does not reproduce. Both defaults stay off.
+- **Supersession still fixes ordering, but the answerer no longer needs it.** Newest-above-stale
+  goes from 7 to 10 of 13. Knowledge-update accuracy is 13 of 13 in every rev 104 pass with or
+  without it: each excerpt carries its date and the prompt says to use the most recent statement.
+- **Sample size.** An effect of one or two questions cannot be read at 91 questions. Deciding
+  these defaults by accuracy would need several hundred.
+
+Remaining caveats: the judge is still Haiku 5.5, and both samples come from LongMemEval-S.
+
+Scripts and per-question results: `core/bench_runs/assess/` and `core/bench_runs/fresh/`
+(gitignored).
 
 ### Recall vs corpus size — the fusion-holds curve (HX-2)
 
