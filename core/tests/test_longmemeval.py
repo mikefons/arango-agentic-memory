@@ -49,6 +49,30 @@ def test_judge_abstention_grades_a_decline() -> None:
     ) is False
 
 
+def test_judge_applies_the_official_per_type_rules() -> None:
+    seen: list[tuple[str, str | None]] = []
+
+    def handler(prompt: str, system: str | None) -> str:
+        seen.append((prompt, system))
+        return "CORRECT"
+
+    judge = FakeGenerator(handler=handler)
+    judge_correct("q", "18 days", "19 days", judge=judge, category="temporal-reasoning")
+    judge_correct("q", "Denver", "Boston, now Denver", judge=judge, category="knowledge-update")
+    judge_correct("q", "prefers Sony gear", "a Sony lens", judge=judge,
+                  category="single-session-preference")
+    judge_correct("q", "never said", "I don't know", judge=judge, abstention=True,
+                  category="temporal-reasoning")
+    judge_correct("q", "Target", "Target", judge=judge, category="single-session-user")
+    systems = [system or "" for _, system in seen]
+    assert "off-by-one" in systems[0]
+    assert "earlier information" in systems[1]
+    assert "rubric" in systems[2] and "Rubric: prefers Sony gear" in seen[2][0]
+    assert "unanswerable" in systems[3] and "off-by-one" not in systems[3]  # abstention wins
+    assert "subset" in systems[4]  # the base rule for the other types
+    assert all(system.endswith("CORRECT or INCORRECT.") for system in systems)
+
+
 # ── converter (no DB) ─────────────────────────────────────
 def test_convert_maps_sessions_and_flags_abstention() -> None:
     raw = [
@@ -235,6 +259,33 @@ def test_stratified_sample_spreads_across_types() -> None:
     assert types.count("A") >= 3 and types.count("B") >= 3 and types.count("C") == 2
 
 
+def test_stratified_sample_gives_abstention_its_own_bucket() -> None:
+    # Abstention questions end each type, so the first few per type never include one.
+    raw = [{"question_type": t, "question_id": f"{t}{i}{'_abs' if i >= 8 else ''}"}
+           for t in ("A", "B") for i in range(10)]
+    picked = _stratified_sample(raw, 6)
+    assert sum(item["question_id"].endswith("_abs") for item in picked) == 2
+
+
+def test_convert_cli_carries_evidence_and_excludes_a_prior_sample(tmp_path: Path) -> None:
+    import json
+
+    from arango_memory.eval.longmemeval_convert import main as convert_main
+
+    raw = [{"question_id": f"q{i}", "question_type": "A", "question": "?", "answer": "a",
+            "haystack_dates": ["2023/01/01"], "haystack_session_ids": ["s"],
+            "haystack_sessions": [[{"role": "user", "content": "hi", "has_answer": True}]]}
+           for i in range(4)]
+    src, first, fresh = tmp_path / "raw.json", tmp_path / "first.json", tmp_path / "fresh.json"
+    src.write_text(json.dumps(raw))
+    assert convert_main([str(src), str(first), "--limit", "2"]) == 0
+    assert convert_main([str(src), str(fresh), "--exclude", str(first), "--no-evidence"]) == 0
+    one = json.loads(first.read_text())["samples"]
+    two = json.loads(fresh.read_text())["samples"]
+    assert [s["sample_id"] for s in one] == ["q0", "q1"] and one[0]["qa"][0]["evidence"]
+    assert [s["sample_id"] for s in two] == ["q2", "q3"] and "evidence" not in two[0]["qa"][0]
+
+
 def _write_tmp(dataset: dict) -> Path:
     import json
     import tempfile
@@ -251,6 +302,8 @@ def test_cli_parser() -> None:
     )
     assert args.dataset == "d.json" and args.mode == "multihop" and args.k == 5
     assert args.rerank is True and args.min_accuracy == 0.5
+    defaults = _build_parser().parse_args(["d.json"])
+    assert (defaults.k, defaults.max_memory_tokens) == (20, 8000)
 
 
 # ── end-to-end aggregation (DB) ───────────────────────────

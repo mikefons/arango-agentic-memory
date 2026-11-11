@@ -1492,6 +1492,18 @@ scored 0.656 against 0.644 (+2/−1). Knowledge-update went from 0.800 to **0.93
 was a multi-session question, and it came from answerer arithmetic over identical context, not a
 false link. The default stays off pending the `--answer-only` noise-floor repeats.
 
+**Harness assessment (2026-11-11, DESIGN §23 rev 104):** the rev 103 numbers were held down by
+the answer step, not retrieval. With a LongMemEval answer prompt, the official per-type judge and
+a top-20, 8,000-token context, the same ingest scores 0.844 (0.644 before). GX-1 and GX-2 are to
+be re-judged under the fixed harness, on a held-out sample with abstention questions.
+
+The remaining gap is multi-session retrieval. Candidate items, in order:
+- round and neighbour expansion;
+- fact-augmented keys;
+- graph enumeration for counting questions;
+- event-date resolution;
+- a Dream-maintained observation log.
+
 Original scope note:
 
 Graphiti stores facts with valid/invalid times, and a contradicting fact closes the old one.
