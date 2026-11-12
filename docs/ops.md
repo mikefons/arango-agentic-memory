@@ -74,6 +74,9 @@ corpus, raise it (e.g. 500) **with rerank** to recover the tail-reachable golds 
 (§23), at more per-query DB work; also settable per request via `opts.candidate_pool`),
 `RETRIEVE_ENTITY_SUMMARIES` (`false` — append Dream State entity summaries to the retrieved
 context, within `MAX_MEMORY_TOKENS`; also `opts.entity_summaries`),
+`RETRIEVE_NEIGHBOR_TURNS` (`0` — also inject the turns within this many positions of each hit,
+in the hit's session, from whatever token budget the hits left; needs memories stored with a
+`session_id` and `turn_index`; also `opts.neighbor_turns`),
 `GRAPH_MAX_NEIGHBORS` (200 — SC-1c: caps the graph arm's `relates_to` fan-out so a dense
 single-tenant graph can't blow up retrieval; the arm is a down-weighted expander so a bounded
 neighbourhood costs little), `GRAPH_MAX_MEMORIES_PER_ENTITY` (50 — SC-1d: caps the memories
@@ -382,7 +385,8 @@ affordable** — pass it to run with the **graph ON**, which measures the *produ
 supersession for `knowledge-update`, cross-session links for `multi-session`), not just the
 BM25+vector substrate. Session dates ride as an **`event_time` field** surfaced in the retrieved
 context (IN-4), never folded into the matched text (an earlier text-prefix version lifted
-`temporal-reasoning` but cost `single-session-user` recall). `--limit`/`--stratified` still
+`temporal-reasoning` but cost `single-session-user` recall). Each chat is stored as its own session
+with a turn position, so a `+neighbors` variant can inject the turn before and after each hit. `--limit`/`--stratified` still
 recommended for a first pass (each question still embeds its whole history); keep
 `EXTRACTION_PROVIDER=fake` + `MEMORY_MODE=lite` unless you specifically want LLM extraction.
 

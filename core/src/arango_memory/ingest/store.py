@@ -66,12 +66,15 @@ def _memory_doc(
     mem_key: str, *, episode_key: str, content: str, turn_vec: list[float], is_working: bool,
     expires_at: str | None, session_id: str | None, agent_id: str, tenant_id: str,
     emb: Embedder, prospective: list[str], now: str, event_time: str | None = None,
+    turn_index: int = 0,
 ) -> dict[str, Any]:
     return {
         "_key": mem_key, "idempotency_key": mem_key, "text": content,
         "type": "working" if is_working else "episodic", "strength": 1.0, "access_count": 1,
         "created_at": now, "accessed_at": now, "invalid_at": None, "expires_at": expires_at,
         "session_id": session_id, "source_episode_id": episode_key, "agent_id": agent_id,
+        # The turn's position in its session: retrieval can pull the turns next to a hit.
+        "turn_index": turn_index,
         "tenant_id": tenant_id, "schema_version": "0.1.0", "embedding": turn_vec,
         "embedding_model": emb.model, "embedding_version": emb.version,
         "prospective_queries": prospective,
@@ -158,6 +161,7 @@ def store_many(
             is_working=is_working, expires_at=_working_expires(now) if is_working else None,
             session_id=item.session_id, agent_id=agent_id, tenant_id=tenant_id,
             emb=emb, prospective=[], now=now, event_time=item.event_time,
+            turn_index=item.turn_index,
         ))
         order.append((ep_key, mem_key))
         # Working memory never mints durable entities; only new episodes feed the graph, once
@@ -418,7 +422,7 @@ def _store_impl(
     memory = _memory_doc(
         mem_key, episode_key=key, content=content, turn_vec=turn_vec, is_working=is_working,
         expires_at=expires_at, session_id=session_id, agent_id=agent_id, tenant_id=tenant_id,
-        emb=emb, prospective=prospective, now=now, event_time=event_time,
+        emb=emb, prospective=prospective, now=now, event_time=event_time, turn_index=turn_index,
     )
     db.collection("memories").insert(memory, overwrite_mode="ignore", silent=True)
 

@@ -451,6 +451,8 @@ Stage 6: Context Assembly (token budget)   [CORE]
   Tiered (configurable maxMemoryTokens, default 1500):
     working 400 · episodic 700 · semantic 300 · reasoning 100
   Sort by score within tier; unused budget rolls up. tiktoken counting.
+  [neighbour expansion, opt-in: the turns next to each hit, in its session,
+   fill whatever budget the hits left and sit beside their hit in turn order]
 ```
 
 ### Multi-hop mode (RQ-1)
@@ -1631,6 +1633,43 @@ Remaining caveats: the judge is still Haiku 5.5, and both samples come from Long
 
 Scripts and per-question results: `core/bench_runs/assess/` and `core/bench_runs/fresh/`
 (gitignored).
+
+**Neighbour expansion (rev 105, 2026-11-12).** The first lever from the list above. Retrieval
+ranks single turns, but the answer to a retrieved question is often in the reply that follows
+it. `RETRIEVE_NEIGHBOR_TURNS` / `opts.neighbor_turns` (default 0, off) also injects the turns
+within that many positions of each hit:
+- only turns of the hit's own session, so it needs memories stored with a `session_id` and a
+  `turn_index` (the memory now stores `turn_index`; it was only part of the key before);
+- only from the token budget the hits left, best hit first and nearest turn first, so a
+  neighbour never displaces a retrieved memory;
+- placed next to its hit in turn order, and returned after the k hits with source `neighbor`.
+
+*Measured without an LLM* on both 90-question samples, at the harness defaults (top 20, 8,000
+tokens). Existing ingests were given their sessions and turn positions by a backfill. The
+count is questions with every labelled evidence turn in the injected context:
+
+| sample | off | ±1 turn | ±2 turns | ±1 with no budget limit | context tokens, off → ±1 |
+|---|---|---|---|---|---|
+| held-out (79 labelled) | 70 | 73 | 73 | 74 | 4,520 → 7,485 |
+| original (90 labelled) | 75 | 79 | 80 | 80 | 4,190 → 7,412 |
+
+- **It does what it was built for.** The gains are single-session questions whose answer sat in
+  the adjacent turn. About 13 neighbours fit per question, and no question loses evidence.
+- **It is not the multi-session lever.** Multi-session goes from 11 to 11 of 14 on the held-out
+  sample and from 8 to 9 of 15 on the original. Those questions miss whole sessions, which the
+  neighbours of other sessions' hits cannot supply.
+- **It reaches few of the remaining misses.** On the held-out sample the three questions that
+  gain evidence were already answered correctly in all three rev 104 passes, and none of the
+  ten stable misses gains any. On the original sample four of the fourteen misses gain evidence.
+- **It costs context.** The injected context grows by about two thirds.
+- **Whole sessions would reach further at a price.** Injecting each hit's whole session puts all
+  evidence in context for 76 of 79 and 86 of 90 questions, but needs about 18,000 tokens. Not
+  built.
+
+Answer accuracy has not been measured: that needs paid answer passes (`+neighbors` variant,
+`--answer-only`). The default stays off.
+
+Scripts and per-question results: `core/bench_runs/neighbour/` (gitignored).
 
 ### Recall vs corpus size — the fusion-holds curve (HX-2)
 

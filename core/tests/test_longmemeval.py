@@ -20,6 +20,7 @@ from arango_memory.eval.longmemeval import (
 )
 from arango_memory.eval.longmemeval_convert import _stratified_sample, convert
 from arango_memory.generation import FakeGenerator
+from arango_memory.retrieve.search import retrieve
 from arango_memory.security.redact import redact
 
 _SMOKE = Path(__file__).parent / "data" / "longmemeval_smoke.json"
@@ -216,6 +217,7 @@ def test_parse_variant() -> None:
     assert _parse_variant("replace+entities") == _Variant("replace", entities=True)
     assert _parse_variant("+supersession") == _Variant(supersession=True)
     assert _parse_variant("rrf+entities+supersession") == _Variant("rrf", None, True, True)
+    assert _parse_variant("replace+neighbors") == _Variant("replace", neighbors=True)
     with pytest.raises(ValueError, match="unknown rerank scoring"):
         _parse_variant("bogus")
     with pytest.raises(ValueError, match="unknown variant suffix"):
@@ -454,6 +456,22 @@ def test_supersession_variant_fixes_update_ordering(db: StandardDatabase,
     )
     assert report.by_variant[""].evidence["newest_above_stale"] == 0.0
     assert report.by_variant["+supersession"].evidence["newest_above_stale"] == 1.0
+
+
+def test_neighbors_variant_pulls_the_reply_within_its_own_session(db: StandardDatabase) -> None:
+    # Each chat is ingested as its own session, so the hit's neighbour is the reply that
+    # followed it and never the first turn of the next chat.
+    sample = _sam_sample("lme-nb-sam")
+    report = run_longmemeval(
+        db, [sample], generator=FakeGenerator(), k=1, judge_answers=False,
+        rerank_scorings=["replace", "replace+neighbors"],
+    )
+    assert set(report.by_variant) == {"replace", "replace+neighbors"}
+    hit = retrieve(db, query="Where does Sam live now?", tenant_id="lme-nb-sam",
+                   agent_id="assistant", k=1, rerank=True, neighbor_turns=1, record_access=False)
+    assert [h.text for h in hit.hits] == ["user: Sam does live in Boston now.",
+                                          "assistant: Got it, Boston."]
+    assert "pasta" not in hit.context
 
 
 def test_single_configuration_report_is_unchanged(db: StandardDatabase) -> None:

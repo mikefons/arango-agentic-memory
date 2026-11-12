@@ -133,6 +133,8 @@ def _ensure_scope_indexes(db: StandardDatabase) -> None:
     for collection, name, fields in (
         # Vector arm + working buffer + forget + stats all scope memories this way.
         ("memories", "idx_mem_scope", ["tenant_id", "agent_id", "invalid_at"]),
+        # Neighbour expansion reads the turns next to a hit in its session.
+        ("memories", "idx_mem_turn", ["tenant_id", "agent_id", "session_id", "turn_index"]),
         # Dream / community / salience / ontology / entity API / forget scan entities.
         ("entities", "idx_entity_scope", ["tenant_id", "invalid_at"]),
         # LangChain history reads a session's episodes in order.

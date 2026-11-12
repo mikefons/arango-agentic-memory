@@ -179,6 +179,11 @@ class Settings(BaseSettings):
     # context (Graphiti's ENTITIES section). Shares max_memory_tokens with the memories.
     # Off by default until measured; needs a Dream State pass to have written summaries.
     retrieve_entity_summaries: bool = False
+    # Neighbour expansion: also inject the turns within this many positions of each hit, in
+    # the hit's session (the reply to a retrieved question, the question before a retrieved
+    # answer). They only fill budget the hits left. 0 = off. Needs memories stored with a
+    # session_id and turn_index.
+    retrieve_neighbor_turns: int = Field(default=0, ge=0, le=5)
     # MMR relevance↔diversity balance for the final top-k re-rank (§9). 1.0 = pure
     # relevance (fusion order); lower trades relevance for diversity in the returned set.
     # Defaults to pure relevance: diversity is a *context-window* concern (don't feed the

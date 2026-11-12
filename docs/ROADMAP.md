@@ -57,6 +57,7 @@ Status: ✅ shipped · 🔄 built, merge pending · ✖ closed (won't do). Unmar
 | 23 | GX-1 | Entity summaries in `/v1/retrieve` (Graphiti's ENTITIES section) 🔄 — built in #266, off by default; **benchmark deferred** | S | — |
 | 24 | GX-2 | Memory-level fact supersession + `as_of` retrieval (the scoped newness signal RQ-3 called for) 🔄 — built, off by default | L | — |
 | 25 | GX-3 | Fact retrieval arm over typed-relation statements (needs an LLM/GLiREL extractor) | L | GX-2 |
+| 26 | LM-1 | Neighbour expansion: inject the turns next to each hit (`opts.neighbor_turns`) 🔄 — built, off by default; answer accuracy not yet measured | S | — |
 
 Recommended sequence: **MA-1 → MA-2 → MA-3 → MA-4 → MA-5 → MA-6**, with MA-7/MA-8
 schedulable any time (no dependencies on the others). MA-1…MA-8 are **shipped**. **RQ-1**
@@ -1510,7 +1511,8 @@ re-answered changes on 2–11 questions). Supersession still orders knowledge up
 The remaining gap is multi-session questions (about 0.65). On the held-out sample about half of
 their misses lack evidence and half are counting errors over complete evidence. Candidate items,
 in order:
-- round and neighbour expansion;
+- round and neighbour expansion — built as LM-1 below; it helps single-session questions and
+  not multi-session ones;
 - fact-augmented keys;
 - graph enumeration for counting questions;
 - event-date resolution;
@@ -1525,6 +1527,27 @@ mechanism. Today supersession is entity-level, decided in Dream State
 (`lifecycle/conflict.py`). Scope: typed relations as facts with valid-from/valid-to;
 same-fact contradiction detection in Dream State; newest-first only among conflicting facts;
 an `as_of` retrieve filter. Measure with the RQ-3 ordering metric plus accuracy.
+
+### LM-1 — Neighbour expansion  🔄 (built; off by default)
+
+From the LongMemEval assessment (DESIGN §23 rev 104), not from Graphiti. Retrieval ranks single
+turns; the answer to a retrieved question is often in the next turn.
+
+**Built.** `RETRIEVE_NEIGHBOR_TURNS` / `opts.neighbor_turns` (default 0) injects the turns
+within that many positions of each hit, in the hit's session, from the token budget the hits
+left. Memories now store `turn_index`; the feature needs it with a `session_id`. The harness
+stores each chat as its own session and has a `+neighbors` variant.
+
+**Measured without an LLM (DESIGN §23 rev 105).** With ±1 turn, questions with all evidence in
+context go from 70 to 73 of 79 (held-out) and 75 to 79 of 90 (original), for about two thirds
+more context. Multi-session barely moves (11 → 11 of 14, 8 → 9 of 15). On the held-out sample
+none of the ten stable misses gains evidence.
+
+**Open.**
+- Answer accuracy: three `--answer-only` passes of `replace,replace+neighbors` on both ingests,
+  about $1.20. This is a user spend decision.
+- Whether to turn it on by default depends on that run and on the extra context being worth it.
+- Whole-session expansion reaches more multi-session evidence but needs about 18,000 tokens.
 
 ### GX-3 — Fact retrieval arm
 

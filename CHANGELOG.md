@@ -17,6 +17,12 @@ are versioned together and released from this repository.
   (default off) appends an `Entity summaries:` section to the `/v1/retrieve` context, made
   from the Dream State summaries of the entities the hits mention. It shares
   `max_memory_tokens` with the memories (at most 20% of it).
+- Neighbour expansion in retrieval: `RETRIEVE_NEIGHBOR_TURNS` / `opts.neighbor_turns` (default
+  0, off) also injects the turns within that many positions of each hit, in the hit's session,
+  such as the reply to a retrieved question. Neighbours only use token budget the hits left and
+  appear next to their hit in turn order. Memories now store `turn_index`; the feature needs
+  it together with a `session_id`, so memories written before this change have no neighbours.
+  The LongMemEval harness stores each chat as its own session and gains a `+neighbors` variant.
 - Memory-level fact supersession (GX-2), behind `FACT_SUPERSESSION` (default off). Dream State
   links a memory to the older statements it updates (`superseded_by`, `valid_to`; nothing is
   hidden). Retrieval (`opts.supersession`) ranks the current statement directly above a stale
