@@ -163,7 +163,9 @@ Persist one turn (episode + episodic memory + extracted entities/relations).
 {
   "content": "Alice moved to Berlin in 2019",
   "ctx": { "tenant_id": "acme", "agent_id": "a", "access_level": "write" },
-  "turn_index": 0,                // optional, default 0 (part of the idempotency key)
+  "turn_index": 0,                // optional, default 0 (part of the idempotency key). With
+                                  //   session_id it is the turn's position in the session,
+                                  //   which `opts.neighbor_turns` reads.
   "source_reliability": 1.0,      // optional 0..1 (§8/§12) — weights corroboration → belief
   "memory_type": "episodic",      // optional: "episodic" | "working" (§5/§14) — working
                                   //   memory is session-scoped (TTL) + SCM-capped, mints no entities
@@ -247,8 +249,14 @@ Hybrid retrieval (BM25 + vector + graph → RRF → MMR → tiered token budget,
     "supersession": false,          // GX-2: rank a stale statement's current successor above it
                                     //   and mark the stale line "(superseded <time>)". Needs a
                                     //   Dream pass with FACT_SUPERSESSION=true to make the links.
-    "as_of": null                   // ISO date/date-time: only memories that existed by then,
+    "as_of": null,                  // ISO date/date-time: only memories that existed by then,
                                     //   supersession judged as of then. Unparseable → 422.
+    "neighbor_turns": 0             // 0–5: also inject the turns within this many positions of
+                                    //   each hit, in the hit's session (the reply to a retrieved
+                                    //   question). They only use budget the hits left, sit next
+                                    //   to their hit in turn order, and follow the k hits in
+                                    //   `hits` with source "neighbor". Needs memories stored
+                                    //   with a session_id and turn_index.
   }
 }
 // response
@@ -259,12 +267,13 @@ Hybrid retrieval (BM25 + vector + graph → RRF → MMR → tiered token budget,
   "tokens_injected": 64
 }
 ```
-`source` ∈ `bm25 | vector | graph`. `read_agent_ids` widens reads only (writes always
+`source` ∈ `bm25 | vector | graph` (joined with `+` when several arms found the memory), or
+`neighbor` for a turn injected by `opts.neighbor_turns`. `read_agent_ids` widens reads only (writes always
 use `agent_id`) and stays tenant-scoped — a cross-tenant id returns nothing. On any
 fault the response is empty (`context: ""`, `hits: []`) — never an error.
 
 Every `opts` field defaults from server config (`MODE`, `K`, `RERANK_ENABLED`,
-`CANDIDATE_POOL`, `RETRIEVE_ENTITY_SUMMARIES`, `FACT_SUPERSESSION`, …); a request value overrides it per call. `mode`/`rerank`/`candidate_pool`
+`CANDIDATE_POOL`, `RETRIEVE_ENTITY_SUMMARIES`, `FACT_SUPERSESSION`, `RETRIEVE_NEIGHBOR_TURNS`, …); a request value overrides it per call. `mode`/`rerank`/`candidate_pool`
 are retrieval-quality knobs — see [ops.md](ops.md#configuration-environment) for defaults, cost,
 and when to raise them, and [DESIGN.md §23](DESIGN.md) for the benchmark results that motivate
 each.

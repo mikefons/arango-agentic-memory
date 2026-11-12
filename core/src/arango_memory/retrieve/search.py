@@ -195,6 +195,32 @@ FOR key IN @keys
 # Hops followed from a stale hit to the statement that is current now (or as of `as_of`).
 _SUCCESSOR_HOPS = 5
 
+# Neighbour expansion: the turns within @window positions of each hit, in the hit's session,
+# nearest first. A hit stored without a session or a position has none, and a turn at the hit's
+# own position is not a neighbour — callers that never set `turn_index` leave every memory at 0.
+# idx_mem_turn serves the inner lookup.
+_NEIGHBORS = """
+FOR key IN @keys
+  LET hit = DOCUMENT("memories", key)
+  FILTER hit != null AND hit.session_id != null AND hit.turn_index != null
+  LET near = (
+    FOR n IN memories
+      FILTER n.tenant_id == @tenant_id AND n.agent_id == hit.agent_id
+         AND n.session_id == hit.session_id
+         AND n.turn_index >= hit.turn_index - @window
+         AND n.turn_index <= hit.turn_index + @window
+         AND n.turn_index != hit.turn_index
+         AND n.invalid_at == null AND n.type != "working"
+      SORT ABS(n.turn_index - hit.turn_index), n.turn_index
+      LIMIT @cap
+      RETURN { key: n._key, text: n.text, agent_id: n.agent_id, type: n.type,
+               event_time: n.event_time, created_at: n.created_at,
+               offset: n.turn_index - hit.turn_index }
+  )
+  FOR n IN near
+    RETURN MERGE(n, { anchor: key })
+"""
+
 _ENCODER = tiktoken.get_encoding("cl100k_base")
 
 _RRF_K = 60
@@ -241,6 +267,8 @@ class _Candidate:
     superseded_by: str | None = None  # GX-2: the newer memory that updates this one
     valid_to: str | None = None       # GX-2: when it stopped being current
     stale: bool = False               # GX-2: superseded within this query's time view
+    anchor: str | None = None         # neighbour expansion: the hit this turn sits next to
+    offset: int = 0                   # …and its position relative to that hit
 
 
 def _candidate(row: dict[str, Any]) -> _Candidate:
@@ -413,8 +441,41 @@ def _mmr(
     return selected
 
 
-def _assemble_tiered(hits: list[_Candidate], max_tokens: int) -> tuple[str, int]:
-    """Tiered token-budget assembly with roll-up of unused budget (§9)."""
+def _neighbors(
+    db: StandardDatabase,
+    selected: list[_Candidate],
+    window: int,
+    *,
+    tenant_id: str,
+    as_of: datetime | None,
+) -> list[_Candidate]:
+    """The turns within `window` positions of each selected hit, in its session. Each turn is
+    returned once, tied to its best-ranked hit; a turn that is itself a hit is left out. Ordered
+    best hit first, nearest turn first — the order the token budget is spent in."""
+    rank = {c.key: i for i, c in enumerate(selected)}
+    rows = _run(db, _NEIGHBORS, {"keys": list(rank), "tenant_id": tenant_id, "window": window,
+                                 "cap": 2 * window})
+    rows.sort(key=lambda r: (rank[r["anchor"]], abs(r["offset"]), r["offset"]))
+    out: list[_Candidate] = []
+    seen = set(rank)
+    for row in rows:
+        if row["key"] in seen:
+            continue
+        seen.add(row["key"])
+        cand = _candidate(row)
+        cand.anchor, cand.offset = row["anchor"], row["offset"]
+        cand.signals.add("neighbor")
+        cand.fused_score = selected[rank[cand.anchor]].fused_score
+        out.append(cand)
+    return _as_of_filter(out, as_of) if as_of is not None else out
+
+
+def _assemble_tiered(
+    hits: list[_Candidate], max_tokens: int, neighbors: Sequence[_Candidate] = (),
+) -> tuple[str, int, list[_Candidate]]:
+    """Tiered token-budget assembly with roll-up of unused budget (§9). Returns the context, its
+    token count, and the `neighbors` that fit: they only take budget the hits left, so expansion
+    never displaces a retrieved memory, and each is placed next to its hit in turn order."""
     caps = {tier: int(frac * max_tokens) for tier, frac in _TIER_FRACTIONS.items()}
     tier_used = dict.fromkeys(_TIER_FRACTIONS, 0)
     chosen: list[_Candidate] = []
@@ -442,10 +503,21 @@ def _assemble_tiered(hits: list[_Candidate], max_tokens: int) -> tuple[str, int]
             total += cost
 
     chosen.sort(key=lambda c: -c.fused_score)
+    chosen_keys = {c.key for c in chosen}
+    around: dict[str, list[_Candidate]] = {}
+    for cand in neighbors:
+        cost = _count_tokens(cand.text)
+        if cand.anchor in chosen_keys and total + cost <= max_tokens:
+            around.setdefault(cand.anchor, []).append(cand)
+            total += cost
     # IN-4: prefix the memory's provenance time (a field, not part of the matched text) into the
     # injected line, so the answerer can reason over *when* without the date diluting retrieval.
-    context = "\n".join(_assemble_line(c) for c in chosen)
-    return context, total
+    context = "\n".join(
+        _assemble_line(c)
+        for hit in chosen
+        for c in sorted([hit, *around.get(hit.key, [])], key=lambda c: c.offset)
+    )
+    return context, total, [c for group in around.values() for c in group]
 
 
 def retrieve(
@@ -472,6 +544,7 @@ def retrieve(
     entity_summaries: bool | None = None,
     supersession: bool | None = None,
     as_of: str | None = None,
+    neighbor_turns: int | None = None,
 ) -> RetrieveResult:
     """Instrumented retrieval (DESIGN.md §18): span + metrics + §15 degradation.
 
@@ -485,7 +558,9 @@ def retrieve(
     Dream State summaries of the entities the hits mention. `supersession=None` uses
     `settings.fact_supersession` (GX-2): rank a stale statement's current successor above it
     and mark it superseded. `as_of` (ISO date/time) restricts the view to memories that
-    existed by then, with supersession judged as of that time. Any failure degrades to an empty
+    existed by then, with supersession judged as of that time. `neighbor_turns=None` uses
+    `settings.retrieve_neighbor_turns`: also inject the turns within that many positions of
+    each hit, in its session, from whatever budget the hits left. Any failure degrades to an empty
     (memory-less) result and a `degraded` event, so a memory fault never breaks the turn.
     """
     if as_of and _event_sort_key(as_of) is None:  # a caller error, not a memory fault
@@ -517,6 +592,7 @@ def retrieve(
                 entity_summaries=entity_summaries,
                 supersession=supersession,
                 as_of=as_of,
+                neighbor_turns=neighbor_turns,
             )
     except Exception as exc:  # noqa: BLE001 — §15: memory failures never break the turn
         metrics.emit("degraded", op="retrieve", reason=type(exc).__name__)
@@ -843,6 +919,7 @@ def _retrieve_impl(
     entity_summaries: bool | None = None,
     supersession: bool | None = None,
     as_of: str | None = None,
+    neighbor_turns: int | None = None,
 ) -> RetrieveResult:
     """BM25 (+ vector when trained) → RRF → (rerank) → MMR → tiered token-budget assembly.
 
@@ -941,7 +1018,14 @@ def _retrieve_impl(
             db, [c.key for c in selected], tenant_id,
             int(_TIER_FRACTIONS["semantic"] * max_memory_tokens),
         )
-    context, tokens = _assemble_tiered(selected, max_memory_tokens - entity_tokens)
+    window = settings.retrieve_neighbor_turns if neighbor_turns is None else neighbor_turns
+    nearby = (
+        _neighbors(db, selected, window, tenant_id=tenant_id, as_of=as_of_key)
+        if window > 0 else []
+    )
+    context, tokens, nearby = _assemble_tiered(
+        selected, max_memory_tokens - entity_tokens, nearby
+    )
     if entities:
         context = f"{context}\n\n{entities}" if context else entities
         tokens += entity_tokens
@@ -953,7 +1037,7 @@ def _retrieve_impl(
     hits = [
         MemoryHit(text=c.text, score=round(c.fused_score, 6),
                   source="+".join(sorted(c.signals)), agent_id=c.agent_id, key=c.key)
-        for c in selected
+        for c in [*selected, *nearby]  # injected neighbours follow the k hits
     ]
     return RetrieveResult(context=context, hits=hits, tokens_injected=tokens)
 
