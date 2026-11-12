@@ -1671,6 +1671,29 @@ Answer accuracy has not been measured: that needs paid answer passes (`+neighbor
 
 Scripts and per-question results: `core/bench_runs/neighbour/` (gitignored).
 
+**Fact-augmented keys (rev 106, 2026-11-12).** The second lever from the list above. A free
+diagnostic (`bench_runs/factkeys/pooldiag.py`) located every labelled evidence turn missing from
+the top-20, 8,000-token context in the fused candidate pool (150 deep, before MMR):
+
+| sample | questions | in context | pool rank 50–150 | pool rank under 50 | not in pool |
+|---|---|---|---|---|---|
+| held-out | 78 | 137 | 8 | 3 | 2 |
+| original | 90 | 144 | 9 | 11 | 2 |
+
+The missed multi-session turns state the fact in passing, inside a request about something else
+("…I made a whole wheat baguette last Saturday" in a question about bread tips), so BM25 and the
+embedding both rank the turn by its main topic. The reranker only sees the top 50, but widening
+its window to 100 or 150 recovers nothing (held-out: 137 / 135 / 136 evidence turns found): the
+cross-encoder does not rate these turns relevant either.
+
+Fact keys put the stated fact into the index. A Dream State pass (`lifecycle/facts.py`) has the
+LLM write each memory's facts as short standalone sentences (relative dates resolved from the
+message date) and stores `facts` plus one embedding per fact on the memory. Retrieval gains two
+arms, BM25 over `facts` and the best cosine among a memory's fact embeddings (an exact scan of
+the tenant's memories, skipped above `FACT_VECTOR_SCAN_MAX`; the shared vector index holds only
+`embedding`). Both return the parent memory, so the value stays the original turn. Off by default;
+unmeasured on answers when this was written.
+
 ### Recall vs corpus size — the fusion-holds curve (HX-2)
 
 The project's thesis as a chart: on an **open corpus that grows**, graph+vector+BM25 fusion

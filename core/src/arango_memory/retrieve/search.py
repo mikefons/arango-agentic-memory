@@ -64,6 +64,39 @@ FOR doc IN {SEARCH_VIEW}
             strength: doc.strength, accessed_at: doc.accessed_at, created_at: doc.created_at }}
 """
 
+# FK-1: the same view, matched on the facts Dream State stored on each memory.
+_FACT_BM25_QUERY = f"""
+FOR doc IN {SEARCH_VIEW}
+  SEARCH ANALYZER(doc.facts IN TOKENS(@query, "text_en"), "text_en")
+     AND doc.tenant_id == @tenant_id
+     AND doc.agent_id IN @agent_ids
+  FILTER doc.invalid_at == null
+  SORT BM25(doc) DESC
+  LIMIT @pool
+  RETURN {{ key: doc._key, text: doc.text, score: BM25(doc), agent_id: doc.agent_id,
+            embedding: doc.embedding, type: doc.type, event_time: doc.event_time,
+            strength: doc.strength, accessed_at: doc.accessed_at, created_at: doc.created_at }}
+"""
+
+# FK-1: a memory's score is its best-matching fact embedding. Exact scan of the tenant's memories
+# (no index on the per-fact vectors), so the caller gates it on tenant size.
+_FACT_VECTOR_QUERY = """
+FOR doc IN memories
+  FILTER doc.tenant_id == @tenant_id AND doc.agent_id IN @agent_ids
+     AND doc.invalid_at == null AND doc.fact_embeddings != null
+  LET score = MAX(FOR v IN doc.fact_embeddings RETURN COSINE_SIMILARITY(v, @qvec))
+  SORT score DESC
+  LIMIT @pool
+  RETURN { key: doc._key, text: doc.text, score: score, agent_id: doc.agent_id,
+           embedding: doc.embedding, type: doc.type, event_time: doc.event_time,
+           strength: doc.strength, accessed_at: doc.accessed_at, created_at: doc.created_at }
+"""
+_TENANT_SIZE = """
+RETURN LENGTH(FOR doc IN memories
+  FILTER doc.tenant_id == @tenant_id AND doc.agent_id IN @agent_ids AND doc.invalid_at == null
+  RETURN 1)
+"""
+
 # Force the ArangoSearch view to index pending commits before returning, so a write
 # is immediately visible to BM25 retrieval (MA-1 read-your-writes). arangosearch's
 # `waitForSync` query option triggers the view commit; scoped to the tenant to keep
@@ -370,6 +403,8 @@ def _arm_weight(name: str) -> float:
         "bm25": settings.rrf_bm25_weight,
         "graph": settings.rrf_graph_weight,
         "vector": settings.rrf_vector_weight,
+        "fact_bm25": settings.rrf_fact_weight,
+        "fact_vector": settings.rrf_fact_weight,
     }.get(name, 1.0)
 
 
@@ -545,6 +580,7 @@ def retrieve(
     supersession: bool | None = None,
     as_of: str | None = None,
     neighbor_turns: int | None = None,
+    fact_keys: bool | None = None,
 ) -> RetrieveResult:
     """Instrumented retrieval (DESIGN.md §18): span + metrics + §15 degradation.
 
@@ -560,7 +596,9 @@ def retrieve(
     and mark it superseded. `as_of` (ISO date/time) restricts the view to memories that
     existed by then, with supersession judged as of that time. `neighbor_turns=None` uses
     `settings.retrieve_neighbor_turns`: also inject the turns within that many positions of
-    each hit, in its session, from whatever budget the hits left. Any failure degrades to an empty
+    each hit, in its session, from whatever budget the hits left. `fact_keys=None` uses
+    `settings.retrieve_fact_keys` (FK-1): also match the query against the facts Dream State
+    stored on each memory. Any failure degrades to an empty
     (memory-less) result and a `degraded` event, so a memory fault never breaks the turn.
     """
     if as_of and _event_sort_key(as_of) is None:  # a caller error, not a memory fault
@@ -593,6 +631,7 @@ def retrieve(
                 supersession=supersession,
                 as_of=as_of,
                 neighbor_turns=neighbor_turns,
+                fact_keys=fact_keys,
             )
     except Exception as exc:  # noqa: BLE001 — §15: memory failures never break the turn
         metrics.emit("degraded", op="retrieve", reason=type(exc).__name__)
@@ -626,6 +665,7 @@ def _gather_fused(
     dimensions: int,
     decay_binds: dict[str, Any],
     now: str,
+    fact_keys: bool = False,
 ) -> list[_Candidate]:
     """One query's arms (BM25 + vector + graph) → RRF fusion → recency boost.
 
@@ -652,6 +692,20 @@ def _gather_fused(
         )
         ranked_lists.append(vector_rows)
         names.append("vector")
+
+    # FK-1: match the query against the facts stored on each memory.
+    if fact_keys:
+        fact_rows = _run(db, _FACT_BM25_QUERY, {"query": query, **scope})
+        if fact_rows:
+            ranked_lists.append(fact_rows)
+            names.append("fact_bm25")
+        size = cast(int, next(iter(cast(Cursor, db.aql.execute(
+            _TENANT_SIZE, bind_vars={"tenant_id": tenant_id, "agent_ids": agent_ids})))))
+        if query_vec and size <= settings.fact_vector_scan_max:
+            fact_vec_rows = _run(db, _FACT_VECTOR_QUERY, {"qvec": query_vec, **scope})
+            if fact_vec_rows:
+                ranked_lists.append(fact_vec_rows)
+                names.append("fact_vector")
 
     # Graph expansion (§9 stage 4): traverse from the entities of the top hits to
     # surface connected memories that lexical/vector search alone would miss.
@@ -920,6 +974,7 @@ def _retrieve_impl(
     supersession: bool | None = None,
     as_of: str | None = None,
     neighbor_turns: int | None = None,
+    fact_keys: bool | None = None,
 ) -> RetrieveResult:
     """BM25 (+ vector when trained) → RRF → (rerank) → MMR → tiered token-budget assembly.
 
@@ -951,6 +1006,7 @@ def _retrieve_impl(
             dimensions=emb.dimensions,
             decay_binds=decay_binds,
             now=now,
+            fact_keys=settings.retrieve_fact_keys if fact_keys is None else fact_keys,
         )
 
     if mode == "multihop":
@@ -1053,6 +1109,7 @@ def diagnose_pool(
     n_lists: int | None = None,
     graph_hops: int | None = None,
     embedder: Embedder | None = None,
+    fact_keys: bool | None = None,
 ) -> list[MemoryHit]:
     """The full ranked fused candidate pool (BM25 ∪ vector ∪ graph → RRF → recency),
     *before* MMR and token-budget truncation — the lite single-shot pool `retrieve` picks
@@ -1077,6 +1134,7 @@ def diagnose_pool(
         dimensions=emb.dimensions,
         decay_binds=decay_binds,
         now=now,
+        fact_keys=settings.retrieve_fact_keys if fact_keys is None else fact_keys,
     )
     return [
         MemoryHit(text=c.text, score=round(c.fused_score, 6),

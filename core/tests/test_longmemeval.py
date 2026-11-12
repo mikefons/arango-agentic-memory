@@ -218,10 +218,11 @@ def test_parse_variant() -> None:
     assert _parse_variant("+supersession") == _Variant(supersession=True)
     assert _parse_variant("rrf+entities+supersession") == _Variant("rrf", None, True, True)
     assert _parse_variant("replace+neighbors") == _Variant("replace", neighbors=True)
+    assert _parse_variant("replace+facts") == _Variant("replace", facts=True)
     with pytest.raises(ValueError, match="unknown rerank scoring"):
         _parse_variant("bogus")
     with pytest.raises(ValueError, match="unknown variant suffix"):
-        _parse_variant("replace+facts")
+        _parse_variant("replace+bogus")
 
 
 def test_convert_injects_session_and_question_dates() -> None:

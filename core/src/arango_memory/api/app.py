@@ -155,6 +155,8 @@ class RetrieveOptions(BaseModel):
     as_of: str | None = None
     # also inject the turns within this many positions of each hit, in its session
     neighbor_turns: int = Field(default=settings.retrieve_neighbor_turns, ge=0, le=5)
+    # FK-1: also match the query against the facts Dream State stored on each memory
+    fact_keys: bool = settings.retrieve_fact_keys
 
     @field_validator("as_of")
     @classmethod
@@ -749,6 +751,7 @@ async def retrieve_endpoint(
         supersession=req.opts.supersession,
         as_of=req.opts.as_of,
         neighbor_turns=req.opts.neighbor_turns,
+        fact_keys=req.opts.fact_keys,
     )
     return RetrieveResponse(
         context=result.context,

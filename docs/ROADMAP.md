@@ -58,6 +58,7 @@ Status: ✅ shipped · 🔄 built, merge pending · ✖ closed (won't do). Unmar
 | 24 | GX-2 | Memory-level fact supersession + `as_of` retrieval (the scoped newness signal RQ-3 called for) 🔄 — built, off by default | L | — |
 | 25 | GX-3 | Fact retrieval arm over typed-relation statements (needs an LLM/GLiREL extractor) | L | GX-2 |
 | 26 | LM-1 | Neighbour expansion: inject the turns next to each hit (`opts.neighbor_turns`) 🔄 — built, off by default; answer accuracy not yet measured | S | — |
+| 27 | FK-1 | Fact-augmented keys: Dream-extracted facts per memory, matched by two extra retrieval arms 🔄 — built, off by default; not yet measured | M | — |
 
 Recommended sequence: **MA-1 → MA-2 → MA-3 → MA-4 → MA-5 → MA-6**, with MA-7/MA-8
 schedulable any time (no dependencies on the others). MA-1…MA-8 are **shipped**. **RQ-1**
@@ -1548,6 +1549,22 @@ none of the ten stable misses gains evidence.
   about $1.20. This is a user spend decision.
 - Whether to turn it on by default depends on that run and on the extra context being worth it.
 - Whole-session expansion reaches more multi-session evidence but needs about 18,000 tokens.
+
+### FK-1 — Fact-augmented keys  🔄 (built; off by default)
+
+From the LongMemEval assessment (DESIGN §23 rev 104), after LM-1. A turn is indexed under what it
+is mostly about, so a fact it states in passing ("by the way, I baked a baguette last Saturday",
+inside a request for bread tips) ranks far below the topic. A free diagnostic over both samples
+(DESIGN §23 rev 106) found 17 of the 31 evidence turns missing from the top-20 context at pool
+rank 50–150; widening the reranker window does not recover them.
+
+**Built.** `FACT_KEYS=true` makes Dream State extract each memory's facts (one LLM call per
+memory; `FACT_KEYS_PREFIX=user:` mines only the user's turns) and store them with one embedding
+per fact. `RETRIEVE_FACT_KEYS` / `opts.fact_keys` adds a BM25 arm and a best-fact-cosine arm; the
+memory is still what is returned. Harness variant `+facts`.
+
+**Open.** The pilot and full measurements (DESIGN §23 rev 106); whether the exact fact-vector
+scan needs an index at larger tenants; extraction cost against the gain.
 
 ### GX-3 — Fact retrieval arm
 

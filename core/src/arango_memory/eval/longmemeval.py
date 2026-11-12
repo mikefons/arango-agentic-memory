@@ -181,7 +181,7 @@ class _Evidence:
 
 
 #: Retrieval features a variant may switch on with a `+name` suffix.
-VARIANT_FLAGS = ("entities", "supersession", "neighbors")
+VARIANT_FLAGS = ("entities", "supersession", "neighbors", "facts")
 
 
 @dataclass(frozen=True)
@@ -191,13 +191,15 @@ class _Variant:
     entities: bool = False      # GX-1 entity summaries
     supersession: bool = False  # GX-2 memory-level supersession
     neighbors: bool = False     # the turn before and after each hit
+    facts: bool = False         # FK-1 fact-augmented keys
 
 
 def _parse_variant(spec: str) -> _Variant:
     """`"event_time:0.2"` → scoring event_time, weight 0.2; `"rrf"`; `""` → the defaults.
     `+entities` / `+supersession` suffixes switch those features on, e.g.
     `"replace+entities+supersession"` or `"+supersession"` (no rerank scoring override).
-    `+neighbors` injects the turn before and after each hit."""
+    `+neighbors` injects the turn before and after each hit; `+facts` matches the query against
+    the facts Dream State stored (FK-1)."""
     head, *flags = spec.split("+")
     for flag in flags:
         if flag not in VARIANT_FLAGS:
@@ -213,7 +215,7 @@ def _parse_variant(spec: str) -> _Variant:
             )
         scoring, weight = name, float(w) if w else None
     return _Variant(scoring, weight, "entities" in flags, "supersession" in flags,
-                    "neighbors" in flags)
+                    "neighbors" in flags, "facts" in flags)
 
 
 def _evidence_metrics(
@@ -340,7 +342,7 @@ def _process_sample(
                 rerank=rerank or v.scoring is not None,
                 rerank_scoring=v.scoring, rerank_time_weight=v.weight,
                 entity_summaries=v.entities, supersession=v.supersession,
-                neighbor_turns=1 if v.neighbors else 0,
+                neighbor_turns=1 if v.neighbors else 0, fact_keys=v.facts,
                 # Variants compare scorings on identical state: a read-only probe, so one
                 # variant's spaced-repetition refresh can't shift the decay the next one sees.
                 record_access=not variant,
@@ -729,7 +731,9 @@ def _build_parser() -> argparse.ArgumentParser:
                              "+entities / +supersession suffixes switch on entity summaries / "
                              "GX-2 supersession (e.g. replace,replace+supersession; needs "
                              "--dream, and FACT_SUPERSESSION=true for the supersession links). "
-                             "+neighbors also injects the turn before and after each hit")
+                             "+neighbors also injects the turn before and after each hit; "
+                             "+facts matches the query against the facts Dream State stored "
+                             "(FK-1; needs FACT_KEYS=true on the dream pass)")
     parser.add_argument("--dream", action="store_true",
                         help="run one Dream State pass per question after ingest (LLM: one "
                              "summary call per entity with >= CONSOLIDATION_MENTION_THRESHOLD "

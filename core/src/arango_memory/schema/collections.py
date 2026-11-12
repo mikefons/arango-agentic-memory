@@ -227,6 +227,7 @@ def _ensure_search_view(db: StandardDatabase) -> None:
     """ArangoSearch view over memory text (BM25) with tenant/agent scope fields."""
     existing = {v["name"] for v in cast("list[dict[str, Any]]", db.views())}
     if SEARCH_VIEW in existing:
+        _ensure_view_fields(db)
         return
 
     db.create_arangosearch_view(
@@ -237,6 +238,7 @@ def _ensure_search_view(db: StandardDatabase) -> None:
                     "fields": {
                         "text": {"analyzers": ["text_en"]},
                         "prospective_queries": {"analyzers": ["text_en"]},
+                        "facts": {"analyzers": ["text_en"]},
                         "tenant_id": {"analyzers": ["identity"]},
                         "agent_id": {"analyzers": ["identity"]},
                     },
@@ -246,3 +248,14 @@ def _ensure_search_view(db: StandardDatabase) -> None:
             "consolidationIntervalMsec": 10000,
         },
     )
+
+
+def _ensure_view_fields(db: StandardDatabase) -> None:
+    """Add fields introduced after a view was created (FK-1 `facts`). Idempotent."""
+    props = cast("dict[str, Any]", db.view(SEARCH_VIEW))
+    fields = props.get("links", {}).get("memories", {}).get("fields", {})
+    if "facts" not in fields:
+        db.update_arangosearch_view(
+            SEARCH_VIEW,
+            {"links": {"memories": {"fields": {"facts": {"analyzers": ["text_en"]}}}}},
+        )

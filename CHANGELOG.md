@@ -23,6 +23,15 @@ are versioned together and released from this repository.
   appear next to their hit in turn order. Memories now store `turn_index`; the feature needs
   it together with a `session_id`, so memories written before this change have no neighbours.
   The LongMemEval harness stores each chat as its own session and gains a `+neighbors` variant.
+- Fact-augmented keys (FK-1), behind `FACT_KEYS` (default off). Dream State has the LLM state
+  the facts each memory carries, as short standalone sentences with relative dates resolved, and
+  stores them with one embedding per fact (`FACT_KEYS_PREFIX=user:` mines only the user's turns).
+  Retrieval (`RETRIEVE_FACT_KEYS` / `opts.fact_keys`, default off) then matches the query against
+  the facts too, through a BM25 arm and a best-fact-cosine arm, so a turn that mentions something
+  in passing is found by it; the memory itself is still what is returned. The search view gains a
+  `facts` field (added to existing views at startup). The vector arm is an exact scan, skipped
+  above `FACT_VECTOR_SCAN_MAX` memories per tenant. The LongMemEval harness gains a `+facts`
+  variant.
 - Memory-level fact supersession (GX-2), behind `FACT_SUPERSESSION` (default off). Dream State
   links a memory to the older statements it updates (`superseded_by`, `valid_to`; nothing is
   hidden). Retrieval (`opts.supersession`) ranks the current statement directly above a stale
