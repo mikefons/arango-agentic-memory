@@ -1500,6 +1500,138 @@ The preference type (0.20–0.27) is still the weakest. GX-1's note stands: abou
 are the answerer declining with the memory in context, an answer-prompt issue. Results:
 `core/bench_runs/gx1/` (gitignored), database `bench_gx1`.
 
+**Benchmark assessment: the answer step was the bottleneck (rev 104, 2026-11-11).** Rev 103's
+0.644 was re-examined on the same ingest, with `--answer-only`-style passes that cost cents.
+Evidence labels were rebuilt from the raw dataset, since `lme.json` had been converted without
+them.
+
+*Where the misses came from.* 25 of the 32 baseline misses were the answerer declining. The
+harness reused the hallucination benchmark's answer prompt: use only the context, otherwise say
+"I don't know", add nothing. That prompt:
+- refused date arithmetic with both dates in context;
+- refused every preference question, which asks for a suggestion.
+
+With all the evidence in context, the answerer still got only 53 of 73 questions right.
+
+*Experiments.* Each row is one pass over `bench_gx1` with the `replace` variant, Haiku 5.5 as
+answerer and judge:
+
+| setup | overall | KU | MS | SSA | SSP | SSU | TR |
+|---|---|---|---|---|---|---|---|
+| rev 103 harness (repeat) | 0.644 | 0.87 | 0.40 | 0.87 | 0.20 | 0.87 | 0.67 |
+| + official per-type judge rules | 0.700 | 1.00 | 0.53 | 0.87 | 0.20 | 0.87 | 0.73 |
+| + LongMemEval answer prompt | 0.778 | 0.93 | 0.33 | 0.93 | 0.80 | 0.93 | 0.73 |
+| + top 20, 8,000-token context | 0.844 | 1.00 | 0.53 | 0.93 | 0.80 | 0.93 | 0.87 |
+| + thinking on | 0.867 | 1.00 | 0.47 | 0.93 | 1.00 | 0.93 | 0.87 |
+| top 50, 20,000 tokens (no thinking) | 0.833 | 1.00 | 0.53 | 0.87 | 0.87 | 0.93 | 0.80 |
+
+Reading the rows:
+- **Judge.** The official grader has per-type rules: off-by-one days are fine for
+  temporal-reasoning; an updated answer may mention the old value; preference answers are
+  graded against a rubric. Our generic judge matched a recommendation against rubric text.
+  This step, about 0.06, is fairer measurement, not a better system.
+- **Answer prompt.** It asks the answerer to list the relevant excerpts, reason step by step,
+  use the newest statement, personalize suggestions, and decline only when nothing relevant is
+  in context. With all the evidence in context it gets 67 of 73 right.
+- **Context.** The product's 1,500-token default fits about 8.3 of 10 retrieved turns. All the
+  evidence is in context for 73 of 90 questions at top 10 and 80 of 90 at top 20. Top 50 adds
+  nothing.
+- **Thinking on** is worth 2 questions, within run-to-run scatter, so it is not adopted.
+
+*What remains is retrieval for multi-session questions.* They need about 3 evidence sessions
+each ("how many", "total spent"). All of them are retrieved for 6 of 15 questions at top 10 and
+10 of 15 at top 20, and accuracy stays near 0.5 under every setup.
+
+Of the 12 misses in the best setup:
+- 8 are multi-session: 5 lack evidence, 3 are counting or joining errors;
+- 2 are temporal date arithmetic;
+- 2 are single-session questions where the user's turn was retrieved but the answer sat in the
+  adjacent turn.
+
+Other findings:
+- **MMR is slow.** It is pure Python and takes about 20 s per query at k = 50.
+- **No abstention questions.** The 90-question sample held none, because they sit at the end of
+  each type, so the looser prompt's tendency to guess was unmeasured.
+
+*Adopted in the harness.*
+- the LongMemEval answer prompt, with a 1,200-token reply;
+- the official per-type judge rules, kept in the one-word CORRECT/INCORRECT reply format;
+- defaults of `--k 20` and `--max-memory-tokens 8000`, for the harness only (the product default
+  of 1,500 is unchanged);
+- converter: evidence labels on by default, abstention questions as their own stratum, and
+  `--exclude` to draw a held-out sample.
+
+Caveats:
+- The prompt was written after reading these 90 questions' failures, so the table is in-sample.
+  The held-out validation below addresses this.
+- The judge is Haiku 5.5, not the GPT-4o the benchmark specifies.
+- Published competitor scores are mostly self-reported, with stronger answer models and 7k–30k
+  tokens of context.
+
+Ranked next levers for the multi-session gap:
+1. round and neighbour expansion;
+2. fact-augmented keys;
+3. enumeration through the graph for counting questions;
+4. event-date resolution and time-aware query expansion;
+5. a Dream-maintained observation log;
+6. a numpy MMR.
+
+*Held-out validation (2026-11-11).* The table above is in-sample, so the adopted harness was
+checked on 91 questions it had never seen: a stratified draw with `--exclude lme.json`, 13 of
+them abstention questions (7 multi-session, 6 single-session-user), evidence labels on. One
+ingest and Dream pass (anchored gate), then four answer passes over it with `--answer-only`:
+one with the rev 103 harness (top 10, 1,500 tokens) and three with the rev 104 harness.
+
+`replace` variant, Haiku 5.5 as answerer and judge:
+
+| harness | overall | answerable (78) | abstention (13) | KU | MS | SSA | SSP | SSU | TR |
+|---|---|---|---|---|---|---|---|---|---|
+| rev 103 | 0.747 | 0.705 | 13 | 0.85 | 0.70 | 1.00 | 0.15 | 1.00 | 0.69 |
+| rev 104, pass 1 | 0.879 | 0.872 | 12 | 1.00 | 0.60 | 1.00 | 0.85 | 1.00 | 0.92 |
+| rev 104, pass 2 | 0.868 | 0.859 | 12 | 1.00 | 0.70 | 0.92 | 0.77 | 1.00 | 0.85 |
+| rev 104, pass 3 | 0.879 | 0.872 | 12 | 1.00 | 0.65 | 1.00 | 0.77 | 1.00 | 0.92 |
+
+Paired against the rev 103 pass, the three rev 104 passes are +15/−3 (p = 0.008), +15/−4
+(p = 0.019) and +14/−2 (p = 0.004).
+
+- **The gain holds out of sample.** Overall 0.747 → 0.875 (mean of three), and 0.705 → 0.868 on
+  answerable questions. The overall step is smaller than the in-sample one because the old
+  prompt, which declines readily, gets all 13 abstention questions for free.
+- **The looser prompt does not guess.** It declines 12 of 13 unanswerable questions in every
+  pass. The one miss is the same question each time: the answer says the Master's degree is not
+  on record, but still gives a total for the other degrees.
+- **Multi-session did not move.** Answerable multi-session questions score 7 of 13 with the old
+  harness and 6, 8 and 7 of 13 with the new one. This is the gap the answer step cannot close.
+- **What the misses are.** Of the 11–12 misses per pass, 6–9 have all the evidence in context
+  (counting and totalling errors, and two preference questions), 2–4 lack evidence, and 1 is the
+  abstention question. All the evidence is in context for 72 of 79 labelled questions at top 20
+  (68 at top 10).
+
+*GX-1 and GX-2 under the fixed harness.* The same three passes scored all four variants:
+
+| variant | pass 1 | pass 2 | pass 3 | mean | paired vs `replace`, pooled |
+|---|---|---|---|---|---|
+| `replace` | 0.879 | 0.868 | 0.879 | 0.875 | — |
+| `replace+entities` | 0.890 | 0.835 | 0.857 | 0.861 | +9/−13 |
+| `replace+supersession` | 0.868 | 0.835 | 0.857 | 0.853 | +8/−14 |
+| `replace+entities+supersession` | 0.835 | 0.890 | 0.879 | 0.868 | +9/−11 |
+
+- **Noise floor.** The same variant, answered again over identical retrieval, changes verdict on
+  2 to 11 of the 91 questions, and its accuracy moves by up to 0.055. A variant differs from
+  `replace` on 7 to 10 questions within a pass, which is the same size.
+- **Neither feature shows an answer gain.** No variant beats `replace` on the mean, and rev 103's
+  +7/−2 for entity summaries does not reproduce. Both defaults stay off.
+- **Supersession still fixes ordering, but the answerer no longer needs it.** Newest-above-stale
+  goes from 7 to 10 of 13. Knowledge-update accuracy is 13 of 13 in every rev 104 pass with or
+  without it: each excerpt carries its date and the prompt says to use the most recent statement.
+- **Sample size.** An effect of one or two questions cannot be read at 91 questions. Deciding
+  these defaults by accuracy would need several hundred.
+
+Remaining caveats: the judge is still Haiku 5.5, and both samples come from LongMemEval-S.
+
+Scripts and per-question results: `core/bench_runs/assess/` and `core/bench_runs/fresh/`
+(gitignored).
+
 ### Recall vs corpus size — the fusion-holds curve (HX-2)
 
 The project's thesis as a chart: on an **open corpus that grows**, graph+vector+BM25 fusion

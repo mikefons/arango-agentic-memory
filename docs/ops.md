@@ -366,8 +366,14 @@ committed). Needs real embeddings **and** a real generator (the answerer + the L
    questions evenly across all six types for a representative first pass (it prints the type
    distribution):
    `python -m arango_memory.eval.longmemeval_convert longmemeval_s.json lme.json --stratified --limit 90`
+   Abstention questions (`_abs`) are sampled as their own stratum, and evidence labels are
+   carried by default (`--no-evidence` drops them). `--exclude lme.json` skips an earlier
+   sample's questions, for a held-out set.
 2. Run (compose with `--rerank` / `MODE=multihop` as for the other benchmarks):
    `make longmemeval LME_DATASET=lme.json MODE=lite RERANK=--rerank`
+   The harness retrieves 20 memories into an 8,000-token context (`--k`, `--max-memory-tokens`;
+   `LME_K` in the Makefile). It answers with a LongMemEval prompt and grades with the official
+   per-type rules (DESIGN §23 rev 104).
 
 **Ingestion is batched (IN-5).** Each history is ingested in **one `store_many` call** — bulk
 record (IN-1) plus, with `--extract`, the **batched graph pass** (IN-2). The old per-turn
@@ -389,7 +395,7 @@ read it alongside the LoCoMo/MuSiQue retrieval-recall numbers (which isolate the
 **Comparing rerank scorings (RQ-3).** `--rerank-scoring replace,rrf,event_time:0.2` evaluates
 each variant against **one** ingest per question (read-only retrieval probes, so variants see
 identical state) and adds an exact **McNemar** paired test of each variant against the first.
-Convert with **`--evidence`** to carry the `has_answer` turns + session dates; the report then
+The converter carries the `has_answer` turns + session dates by default; the report then
 adds **evidence recall@k** and, for `knowledge-update`, **newest-above-stale** — is the updated
 statement of a fact ranked above the stale one — scored deterministically, no LLM judge.
 **`--retrieval-only`** skips the answerer + judge (no LLM spend) and reports only those evidence

@@ -51,41 +51,91 @@ from ..schema.collections import ensure_schema
 from ..security.forget import purge
 from ..security.redact import redact
 from ..telemetry.logging import configure_logging, logger
-from .halu import generate_answer
 from .locomo import Sample, _normalize, load_dataset
 
 #: RQ-3 rerank scoring modes a `--rerank-scoring` variant may name (see `search._head_scores`).
 SCORINGS = ("replace", "rrf", "event_time")
 
-_JUDGE_SYSTEM = (
-    "You grade a model's answer against the gold answer for a question. Reply with exactly "
-    "one word: CORRECT if the model's answer conveys the same information as the gold answer "
-    "(paraphrase and extra correct detail are fine), or INCORRECT if it is wrong, missing, or "
-    "contradicts the gold answer."
+# The answer step. The hallucination harness's answerer (`halu`) may use ONLY the context and
+# must decline otherwise; reused here it refused date arithmetic and every preference question —
+# 25 of the 32 misses in the rev 103 run were declines with the evidence in context (rev 104).
+_ANSWER_SYSTEM = (
+    "You are an assistant with long-term memory of your past conversations with the user. The "
+    "memory context holds excerpts from those conversations, each prefixed with its date. Answer "
+    "the user's question from it.\n"
+    "- First list the excerpts that bear on the question, then reason step by step: count, sum, "
+    "compare, or compute dates and durations as needed (the question states today's date).\n"
+    "- When a fact changed over time, use the most recent statement.\n"
+    "- If the user asks for a suggestion or recommendation, give a concrete one tailored to what "
+    "the excerpts show about their preferences, possessions and situation.\n"
+    "- Say you don't know only when the excerpts hold nothing about what is asked; do not guess "
+    "a missing fact.\n"
+    "End with a final line starting `Answer:`."
+)
+_ANSWER_MAX_TOKENS = 1200  # room for the listed excerpts and the reasoning before the answer
+
+# Judge rules follow the official LongMemEval grader (`src/evaluation/evaluate_qa.py`), which
+# grades per question type; only the reply format differs (one word, parsed by token).
+_JUDGE_REPLY = " Reply with exactly one word: CORRECT or INCORRECT."
+_JUDGE_BASE = (
+    "You grade a model's answer to a question against the gold answer. It is correct if it "
+    "contains the gold answer, is equivalent to it, or contains all the intermediate steps that "
+    "lead to it. It is incorrect if it contains only a subset of the information the gold answer "
+    "requires."
+)
+_JUDGE_SYSTEMS = {
+    "temporal-reasoning": _JUDGE_BASE + (
+        " Do not penalize off-by-one errors in a number of days, weeks or months: 19 days when "
+        "the gold answer is 18 is still correct."
+    ),
+    "knowledge-update": (
+        "You grade a model's answer to a question against the gold answer. It is correct if it "
+        "contains the gold answer. An answer that also mentions earlier information is still "
+        "correct as long as its updated answer is the gold answer."
+    ),
+    "single-session-preference": (
+        "You grade a model's answer against a rubric for the desired personalized response. It "
+        "is correct if it satisfies the rubric. It does not need to reflect every point of the "
+        "rubric: it is correct as long as it recalls and uses the user's personal information "
+        "correctly."
+    ),
+}
+_ABSTAIN_JUDGE_SYSTEM = (
+    "The question cannot be answered from the user's history; the explanation says why. The "
+    "model's answer is correct if it identifies the question as unanswerable — it may say the "
+    "information is incomplete, or that related information is given but not what was asked. It "
+    "is incorrect if it asserts a specific answer anyway."
 )
 
-_ABSTAIN_JUDGE_SYSTEM = (
-    "The question cannot be answered from the memory provided to the model. Reply with exactly "
-    "one word: CORRECT if the model's answer declines — it says it does not know or that the "
-    "information is not available — or INCORRECT if it asserts a specific answer anyway."
-)
+
+def generate_answer(question: str, context: str, *, generator: Generator) -> str:
+    """The answer step: respond to the question from the retrieved memory context."""
+    prompt = f"Memory context:\n{context or '(none)'}\n\nQuestion: {question}"
+    return generator.complete(
+        prompt, system=_ANSWER_SYSTEM, max_tokens=_ANSWER_MAX_TOKENS
+    ).strip()
 
 
 def judge_correct(
-    question: str, gold: str, answer: str, *, judge: Generator, abstention: bool = False
+    question: str, gold: str, answer: str, *, judge: Generator, abstention: bool = False,
+    category: str | None = None,
 ) -> bool:
-    """LLM judge → is the answer correct? Abstention questions grade a correct *decline*.
+    """LLM judge → is the answer correct? Abstention questions grade a correct *decline*;
+    `category` (the question type) picks the official per-type rule: off-by-one tolerance for
+    temporal-reasoning, old-plus-updated answers for knowledge-update, and a rubric — not a
+    fact to match — for single-session-preference.
 
     Parsed by token so the INCORRECT⊃CORRECT substring never yields a false positive;
     unparseable output scores as incorrect (never breaks the run)."""
     if abstention:
-        prompt = f"Question: {question}\nModel answer: {answer}"
+        prompt = f"Question: {question}\nExplanation: {gold}\nModel answer: {answer}"
         system = _ABSTAIN_JUDGE_SYSTEM
     else:
-        prompt = f"Question: {question}\nGold answer: {gold}\nModel answer: {answer}"
-        system = _JUDGE_SYSTEM
+        label = "Rubric" if category == "single-session-preference" else "Gold answer"
+        prompt = f"Question: {question}\n{label}: {gold}\nModel answer: {answer}"
+        system = _JUDGE_SYSTEMS.get(category or "", _JUDGE_BASE)
     try:
-        labels = judge.complete(prompt, system=system).strip().upper().split()
+        labels = judge.complete(prompt, system=system + _JUDGE_REPLY).strip().upper().split()
     except Exception:  # noqa: BLE001 — a judge hiccup scores 0, never breaks the run
         return False
     return "CORRECT" in labels and "INCORRECT" not in labels
@@ -252,6 +302,7 @@ def _process_sample(
     k: int,
     rerank: bool,
     extract: bool,
+    max_memory_tokens: int = 8000,
     variants: Sequence[str] = ("",),
     judge_answers: bool = True,
     dream: bool = False,
@@ -279,7 +330,8 @@ def _process_sample(
             v = _parse_variant(variant)
             retrieved = retrieve(
                 db, query=qa.question, tenant_id=sample.sample_id,
-                agent_id=agent_id, mode=mode, k=k, rerank=rerank or v.scoring is not None,
+                agent_id=agent_id, mode=mode, k=k, max_memory_tokens=max_memory_tokens,
+                rerank=rerank or v.scoring is not None,
                 rerank_scoring=v.scoring, rerank_time_weight=v.weight,
                 entity_summaries=v.entities, supersession=v.supersession,
                 # Variants compare scorings on identical state: a read-only probe, so one
@@ -306,7 +358,8 @@ def _process_sample(
                                    extra={"reason": type(exc).__name__, "detail": str(exc)})
                 else:
                     correct = judge_correct(
-                        qa.question, qa.answer, answer, judge=jdg, abstention=qa.abstention
+                        qa.question, qa.answer, answer, judge=jdg, abstention=qa.abstention,
+                        category=qa.category,
                     )
             out.append(
                 LongMemScore(
@@ -333,7 +386,8 @@ def run_longmemeval(
     judge: Generator | None = None,
     agent_id: str = "assistant",
     mode: str = "lite",
-    k: int = 10,
+    k: int = 20,
+    max_memory_tokens: int = 8000,
     rerank: bool = False,
     extract: bool = False,
     min_accuracy: float | None = None,
@@ -348,6 +402,10 @@ def run_longmemeval(
     answer_only: bool = False,
 ) -> LongMemReport:
     """Ingest each question's history, answer from memory, judge accuracy; aggregate.
+
+    `k` / `max_memory_tokens` default to 20 memories in an 8,000-token context: the product's
+    1,500-token default fits only ~8 of 10 LongMemEval turns, and top 20 puts all the evidence
+    in context for 80 of 90 questions against 73 at top 10 (DESIGN §23 rev 104).
 
     `extract=False` (default) skips the ~O(n²) entity resolution over each question's long
     history — the dominant cost of a real run (see `_ingest_sample`).
@@ -431,7 +489,8 @@ def run_longmemeval(
             purge(conn, tenant_id=sample.sample_id)
         return _process_sample(
             conn, sample, gen=gen, jdg=jdg, agent_id=agent_id, mode=mode, k=k,
-            rerank=rerank, extract=extract, variants=variants, judge_answers=judge_answers,
+            rerank=rerank, extract=extract, max_memory_tokens=max_memory_tokens,
+            variants=variants, judge_answers=judge_answers,
             dream=dream, answer_only=answer_only,
         )
 
@@ -637,7 +696,11 @@ def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="arango_memory.eval.longmemeval")
     parser.add_argument("dataset", help="path to a converted LongMemEval dataset JSON")
     parser.add_argument("--mode", choices=["lite", "full", "multihop"], default="lite")
-    parser.add_argument("--k", type=int, default=10)
+    parser.add_argument("--k", type=int, default=20,
+                        help="memories retrieved per question (default 20)")
+    parser.add_argument("--max-memory-tokens", type=int, default=8000,
+                        help="token budget of the context the answerer reads (default 8000; the "
+                             "product default of 1500 truncates LongMemEval's long turns)")
     parser.add_argument("--rerank", action="store_true",
                         help="cross-encoder rerank the fused pool (RQ-2b; needs a reranker "
                              "provider — set RERANKER_PROVIDER=local + the 'rerank' extra)")
@@ -692,6 +755,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     report = run_longmemeval(
         db, load_dataset(args.dataset), mode=args.mode, k=args.k,
+        max_memory_tokens=args.max_memory_tokens,
         rerank=args.rerank, extract=args.extract, min_accuracy=args.min_accuracy,
         concurrency=args.concurrency, rerank_scorings=scorings,
         judge_answers=not args.retrieval_only, checkpoint=args.checkpoint, resume=args.resume,

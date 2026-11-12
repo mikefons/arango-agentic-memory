@@ -40,6 +40,18 @@ are versioned together and released from this repository.
 
 ### Changed
 
+- LongMemEval harness (DESIGN §23 rev 104):
+  - It answers with a LongMemEval prompt in place of the hallucination benchmark's
+    "context only, else decline" prompt, which caused 25 of 32 misses.
+  - It grades with the official per-type judge rules.
+  - It defaults to `--k 20` and a new `--max-memory-tokens 8000`.
+  - Scores are not comparable with earlier runs: on the same ingest, 0.644 became 0.844.
+  - On a held-out sample of 91 questions it scores 0.875 against 0.747 for the old harness,
+    and declines 12 of 13 unanswerable questions.
+- `longmemeval_convert`: evidence labels are on by default (`--no-evidence` drops them).
+  `--stratified` samples abstention questions as their own stratum. A new `--exclude
+  <dataset>` draws a held-out sample.
+
 - The background LLM moves to Claude Haiku 5.5: `BACKGROUND_MODEL` now defaults to
   `claude-haiku-5-5` (was `claude-haiku-4-5`). It is used for HyDE, the gate, Dream State,
   supersession, the Haiku extractor and the eval answerer/judge.

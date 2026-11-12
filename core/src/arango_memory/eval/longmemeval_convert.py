@@ -101,12 +101,18 @@ def _convert_item(item: dict[str, Any], *, evidence: bool = False) -> dict[str, 
 def _stratified_sample(raw: list[dict[str, Any]], limit: int) -> list[dict[str, Any]]:
     """Pick up to `limit` questions spread evenly across `question_type` (round-robin over
     per-type buckets). LongMemEval-S is grouped by type, so a plain first-N slice returns a
-    single category — this gives a type-representative subset instead. Within-type order kept."""
+    single category — this gives a type-representative subset instead. Within-type order kept.
+
+    Abstention questions (`_abs` ids) form their own bucket: they sit at the end of each type,
+    so a sample of the first few per type never contained one, and an answer prompt's tendency
+    to guess went unmeasured."""
     from collections import deque
 
     buckets: dict[str, deque[dict[str, Any]]] = {}
     for item in raw:
-        buckets.setdefault(str(item.get("question_type") or "unknown"), deque()).append(item)
+        abstention = str(item.get("question_id", "")).endswith("_abs")
+        key = "abstention" if abstention else str(item.get("question_type") or "unknown")
+        buckets.setdefault(key, deque()).append(item)
     queues = list(buckets.values())
     out: list[dict[str, Any]] = []
     while len(out) < limit and any(queues):
@@ -148,9 +154,13 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--offset", type=int, default=0,
                         help="skip the first N questions (after --types, before --limit) — e.g. "
                              "a dev split is `--limit 26`, its held-out remainder `--offset 26`")
-    parser.add_argument("--evidence", action="store_true",
+    parser.add_argument("--evidence", action=argparse.BooleanOptionalAction, default=True,
                         help="carry has_answer turns (+ session date/id) into qa.evidence for "
-                             "evidence-level scoring (RQ-3)")
+                             "evidence-level scoring (default on: it is what separates a "
+                             "retrieval miss from an answer failure; --no-evidence drops it)")
+    parser.add_argument("--exclude", default=None,
+                        help="a converted dataset whose questions to skip — draws a fresh, "
+                             "held-out sample (applied before --offset/--limit)")
     return parser
 
 
@@ -162,6 +172,9 @@ def main(argv: list[str] | None = None) -> int:
     if args.types:
         keep = {t.strip() for t in args.types.split(",") if t.strip()}
         raw = [item for item in raw if item.get("question_type") in keep]
+    if args.exclude:
+        seen = {s["sample_id"] for s in json.loads(Path(args.exclude).read_text())["samples"]}
+        raw = [item for item in raw if str(item["question_id"]) not in seen]
     raw = raw[args.offset:]
     if args.stratified:
         raw = _stratified_sample(raw, args.limit if args.limit is not None else len(raw))
