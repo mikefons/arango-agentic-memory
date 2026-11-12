@@ -36,8 +36,9 @@ from collections.abc import Callable, Sequence
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
+from arango.cursor import Cursor
 from arango.database import StandardDatabase
 
 from ..client import ArangoMemoryClient
@@ -254,6 +255,7 @@ def _process_sample(
     variants: Sequence[str] = ("",),
     judge_answers: bool = True,
     dream: bool = False,
+    answer_only: bool = False,
 ) -> list[LongMemScore]:
     """Ingest one question's history ONCE, then retrieve (+ answer + judge) each QA under every
     rerank-scoring variant. Self-contained on the given `db` and the question's own tenant
@@ -265,10 +267,12 @@ def _process_sample(
     replay guard). The default `("",)` is the single legacy configuration.
 
     `dream=True` runs one Dream State pass after ingest (with `gen`), so entities carry the
-    summaries a `+entities` variant appends."""
-    _ingest_sample(db, sample, agent_id, extract=extract)
-    if dream:
-        run_dream_state(db, tenant_id=sample.sample_id, generator=gen)
+    summaries a `+entities` variant appends. `answer_only=True` skips both and reads the
+    question's tenant as an earlier run left it."""
+    if not answer_only:
+        _ingest_sample(db, sample, agent_id, extract=extract)
+        if dream:
+            run_dream_state(db, tenant_id=sample.sample_id, generator=gen)
     out: list[LongMemScore] = []
     for qa in sample.qa:
         for variant in variants:
@@ -341,6 +345,7 @@ def run_longmemeval(
     resume: bool = False,
     progress: bool = False,
     dream: bool = False,
+    answer_only: bool = False,
 ) -> LongMemReport:
     """Ingest each question's history, answer from memory, judge accuracy; aggregate.
 
@@ -365,11 +370,30 @@ def run_longmemeval(
     (e.g. the DB going away an hour in) costs one question, not the run. `resume=True` loads
     it, skips questions already scored under every variant, and hard-purges each remaining
     question's tenant before re-ingesting — a question interrupted mid-ingest left a partial
-    tenant, and re-ingesting over it would double-count graph beliefs."""
+    tenant, and re-ingesting over it would double-count graph beliefs.
+
+    `answer_only=True` reuses each question's tenant as an earlier run in the same DB left it
+    (ingest + Dream State) and only retrieves, answers and judges. Ingest and Dream are ~95% of a
+    run's cost, so repeated answer passes over one ingest measure the answerer/judge noise floor
+    for a few cents. Every question's tenant must already exist; this is checked before any LLM
+    call."""
     gen = generator or get_generator()
     jdg = judge or gen
+    if answer_only and (dream or extract or resume):
+        raise ValueError("answer_only reuses an earlier ingest + Dream pass — it can't be "
+                         "combined with dream, extract or resume (which would re-ingest)")
     if dream and not extract:
         raise ValueError("dream=True needs extract=True — Dream State summarizes graph entities")
+    if answer_only:
+        ids = [sample.sample_id for sample in samples]
+        ingested = set(cast(Cursor, db.aql.execute(
+            "FOR m IN memories FILTER m.tenant_id IN @ids COLLECT t = m.tenant_id RETURN t",
+            bind_vars={"ids": ids})))
+        missing = [i for i in ids if i not in ingested]
+        if missing:
+            raise ValueError(f"answer_only: {len(missing)} questions have no ingested memories "
+                             f"in this DB (e.g. {missing[0]}) — point ARANGO_DB at the run "
+                             "that ingested them")
     variants: tuple[str, ...] = tuple(rerank_scorings) if rerank_scorings else ("",)
     for spec in variants:
         _parse_variant(spec)  # validate up front — never fail minutes into a paid run
@@ -408,7 +432,7 @@ def run_longmemeval(
         return _process_sample(
             conn, sample, gen=gen, jdg=jdg, agent_id=agent_id, mode=mode, k=k,
             rerank=rerank, extract=extract, variants=variants, judge_answers=judge_answers,
-            dream=dream,
+            dream=dream, answer_only=answer_only,
         )
 
     def _done(done: int, sample: Sample, scores: list[LongMemScore]) -> None:
@@ -425,7 +449,8 @@ def run_longmemeval(
         for i, sample in enumerate(samples, 1):
             if progress:
                 print(
-                    f"[{i}/{total}] {sample.sample_id}: ingesting {_turns(sample)} turns "
+                    f"[{i}/{total}] {sample.sample_id}: "
+                    f"{'answering' if answer_only else 'ingesting'} {_turns(sample)} turns "
                     f"({len(sample.sessions)} sessions)…",
                     file=sys.stderr, flush=True,
                 )
@@ -648,6 +673,10 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--resume", action="store_true",
                         help="continue a --checkpoint: skip questions already scored, purge "
                              "and redo the rest (use the same ARANGO_DB)")
+    parser.add_argument("--answer-only", action="store_true",
+                        help="reuse the ingest + Dream pass an earlier run left in ARANGO_DB: "
+                             "only retrieve, answer and judge (repeat passes measure answerer "
+                             "noise). Not with --extract, --dream or --resume")
     return parser
 
 
@@ -666,7 +695,7 @@ def main(argv: list[str] | None = None) -> int:
         rerank=args.rerank, extract=args.extract, min_accuracy=args.min_accuracy,
         concurrency=args.concurrency, rerank_scorings=scorings,
         judge_answers=not args.retrieval_only, checkpoint=args.checkpoint, resume=args.resume,
-        progress=True, dream=args.dream,
+        progress=True, dream=args.dream, answer_only=args.answer_only,
     )
     print(_format(report, gated=args.min_accuracy is not None))
     return 0 if report.passed else 1

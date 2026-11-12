@@ -397,6 +397,9 @@ metrics — cheap enough to sweep `event_time` weights. `--types` / `--offset` /
 disjoint dev/test splits, e.g. tune on `--types knowledge-update --limit 26` and report on
 `--types knowledge-update --offset 26`. Don't re-run a variant into an existing `ARANGO_DB` with
 `--extract`: `store_many` would re-count graph beliefs — use a fresh DB per ingest.
+To repeat only the answer step, use **`--answer-only`** with the same `ARANGO_DB`. It skips ingest
+and Dream and reuses what the earlier run stored, so repeated passes measure answerer and judge
+noise cheaply. Give each pass its own `--checkpoint`.
 For long runs pass **`--checkpoint scores.jsonl`**: each question's scores are appended as it
 finishes, and **`--resume`** (same `ARANGO_DB`) skips scored questions and purges + redoes any
 interrupted one — a DB outage an hour in costs one question, not the run. Keep checkpoints out

@@ -481,3 +481,29 @@ def test_checkpoint_refuses_to_clobber_without_resume(
     with pytest.raises(FileExistsError, match="resume"):
         run_longmemeval(db, load_dataset(_SMOKE), generator=FakeGenerator(), k=10,
                         checkpoint=ckpt)
+
+
+def test_answer_only_reuses_the_ingest(db: StandardDatabase) -> None:
+    samples = load_dataset(_SMOKE)
+    gen, _ = _counting({"currently live": "CORRECT", "sister": "INCORRECT"})
+    first = run_longmemeval(db, samples, generator=gen, judge=gen, k=10)
+    count = "FOR m IN memories FILTER m.tenant_id IN @t COLLECT WITH COUNT INTO c RETURN c"
+    ids = {"t": [s.sample_id for s in samples]}
+    before = next(iter(db.aql.execute(count, bind_vars=ids)))
+
+    again = run_longmemeval(db, samples, generator=gen, judge=gen, k=10, answer_only=True)
+    assert next(iter(db.aql.execute(count, bind_vars=ids))) == before  # nothing re-ingested
+    assert (again.n_questions, again.accuracy) == (first.n_questions, first.accuracy)
+
+
+def test_answer_only_refuses_a_missing_ingest_and_reingesting_flags(
+    db: StandardDatabase,
+) -> None:
+    missing = Sample(sample_id="lme-never-ingested", sessions=[], qa=[])
+    with pytest.raises(ValueError, match="no ingested memories"):
+        run_longmemeval(db, [missing], generator=FakeGenerator(), answer_only=True)
+    for flag in ("dream", "extract", "resume"):
+        with pytest.raises(ValueError, match="answer_only"):
+            run_longmemeval(db, [missing], generator=FakeGenerator(), answer_only=True,
+                            **{flag: True})
+    assert _build_parser().parse_args(["d.json", "--answer-only"]).answer_only is True

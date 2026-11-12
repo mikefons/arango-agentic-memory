@@ -1424,6 +1424,12 @@ arango-memory-longmemeval lme.json --rerank --extract --dream \
   don't know" with the relevant memory already in context. That is an answer-prompt issue entity
   summaries can't fix, and worth its own look.
 
+**Run (2026-10-31, DESIGN §23 rev 103):** 90 questions on Haiku 5.5, about $4. `replace+entities`
+scored **0.700** against 0.644 (+7/−2, p = 0.18), with gains in four types and no single-session
+losses. That is not significant, so the default stays off for now. A run's answer-to-answer
+scatter is about ±3–4 questions. Next: repeat answer passes with the new `--answer-only` flag on
+the same ingest to measure that noise floor, then decide.
+
 ### GX-2 — Memory-level fact supersession + `as_of` retrieval  🔄 (built; off by default)
 
 **Decision (2026-10-04):** the unit is the *memory*, not an extracted fact. Our typed
@@ -1480,6 +1486,11 @@ and sampled precision of 12/15. For comparison:
 
 That makes the anchored gate the candidate if supersession is turned on. Next: the full-mix paired
 accuracy run, with GX-1.
+
+**Full-mix run (2026-10-31, DESIGN §23 rev 103):** with the anchored gate, `replace+supersession`
+scored 0.656 against 0.644 (+2/−1). Knowledge-update went from 0.800 to **0.933**. The one loss
+was a multi-session question, and it came from answerer arithmetic over identical context, not a
+false link. The default stays off pending the `--answer-only` noise-floor repeats.
 
 Original scope note:
 
