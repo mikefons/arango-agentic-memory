@@ -13,6 +13,7 @@ from arango_memory.ingest.store import store
 from arango_memory.lifecycle.dream import run_dream_state
 from arango_memory.lifecycle.facts import parse_facts, run_fact_keys
 from arango_memory.retrieve.search import force_view_sync, retrieve
+from arango_memory.schema.collections import SEARCH_VIEW, ensure_schema
 
 PILLOWS = "user: I need throw pillows for my couch, any shops you'd suggest?"
 BAKED = "The user baked a sourdough baguette on 2023/05/20."
@@ -133,3 +134,45 @@ def test_api_option(db: StandardDatabase, api: TestClient) -> None:
     resp = api.post("/v1/retrieve", json=body)
     assert resp.status_code == 200
     assert [h["text"] for h in resp.json()["hits"]] == [PILLOWS]
+
+
+def test_an_older_search_view_gains_facts_and_keeps_its_other_fields(
+    db: StandardDatabase,
+) -> None:
+    db.delete_view(SEARCH_VIEW)
+    db.create_arangosearch_view(
+        SEARCH_VIEW,
+        {"links": {"memories": {"fields": {
+            "text": {"analyzers": ["text_en"]}, "tenant_id": {"analyzers": ["identity"]},
+            "agent_id": {"analyzers": ["identity"]}}}}},
+    )
+    ensure_schema(db)
+    fields = db.view(SEARCH_VIEW)["links"]["memories"]["fields"]
+    assert {"text", "prospective_queries", "facts", "tenant_id", "agent_id"} <= set(fields)
+    store(db, content="user: I planted tulips", tenant_id="t_fk9", agent_id="a")
+    force_view_sync(db, "t_fk9")
+    assert retrieve(db, query="tulips", tenant_id="t_fk9", agent_id="a", k=1).hits
+
+
+class _SpyReranker:
+    def __init__(self) -> None:
+        self.docs: list[str] = []
+
+    def score(self, query: str, texts: list[str]) -> list[float]:
+        self.docs = list(texts)
+        return [1.0 if "baguette" in t else 0.0 for t in texts]
+
+
+def test_reranker_sees_the_facts_with_the_text(db: StandardDatabase) -> None:
+    _seed(db, "t_fk10")
+    run_fact_keys(db, tenant_id="t_fk10", generator=_gen())
+    force_view_sync(db, "t_fk10")
+    spy = _SpyReranker()
+    result = retrieve(db, query="sourdough baguette baked", tenant_id="t_fk10", agent_id="a",
+                      k=1, fact_keys=True, rerank=True, reranker=spy)
+    assert any(BAKED in d and PILLOWS in d for d in spy.docs)
+    assert [h.text for h in result.hits] == [PILLOWS]
+    plain = _SpyReranker()
+    retrieve(db, query="sourdough baguette baked", tenant_id="t_fk10", agent_id="a", k=1,
+             rerank=True, reranker=plain)
+    assert all(BAKED not in d for d in plain.docs)

@@ -300,6 +300,7 @@ class _Candidate:
     superseded_by: str | None = None  # GX-2: the newer memory that updates this one
     valid_to: str | None = None       # GX-2: when it stopped being current
     stale: bool = False               # GX-2: superseded within this query's time view
+    facts: list[str] = field(default_factory=list)  # FK-1: shown to the reranker with the text
     anchor: str | None = None         # neighbour expansion: the hit this turn sits next to
     offset: int = 0                   # …and its position relative to that hit
 
@@ -901,6 +902,28 @@ def _head_scores(
     raise ValueError(f"unknown rerank_scoring {scoring!r}")
 
 
+_FACTS_OF = """
+FOR key IN @keys
+  LET doc = DOCUMENT("memories", key)
+  FILTER doc != null AND doc.facts != null
+  RETURN { key: key, facts: doc.facts }
+"""
+
+
+def _attach_facts(db: StandardDatabase, candidates: list[_Candidate]) -> None:
+    """FK-1: load the stored facts of these candidates, so the reranker can judge a turn by what
+    it states and not only by what it is mostly about."""
+    by_key = {c.key: c for c in candidates}
+    if not by_key:
+        return
+    for row in _run(db, _FACTS_OF, {"keys": list(by_key)}):
+        by_key[row["key"]].facts = list(row["facts"])
+
+
+def _rerank_text(cand: _Candidate) -> str:
+    return f"{' '.join(cand.facts)}\n{cand.text}" if cand.facts else cand.text
+
+
 def _rerank(
     candidates: list[_Candidate],
     query: str,
@@ -925,7 +948,7 @@ def _rerank(
         return candidates
     try:
         rk = reranker or get_reranker()
-        scores = rk.score(query, [c.text for c in head])
+        scores = rk.score(query, [_rerank_text(c) for c in head])
         if len(scores) != len(head):
             raise ValueError(f"reranker returned {len(scores)} scores for {len(head)} texts")
         final = _head_scores(
@@ -992,6 +1015,8 @@ def _retrieve_impl(
     # Multi-agent read (MA-2): a 1-element list on the default path keeps the same plan.
     agent_ids = read_agent_ids or [agent_id]
 
+    use_fact_keys = settings.retrieve_fact_keys if fact_keys is None else fact_keys
+
     def gather(q: str, vec: list[float]) -> list[_Candidate]:
         """Run the per-query arm gather with this call's shared scope bound."""
         return _gather_fused(
@@ -1006,7 +1031,7 @@ def _retrieve_impl(
             dimensions=emb.dimensions,
             decay_binds=decay_binds,
             now=now,
-            fact_keys=settings.retrieve_fact_keys if fact_keys is None else fact_keys,
+            fact_keys=use_fact_keys,
         )
 
     if mode == "multihop":
@@ -1054,6 +1079,8 @@ def _retrieve_impl(
     # before MMR. Opt-in via the `rerank` flag or `settings.rerank_enabled`; off the lite
     # default. Degrades to the fused order on any reranker error (handled in `_rerank`).
     if settings.rerank_enabled if rerank is None else rerank:
+        if use_fact_keys:
+            _attach_facts(db, fused[: settings.rerank_top_n])
         fused = _rerank(
             fused, query, reranker=reranker, top_n=settings.rerank_top_n,
             scoring=rerank_scoring or settings.rerank_scoring,

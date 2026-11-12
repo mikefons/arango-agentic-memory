@@ -1691,8 +1691,27 @@ LLM write each memory's facts as short standalone sentences (relative dates reso
 message date) and stores `facts` plus one embedding per fact on the memory. Retrieval gains two
 arms, BM25 over `facts` and the best cosine among a memory's fact embeddings (an exact scan of
 the tenant's memories, skipped above `FACT_VECTOR_SCAN_MAX`; the shared vector index holds only
-`embedding`). Both return the parent memory, so the value stays the original turn. Off by default;
-unmeasured on answers when this was written.
+`embedding`). Both return the parent memory, so the value stays the original turn. The reranker
+scores each candidate as its facts followed by its text, because rating a passing-mention turn by
+its text alone pushed it back out of the top 20. Off by default.
+
+*Pilot (2026-11-12, $0.3–0.5 of Haiku 5.5, `FACT_KEYS_PREFIX=user:`).* Facts extracted for the
+three held-out multi-session questions that miss evidence: 715 user turns → 1,065 facts (about
+half the turns state a fact), 95 s at 8 parallel calls. Dates came out resolved ("last Saturday
+(2023/05/20)"). Evidence turns in the top-20 context, 15 labelled across the three questions:
+
+| fact keys | turns found | note |
+|---|---|---|
+| off | 10 | |
+| arms only | 12 | the missed turns reach pool rank 14–18, then lose the rerank |
+| arms + reranker sees facts | 13 | |
+
+The context shrinks (3,600–6,000 → 1,300–1,700 tokens), since fact matches are short user turns.
+Caveats: these three questions were picked because they miss evidence, so the pilot cannot show
+regressions elsewhere (a fact hit displacing an assistant reply, for one); answer accuracy is
+not measured. A bug found on the way: updating the search view to add `facts` replaced the whole
+link definition instead of merging it, dropping `text` from the index; the migration now sends the
+full field set (tested).
 
 ### Recall vs corpus size — the fusion-holds curve (HX-2)
 
