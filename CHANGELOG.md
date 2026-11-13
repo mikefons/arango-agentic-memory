@@ -31,7 +31,8 @@ are versioned together and released from this repository.
   in passing is found by it; the memory itself is still what is returned. The search view gains a
   `facts` field (added to existing views at startup). The vector arm is an exact scan, skipped
   above `FACT_VECTOR_SCAN_MAX` memories per tenant. The LongMemEval harness gains a `+facts`
-  variant.
+  variant. On the LongMemEval held-out sample it recovers a few more evidence turns but does not
+  change answer accuracy, so it stays off.
 - Memory-level fact supersession (GX-2), behind `FACT_SUPERSESSION` (default off). Dream State
   links a memory to the older statements it updates (`superseded_by`, `valid_to`; nothing is
   hidden). Retrieval (`opts.supersession`) ranks the current statement directly above a stale

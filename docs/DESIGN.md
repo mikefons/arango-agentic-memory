@@ -1713,6 +1713,38 @@ not measured. A bug found on the way: updating the search view to add `facts` re
 link definition instead of merging it, dropping `text` from the index; the migration now sends the
 full field set (tested).
 
+*Full measurement (2026-11-12).* Facts were extracted for all 91 held-out questions: 21,516 user
+turns → 12,431 with facts, 30,793 facts, about 25 s per question at 12 parallel calls. Three
+`--answer-only` passes of `replace` against `replace+facts` (Haiku 5.5 answerer and judge, top 20,
+8,000 tokens), first with the arms at RRF weight 1.0, then at 0.3:
+
+| fact-arm weight | `replace` (3 passes) | `replace+facts` (3 passes) | evidence recall@k | single-session-assistant |
+|---|---|---|---|---|
+| 1.0 | 0.879 / 0.879 / 0.879 | 0.846 / 0.857 / 0.835 | 0.941 → 0.934 | 1.00 → 0.85 |
+| 0.3 | 0.890 / 0.868 / 0.879 | 0.857 / 0.879 / 0.879 | 0.941 → 0.951 | 1.00 → 1.00 |
+
+Paired per pass: weight 1.0 gives +4/−7, +6/−8, +3/−7; weight 0.3 gives +3/−6, +6/−5, +5/−5; none
+is significant. Multi-session accuracy does not move (0.68 → 0.67 at 1.0, 0.70 → 0.68 at 0.3).
+
+- **At weight 1.0 the arms hurt.** Two single-session-assistant questions lost their evidence
+  entirely: the fact arms, which only cover user turns, push many user turns above a long
+  assistant reply in fused rank, and the reply drops below the rerank window (top 50) before the
+  cross-encoder scores it. This is independent of what the cross-encoder reads: text only, facts
+  plus text, and the better of both all lose the same two.
+- **A free sweep over all 78 labelled questions** (evidence turns in the top-20 context, base 137
+  of 150) picked weight 0.3 with the window left at 50: 140 found, multi-session 42 → 45 of 47,
+  3 questions better and 1 worse. A window of 100 at weight 1.0 found 139 (5 better, 3 worse);
+  weight 0.3 with window 100 found 137. The default is now 0.3.
+- **The extra evidence does not become answers.** Multi-session misses are about half missing
+  evidence and half counting errors over complete evidence; fact keys fix part of the first half,
+  and the passes show nothing moves. The three evidence turns the pilot recovered were not enough
+  to change an answer.
+
+Conclusion: fact keys work as an index (dates resolved, passing mentions found, no regression at
+0.3) but are not worth their cost as a retrieval lever: about $8–12 of extraction per 91
+questions, for +0.01 evidence recall and no measurable accuracy. Defaults stay off. The stored
+facts are the natural input to the next lever (enumeration and counting over facts).
+
 ### Recall vs corpus size — the fusion-holds curve (HX-2)
 
 The project's thesis as a chart: on an **open corpus that grows**, graph+vector+BM25 fusion

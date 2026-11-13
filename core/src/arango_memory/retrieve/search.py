@@ -920,8 +920,17 @@ def _attach_facts(db: StandardDatabase, candidates: list[_Candidate]) -> None:
         by_key[row["key"]].facts = list(row["facts"])
 
 
-def _rerank_text(cand: _Candidate) -> str:
-    return f"{' '.join(cand.facts)}\n{cand.text}" if cand.facts else cand.text
+def _rerank_scores(rk: Reranker, query: str, head: list[_Candidate]) -> Sequence[float]:
+    """Cross-encoder scores for `head`; a candidate with facts is read per `fact_keys_rerank`."""
+    mode = settings.fact_keys_rerank
+    if mode == "text" or not any(c.facts for c in head):
+        return rk.score(query, [c.text for c in head])
+    joint = [f"{' '.join(c.facts)}\n{c.text}" if c.facts else c.text for c in head]
+    if mode == "facts":
+        return rk.score(query, joint)
+    plain = rk.score(query, [c.text for c in head])
+    both = rk.score(query, joint)
+    return [max(a, b) for a, b in zip(plain, both, strict=True)]
 
 
 def _rerank(
@@ -948,7 +957,7 @@ def _rerank(
         return candidates
     try:
         rk = reranker or get_reranker()
-        scores = rk.score(query, [_rerank_text(c) for c in head])
+        scores = _rerank_scores(rk, query, head)
         if len(scores) != len(head):
             raise ValueError(f"reranker returned {len(scores)} scores for {len(head)} texts")
         final = _head_scores(

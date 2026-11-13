@@ -58,7 +58,7 @@ Status: ✅ shipped · 🔄 built, merge pending · ✖ closed (won't do). Unmar
 | 24 | GX-2 | Memory-level fact supersession + `as_of` retrieval (the scoped newness signal RQ-3 called for) 🔄 — built, off by default | L | — |
 | 25 | GX-3 | Fact retrieval arm over typed-relation statements (needs an LLM/GLiREL extractor) | L | GX-2 |
 | 26 | LM-1 | Neighbour expansion: inject the turns next to each hit (`opts.neighbor_turns`) 🔄 — built, off by default; answer accuracy not yet measured | S | — |
-| 27 | FK-1 | Fact-augmented keys: Dream-extracted facts per memory, matched by two extra retrieval arms 🔄 — built, off by default; not yet measured | M | — |
+| 27 | FK-1 | Fact-augmented keys: Dream-extracted facts per memory, matched by two extra retrieval arms 🔄 — built, off by default; measured, no accuracy gain | M | — |
 
 Recommended sequence: **MA-1 → MA-2 → MA-3 → MA-4 → MA-5 → MA-6**, with MA-7/MA-8
 schedulable any time (no dependencies on the others). MA-1…MA-8 are **shipped**. **RQ-1**
@@ -1563,8 +1563,13 @@ memory; `FACT_KEYS_PREFIX=user:` mines only the user's turns) and store them wit
 per fact. `RETRIEVE_FACT_KEYS` / `opts.fact_keys` adds a BM25 arm and a best-fact-cosine arm; the
 memory is still what is returned. Harness variant `+facts`.
 
-**Open.** The pilot and full measurements (DESIGN §23 rev 106); whether the exact fact-vector
-scan needs an index at larger tenants; extraction cost against the gain.
+**Measured (DESIGN §23 rev 106).** On 91 held-out questions, three answer passes: `replace` 0.879
+against `replace+facts` 0.872 at fact-arm weight 0.3 (0.846 at 1.0, where two single-session-
+assistant questions lost their evidence). Evidence recall@k 0.941 → 0.951, multi-session accuracy
+unchanged; no pass is significant. Extraction costs about $8–12 per 91 questions. Stays off.
+
+**Open.** Using the stored facts for enumeration and counting questions (the remaining
+multi-session errors); an index for the fact-vector scan if the arms are ever enabled at scale.
 
 ### GX-3 — Fact retrieval arm
 

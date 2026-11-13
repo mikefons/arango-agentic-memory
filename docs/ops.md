@@ -82,7 +82,7 @@ memory, plus one embedding per fact; `FACT_KEYS_PREFIX` limits it to memories wh
 with it, e.g. `user:`; `FACT_KEYS_MAX_PER_MEMORY` 5; `FACT_KEYS_CONCURRENCY` 4 parallel calls),
 `RETRIEVE_FACT_KEYS` (`false` — also match the query against those facts; also `opts.fact_keys`;
 `FACT_VECTOR_SCAN_MAX` 20000 skips the exact fact-vector scan on larger tenants;
-`RRF_FACT_WEIGHT` 1.0),
+`RRF_FACT_WEIGHT` 0.3; `FACT_KEYS_RERANK` `facts`|`text`|`max` — what the reranker reads),
 `GRAPH_MAX_NEIGHBORS` (200 — SC-1c: caps the graph arm's `relates_to` fan-out so a dense
 single-tenant graph can't blow up retrieval; the arm is a down-weighted expander so a bounded
 neighbourhood costs little), `GRAPH_MAX_MEMORIES_PER_ENTITY` (50 — SC-1d: caps the memories

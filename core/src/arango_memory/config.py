@@ -199,8 +199,14 @@ class Settings(BaseSettings):
     # the fact text, and the best cosine among the memory's fact embeddings (an exact scan of
     # the tenant's memories, so it is skipped above `fact_vector_scan_max`).
     retrieve_fact_keys: bool = False
+    # What the cross-encoder reads for a candidate that has facts: "facts" = its facts then its
+    # text, "text" = the text alone (facts only widen the candidate pool), "max" = the better of
+    # the two scores.
+    fact_keys_rerank: Literal["facts", "text", "max"] = "facts"
     fact_vector_scan_max: int = Field(default=20000, ge=0)
-    rrf_fact_weight: float = Field(default=1.0, ge=0.0, le=1.0)
+    # Down-weighted: at 1.0 the two fact arms crowd a long assistant reply out of the rerank
+    # window (single-session-assistant evidence lost); 0.3 kept it and still lifted passing mentions.
+    rrf_fact_weight: float = Field(default=0.3, ge=0.0, le=1.0)
     # MMR relevance↔diversity balance for the final top-k re-rank (§9). 1.0 = pure
     # relevance (fusion order); lower trades relevance for diversity in the returned set.
     # Defaults to pure relevance: diversity is a *context-window* concern (don't feed the
