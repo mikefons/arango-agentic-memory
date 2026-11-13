@@ -205,7 +205,8 @@ class Settings(BaseSettings):
     fact_keys_rerank: Literal["facts", "text", "max"] = "facts"
     fact_vector_scan_max: int = Field(default=20000, ge=0)
     # Down-weighted: at 1.0 the two fact arms crowd a long assistant reply out of the rerank
-    # window (single-session-assistant evidence lost); 0.3 kept it and still lifted passing mentions.
+    # window (single-session-assistant evidence lost); 0.3 kept it and still lifted passing
+    # mentions.
     rrf_fact_weight: float = Field(default=0.3, ge=0.0, le=1.0)
     # MMR relevance↔diversity balance for the final top-k re-rank (§9). 1.0 = pure
     # relevance (fusion order); lower trades relevance for diversity in the returned set.
