@@ -150,6 +150,17 @@ class Settings(BaseSettings):
     # agent's memories per new memory — O(tenant size), so watch it on large tenants);
     # "anchored" = the similarity candidates that also share an entity or a number with it.
     supersession_gate: Literal["entity", "similarity", "anchored"] = "entity"
+    # FK-1 fact-augmented keys: Dream State has the LLM state the facts each memory carries (one
+    # call per memory) and stores them, with one embedding per fact, on the memory. Retrieval can
+    # then match a query against the facts as well as the text (`retrieve_fact_keys`), so a
+    # memory that mentions something in passing is found by that fact. Off by default.
+    fact_keys: bool = False
+    # Only memories whose text starts with this are mined for facts ("" = all). A chat store can
+    # mine just the user's turns ("user:") and skip the assistant's long replies.
+    fact_keys_prefix: str = ""
+    fact_keys_max_per_memory: int = Field(default=5, ge=1, le=20)
+    # Parallel LLM calls inside one extraction pass.
+    fact_keys_concurrency: int = Field(default=4, ge=1, le=64)
     # Ontology evolution (DESIGN.md §13, v2 research): propose typed relationships
     # from recurring associated_with clusters, human-in-loop. Off by default.
     ontology_evolution: bool = False
@@ -184,6 +195,19 @@ class Settings(BaseSettings):
     # answer). They only fill budget the hits left. 0 = off. Needs memories stored with a
     # session_id and turn_index.
     retrieve_neighbor_turns: int = Field(default=0, ge=0, le=5)
+    # FK-1: add two retrieval arms over the facts Dream State stored on each memory — BM25 on
+    # the fact text, and the best cosine among the memory's fact embeddings (an exact scan of
+    # the tenant's memories, so it is skipped above `fact_vector_scan_max`).
+    retrieve_fact_keys: bool = False
+    # What the cross-encoder reads for a candidate that has facts: "facts" = its facts then its
+    # text, "text" = the text alone (facts only widen the candidate pool), "max" = the better of
+    # the two scores.
+    fact_keys_rerank: Literal["facts", "text", "max"] = "facts"
+    fact_vector_scan_max: int = Field(default=20000, ge=0)
+    # Down-weighted: at 1.0 the two fact arms crowd a long assistant reply out of the rerank
+    # window (single-session-assistant evidence lost); 0.3 kept it and still lifted passing
+    # mentions.
+    rrf_fact_weight: float = Field(default=0.3, ge=0.0, le=1.0)
     # MMR relevance↔diversity balance for the final top-k re-rank (§9). 1.0 = pure
     # relevance (fusion order); lower trades relevance for diversity in the returned set.
     # Defaults to pure relevance: diversity is a *context-window* concern (don't feed the

@@ -1671,6 +1671,80 @@ Answer accuracy has not been measured: that needs paid answer passes (`+neighbor
 
 Scripts and per-question results: `core/bench_runs/neighbour/` (gitignored).
 
+**Fact-augmented keys (rev 106, 2026-11-12).** The second lever from the list above. A free
+diagnostic (`bench_runs/factkeys/pooldiag.py`) located every labelled evidence turn missing from
+the top-20, 8,000-token context in the fused candidate pool (150 deep, before MMR):
+
+| sample | questions | in context | pool rank 50–150 | pool rank under 50 | not in pool |
+|---|---|---|---|---|---|
+| held-out | 78 | 137 | 8 | 3 | 2 |
+| original | 90 | 144 | 9 | 11 | 2 |
+
+The missed multi-session turns state the fact in passing, inside a request about something else
+("…I made a whole wheat baguette last Saturday" in a question about bread tips), so BM25 and the
+embedding both rank the turn by its main topic. The reranker only sees the top 50, but widening
+its window to 100 or 150 recovers nothing (held-out: 137 / 135 / 136 evidence turns found): the
+cross-encoder does not rate these turns relevant either.
+
+Fact keys put the stated fact into the index. A Dream State pass (`lifecycle/facts.py`) has the
+LLM write each memory's facts as short standalone sentences (relative dates resolved from the
+message date) and stores `facts` plus one embedding per fact on the memory. Retrieval gains two
+arms, BM25 over `facts` and the best cosine among a memory's fact embeddings (an exact scan of
+the tenant's memories, skipped above `FACT_VECTOR_SCAN_MAX`; the shared vector index holds only
+`embedding`). Both return the parent memory, so the value stays the original turn. The reranker
+scores each candidate as its facts followed by its text, because rating a passing-mention turn by
+its text alone pushed it back out of the top 20. Off by default.
+
+*Pilot (2026-11-12, $0.3–0.5 of Haiku 5.5, `FACT_KEYS_PREFIX=user:`).* Facts extracted for the
+three held-out multi-session questions that miss evidence: 715 user turns → 1,065 facts (about
+half the turns state a fact), 95 s at 8 parallel calls. Dates came out resolved ("last Saturday
+(2023/05/20)"). Evidence turns in the top-20 context, 15 labelled across the three questions:
+
+| fact keys | turns found | note |
+|---|---|---|
+| off | 10 | |
+| arms only | 12 | the missed turns reach pool rank 14–18, then lose the rerank |
+| arms + reranker sees facts | 13 | |
+
+The context shrinks (3,600–6,000 → 1,300–1,700 tokens), since fact matches are short user turns.
+Caveats: these three questions were picked because they miss evidence, so the pilot cannot show
+regressions elsewhere (a fact hit displacing an assistant reply, for one); answer accuracy is
+not measured. A bug found on the way: updating the search view to add `facts` replaced the whole
+link definition instead of merging it, dropping `text` from the index; the migration now sends the
+full field set (tested).
+
+*Full measurement (2026-11-12).* Facts were extracted for all 91 held-out questions: 21,516 user
+turns → 12,431 with facts, 30,793 facts, about 25 s per question at 12 parallel calls. Three
+`--answer-only` passes of `replace` against `replace+facts` (Haiku 5.5 answerer and judge, top 20,
+8,000 tokens), first with the arms at RRF weight 1.0, then at 0.3:
+
+| fact-arm weight | `replace` (3 passes) | `replace+facts` (3 passes) | evidence recall@k | single-session-assistant |
+|---|---|---|---|---|
+| 1.0 | 0.879 / 0.879 / 0.879 | 0.846 / 0.857 / 0.835 | 0.941 → 0.934 | 1.00 → 0.85 |
+| 0.3 | 0.890 / 0.868 / 0.879 | 0.857 / 0.879 / 0.879 | 0.941 → 0.951 | 1.00 → 1.00 |
+
+Paired per pass: weight 1.0 gives +4/−7, +6/−8, +3/−7; weight 0.3 gives +3/−6, +6/−5, +5/−5; none
+is significant. Multi-session accuracy does not move (0.68 → 0.67 at 1.0, 0.70 → 0.68 at 0.3).
+
+- **At weight 1.0 the arms hurt.** Two single-session-assistant questions lost their evidence
+  entirely: the fact arms, which only cover user turns, push many user turns above a long
+  assistant reply in fused rank, and the reply drops below the rerank window (top 50) before the
+  cross-encoder scores it. This is independent of what the cross-encoder reads: text only, facts
+  plus text, and the better of both all lose the same two.
+- **A free sweep over all 78 labelled questions** (evidence turns in the top-20 context, base 137
+  of 150) picked weight 0.3 with the window left at 50: 140 found, multi-session 42 → 45 of 47,
+  3 questions better and 1 worse. A window of 100 at weight 1.0 found 139 (5 better, 3 worse);
+  weight 0.3 with window 100 found 137. The default is now 0.3.
+- **The extra evidence does not become answers.** Multi-session misses are about half missing
+  evidence and half counting errors over complete evidence; fact keys fix part of the first half,
+  and the passes show nothing moves. The three evidence turns the pilot recovered were not enough
+  to change an answer.
+
+Conclusion: fact keys work as an index (dates resolved, passing mentions found, no regression at
+0.3) but are not worth their cost as a retrieval lever: about $8–12 of extraction per 91
+questions, for +0.01 evidence recall and no measurable accuracy. Defaults stay off. The stored
+facts are the natural input to the next lever (enumeration and counting over facts).
+
 ### Recall vs corpus size — the fusion-holds curve (HX-2)
 
 The project's thesis as a chart: on an **open corpus that grows**, graph+vector+BM25 fusion

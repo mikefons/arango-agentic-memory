@@ -27,6 +27,7 @@ from ..generation import Generator, get_generator
 from ..models import utcnow_iso
 from ..telemetry import metrics
 from .conflict import supersede
+from .facts import run_fact_keys
 from .supersession import run_supersession
 
 _CONFLICT_SYSTEM = (
@@ -93,6 +94,10 @@ def run_dream_state(
         if breaker_threshold is not None
         else settings.dream_breaker_threshold
     )
+
+    # FK-1: store each memory's facts so retrieval can match them. Independent of the rest.
+    if settings.fact_keys:
+        run_fact_keys(db, tenant_id=tenant_id, generator=gen)
 
     # GX-2: independent of the entity review below (and of its breaker — it hides nothing).
     linked = (

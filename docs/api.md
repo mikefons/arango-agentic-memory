@@ -257,6 +257,10 @@ Hybrid retrieval (BM25 + vector + graph → RRF → MMR → tiered token budget,
                                     //   to their hit in turn order, and follow the k hits in
                                     //   `hits` with source "neighbor". Needs memories stored
                                     //   with a session_id and turn_index.
+    "fact_keys": false              // also match the query against the facts Dream State stored
+                                    //   on each memory (FACT_KEYS=true on the dream pass); the
+                                    //   memory is still what is returned. Adds sources
+                                    //   "fact_bm25" / "fact_vector" to `hits`.
   }
 }
 // response
@@ -273,7 +277,7 @@ use `agent_id`) and stays tenant-scoped — a cross-tenant id returns nothing. O
 fault the response is empty (`context: ""`, `hits: []`) — never an error.
 
 Every `opts` field defaults from server config (`MODE`, `K`, `RERANK_ENABLED`,
-`CANDIDATE_POOL`, `RETRIEVE_ENTITY_SUMMARIES`, `FACT_SUPERSESSION`, `RETRIEVE_NEIGHBOR_TURNS`, …); a request value overrides it per call. `mode`/`rerank`/`candidate_pool`
+`CANDIDATE_POOL`, `RETRIEVE_ENTITY_SUMMARIES`, `FACT_SUPERSESSION`, `RETRIEVE_NEIGHBOR_TURNS`, `RETRIEVE_FACT_KEYS`, …); a request value overrides it per call. `mode`/`rerank`/`candidate_pool`
 are retrieval-quality knobs — see [ops.md](ops.md#configuration-environment) for defaults, cost,
 and when to raise them, and [DESIGN.md §23](DESIGN.md) for the benchmark results that motivate
 each.
