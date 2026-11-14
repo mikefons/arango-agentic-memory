@@ -1515,7 +1515,7 @@ in order:
 - round and neighbour expansion — built as LM-1 below; it helps single-session questions and
   not multi-session ones;
 - fact-augmented keys;
-- graph enumeration for counting questions;
+- graph enumeration for counting questions — tried as a reader change, no gain (rev 107);
 - event-date resolution;
 - a Dream-maintained observation log.
 
@@ -1568,8 +1568,12 @@ against `replace+facts` 0.872 at fact-arm weight 0.3 (0.846 at 1.0, where two si
 assistant questions lost their evidence). Evidence recall@k 0.941 → 0.951, multi-session accuracy
 unchanged; no pass is significant. Extraction costs about $8–12 per 91 questions. Stays off.
 
-**Open.** Using the stored facts for enumeration and counting questions (the remaining
-multi-session errors); an index for the fact-vector scan if the arms are ever enabled at scale.
+**Tried, not adopted (DESIGN §23 rev 107).** Using the stored facts for counting questions: the
+remaining multi-session misses are reading errors over complete evidence, and a structured
+counting prompt gained on the development sample but not on the validation sample. Needs several
+hundred multi-session questions to settle, so it is closed as won't-do.
+
+**Open.** An index for the fact-vector scan if the arms are ever enabled at scale.
 
 ### GX-3 — Fact retrieval arm
 

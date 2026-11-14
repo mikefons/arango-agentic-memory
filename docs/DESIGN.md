@@ -1745,6 +1745,40 @@ Conclusion: fact keys work as an index (dates resolved, passing mentions found, 
 questions, for +0.01 evidence recall and no measurable accuracy. Defaults stay off. The stored
 facts are the natural input to the next lever (enumeration and counting over facts).
 
+**Counting reader probe (rev 107, 2026-11-13) — negative.** The lever above, tested as a reader
+change before building anything. The 8 multi-session misses inspected were not retrieval
+failures: 7 had every evidence turn in the context. The errors were reading errors — one event
+counted twice across excerpts, a "past month" window that dropped last month's order, "last
+week" read too strictly, and "I don't know" with the evidence present. Probe: answer-only on
+cached k=20 / 8000-token contexts, Haiku 5.5, official per-type judge, 3 passes, ~$3 in all.
+Prompts: the current one (`base`); a structured one that lists every candidate with its date,
+merges mentions of the same item, filters by the window, then counts (`agg`); `agg` plus a
+presence check — if a thing the question names never appears, say it was not mentioned, and
+answer 0 only when the category is present but nothing matches (`agg2`); and `agg` with the
+stored facts appended (`aggf`).
+
+| set (questions) | prompt | answerable | abstention |
+|---|---|---|---|
+| bench_fresh, development (13 + 7) | base | 21/39 | 19/21 |
+| | agg | 28/39 | 9/21 |
+| | aggf | 28/39 | 10/21 |
+| | agg2 | 26/39 | 21/21 |
+| bench_gx1, validation (15 + 0) | base | 23/45 | — |
+| | agg2 | 21/45 | — |
+
+- **Without the presence check the structured prompt answers "0" or a partial total** when the
+  asked-about thing was never mentioned; abstention fell from 0.90 to 0.43.
+- **The development gain did not replicate.** `agg2` led on bench_fresh (47/60 against 40/60
+  overall) and trailed on the untouched bench_gx1 (21/45 against 23/45). Three passes over 15–20
+  questions are 15–20 samples; the gain was fitted to them.
+- **The stored facts add nothing** over the prompt alone (28/39 both ways).
+
+Conclusion: no reader or prompt change is adopted. The remaining multi-session gap is the
+answering model's reasoning over complete evidence, which this project does not ship, and a
+measurable test needs several hundred multi-session questions. Counting over facts stays unbuilt;
+if it is ever built, make it a user-facing retrieval option (deduplicated, dated facts per
+entity), not a benchmark patch. Scripts and results: `core/bench_runs/aggregate/`.
+
 ### Recall vs corpus size — the fusion-holds curve (HX-2)
 
 The project's thesis as a chart: on an **open corpus that grows**, graph+vector+BM25 fusion
