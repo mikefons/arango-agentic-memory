@@ -273,7 +273,9 @@ graph raise LongMemEval accuracy over the fusion substrate, and on which questio
 
 > **Update (2026-11-19, DESIGN §23 rev 108):** the graph's +0.089 did not reproduce. With the graph
 > arm off, evidence recall@20 is identical on every question of both held-out sets (0.941, 0.938).
-> Treat the result below as historical.
+> Treat the result below as historical. On MuSiQue (rev 109) the arm is a non-significant +0.02
+> recall without the reranker and identical with it; an open-corpus test is the one that could
+> still show a gain.
 
 **Result (2026-08-14, DESIGN §23).** One graph-OFF + real-reranker run splits the +0.111:
 substrate 0.411 → **+reranker 0.433** → **+graph 0.522**. **The graph is the dominant lever: +0.089
