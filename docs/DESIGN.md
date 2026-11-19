@@ -1821,6 +1821,39 @@ statement, not a current result. The graph stays in the product for entity resol
 and the entity API; its value as a retrieval arm is unproven until a multi-hop set shows it.
 Scripts and results: `core/bench_runs/graphoff/`.
 
+**Graph-arm ablation on MuSiQue (rev 109, 2026-11-19) — a small, non-significant gain without the
+reranker; none with it.** The multi-hop check rev 108 left open, in the given-context setting.
+
+Method: 200 MuSiQue 2-hop questions, each in its own tenant (about 20 paragraphs per tenant),
+ingested once with the spaCy extractor (39,765 entities in all). Each question is retrieved four
+ways from the same stored state: reranker off/on × graph arm on/off (graph off = `_seed_keys`
+returns nothing, as in rev 108). Lite mode, k=10, 1,500-token budget, the benchmark defaults. No
+LLM calls.
+
+| | recall fraction, graph on | graph off | all hops present, on | off | questions that differ (all-hops) | top-10 differs |
+|---|---|---|---|---|---|---|
+| no reranker | 0.730 | 0.710 | 100/200 | 92/200 | +17 / −9 (sign test p=0.17) | 152/200 |
+| cross-encoder rerank | 0.892 | 0.892 | 158/200 | 158/200 | +0 / −0 | 0/200 |
+
+On the graded recall fraction the no-reranker difference is +19 / −11 questions (p=0.20). The
+graph arm contributed 316 hits across 150 questions, so it does reorder the top 10; net recall
+moves about +0.02. With the reranker the top 10 is identical on every question, because the
+reranker re-scores the whole pool and the graph arm adds nothing the reranker keeps.
+
+- **What this shows.** With the default pipeline (reranker on), the graph arm does not change what
+  MuSiQue retrieves, matching rev 108 on LongMemEval. Without the reranker it may help a little;
+  this run cannot distinguish +0.02 from zero.
+- **What it does not show.** A tenant here holds about 20 paragraphs and k=10, so the pool already
+  contains the whole tenant: the arm can only reorder, never surface a missing paragraph. A recall
+  gain from traversal needs an open corpus. The pooled graph-on ingest of about 3,000 documents
+  took roughly 12 hours (O(n²) entity resolution, BX-3), so it was not run. Also untested: the
+  Haiku-extracted graph, LoCoMo, and 3–4-hop questions (this subset is all 2-hop).
+
+Conclusion: rev 108's "unproven until a multi-hop set shows it" stands. A given-context multi-hop
+set shows no gain with the reranker on and a non-significant gain without it. The graph's value as
+a retrieval arm now depends on an open-corpus test. Scripts and results:
+`core/bench_runs/graphoff/musique.*`.
+
 ### Recall vs corpus size — the fusion-holds curve (HX-2)
 
 The project's thesis as a chart: on an **open corpus that grows**, graph+vector+BM25 fusion
