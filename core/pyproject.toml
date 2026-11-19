@@ -29,7 +29,7 @@ dependencies = [
     "numpy>=1.26.0",  # vectorized entity resolution on the store path (IN-6)
     "opentelemetry-api>=1.28.0",
     "opentelemetry-sdk>=1.28.0",
-    "pyjwt[crypto]>=2.9.0",
+    "pyjwt[crypto]>=2.14.0",
 ]
 
 [project.urls]

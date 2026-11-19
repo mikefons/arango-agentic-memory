@@ -21,6 +21,14 @@ from .auth import Principal
 
 _UNAUTHORIZED = {"WWW-Authenticate": "Bearer"}
 
+# A token with an unknown `kid` makes the client refetch the JWKS before the token is
+# authenticated, so anyone can trigger it. PyJWT >= 2.14 allows one such forced refresh per
+# cooldown (set explicitly: an older PyJWT fails loudly here instead of refetching on every
+# request). The client holds a lock while it fetches, so the timeout bounds how long one slow
+# issuer can stall verification.
+_JWKS_REFRESH_COOLDOWN_SECONDS = 30
+_JWKS_FETCH_TIMEOUT_SECONDS = 5
+
 # One JWKS client per JWKS URI, reused across requests (it caches signing keys by
 # kid and refreshes on rotation). Built lazily so import stays side-effect-free.
 _jwks_clients: dict[str, jwt.PyJWKClient] = {}
@@ -38,7 +46,11 @@ def _jwks_client() -> jwt.PyJWKClient:
     uri = _jwks_uri()
     client = _jwks_clients.get(uri)
     if client is None:
-        client = jwt.PyJWKClient(uri)
+        client = jwt.PyJWKClient(
+            uri,
+            cooldown_duration=_JWKS_REFRESH_COOLDOWN_SECONDS,
+            timeout=_JWKS_FETCH_TIMEOUT_SECONDS,
+        )
         _jwks_clients[uri] = client
     return client
 

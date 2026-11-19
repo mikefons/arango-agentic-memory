@@ -83,6 +83,11 @@ are versioned together and released from this repository.
 
 ### Fixed
 
+- JWT auth: a bearer token with an unknown `kid` made the core refetch the issuer's JWKS before
+  the token was authenticated, so unauthenticated requests with random `kid`s could keep the IdP
+  busy and tie up request threads. Refetches are now limited to one per 30 seconds and a fetch
+  times out after 5. This needs PyJWT 2.14 or later, so the floor rises from `pyjwt>=2.9.0` to
+  `pyjwt>=2.14.0`.
 - GX-2 supersession verdicts: the LLM now explains in one or two sentences, then ends with an
   `ANSWER: <numbers|NONE>` line (256-token cap, was 32). Only that line is parsed, strictly. The
   bare-number format made Haiku 5.5 reply in prose that the cap cut off before the number, and
