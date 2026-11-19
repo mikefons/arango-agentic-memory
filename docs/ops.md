@@ -195,6 +195,9 @@ Verification is **fail-closed** (a JWKS-fetch error is a `401`, never an open pa
 **Revocation is by expiry only** — there's no server-side denylist, so configure the IdP
 for **short-lived tokens** (revocation latency = token TTL). **Rotation** is the IdP's
 job (signing-key rotation is picked up via JWKS `kid`); you don't edit anything here.
+A token with an unknown `kid` forces at most one JWKS refetch per 30 seconds (and a fetch times
+out after 5), so unauthenticated tokens with random `kid`s can't keep the IdP busy. A freshly
+rotated key may therefore wait up to 30 seconds before tokens signed with it verify.
 
 > **Secrets:** never commit keys. Use the host's environment or a gitignored
 > `.env`. The repo's gitleaks hook + CI secret scan guard against leaks.

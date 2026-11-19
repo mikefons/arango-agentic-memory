@@ -7,12 +7,15 @@ without a real IdP or network.
 
 from __future__ import annotations
 
+import io
+import json
 import time
 from collections.abc import Iterator
 from types import SimpleNamespace
 from typing import Any
 
 import jwt
+import jwt.jwks_client as jwks_client
 import pytest
 from cryptography.hazmat.primitives.asymmetric import rsa
 from fastapi import HTTPException
@@ -25,6 +28,7 @@ from arango_memory.security.auth import require_principal
 _ISSUER = "https://issuer.test"
 _AUDIENCE = "arango-memory"
 
+_REAL_JWKS_CLIENT = jwt_auth._jwks_client  # the autouse fixture below replaces it per test
 _PRIV = rsa.generate_private_key(public_exponent=65537, key_size=2048)
 _OTHER = rsa.generate_private_key(public_exponent=65537, key_size=2048)
 
@@ -166,6 +170,42 @@ def test_jwks_unreachable_fails_closed(monkeypatch: pytest.MonkeyPatch) -> None:
     with pytest.raises(HTTPException) as exc:
         jwt_auth.verify_jwt(_sign(_claims()))
     assert exc.value.status_code == 401  # never an open pass
+
+
+def test_unknown_kid_flood_refetches_the_jwks_once(monkeypatch: pytest.MonkeyPatch) -> None:
+    # The real PyJWKClient, not the stub: tokens with unknown `kid`s are unauthenticated input
+    # and must not each trigger a fetch from the issuer.
+    fetches: list[int] = []
+    jwk = jwt.algorithms.RSAAlgorithm.to_jwk(_PRIV.public_key(), as_dict=True)
+    body = json.dumps({"keys": [{**jwk, "kid": "test", "use": "sig"}]}).encode()
+
+    class _Opener:  # stands in for urllib's opener, so PyJWT's own fetch + cache code runs
+        def open(self, request: object, timeout: float | None = None) -> io.BytesIO:
+            fetches.append(1)
+            return io.BytesIO(body)
+
+    monkeypatch.setattr(jwks_client.urllib.request, "build_opener", lambda *a, **k: _Opener())
+    monkeypatch.setattr(jwt_auth, "_jwks_clients", {})
+    monkeypatch.setattr(jwt_auth, "_jwks_client", _REAL_JWKS_CLIENT)
+    assert jwt_auth.verify_jwt(_sign(_claims())).tenant_id == "acme"
+    assert len(fetches) == 1
+
+    for i in range(25):
+        forged = jwt.encode(_claims(), _PRIV, algorithm="RS256", headers={"kid": f"rand-{i}"})
+        with pytest.raises(HTTPException) as exc:
+            jwt_auth.verify_jwt(forged)
+        assert exc.value.status_code == 401
+    assert len(fetches) == 1  # no refetch for any of them
+    assert jwt_auth.verify_jwt(_sign(_claims())).tenant_id == "acme"  # real keys still verify
+
+
+def test_jwks_client_is_built_with_the_refresh_cooldown_and_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(jwt_auth, "_jwks_clients", {})
+    client = _REAL_JWKS_CLIENT()
+    assert client.cooldown_duration == jwt_auth._JWKS_REFRESH_COOLDOWN_SECONDS > 0
+    assert client.timeout == jwt_auth._JWKS_FETCH_TIMEOUT_SECONDS
 
 
 def test_within_leeway_is_accepted() -> None:
