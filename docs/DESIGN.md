@@ -451,6 +451,8 @@ Stage 6: Context Assembly (token budget)   [CORE]
   Tiered (configurable maxMemoryTokens, default 1500):
     working 400 · episodic 700 · semantic 300 · reasoning 100
   Sort by score within tier; unused budget rolls up. tiktoken counting.
+  [neighbour expansion, opt-in: the turns next to each hit, in its session,
+   fill whatever budget the hits left and sit beside their hit in turn order]
 ```
 
 ### Multi-hop mode (RQ-1)
@@ -1211,6 +1213,571 @@ pair. The bottleneck is **detection, not ranking**: of 16 stale/new evidence pai
 Next lever, if pursued: gate candidates on embedding similarity alone (top-N nearest older memories,
 dropping the shared-entity requirement), measured the same way. It costs more LLM calls. The default stays
 **off**; an accuracy run waits with the GX-1 benchmark. Results: `core/bench_runs/gx2/` (gitignored).
+
+**GX-2 candidate gate on Haiku 5.5: entity vs similarity (rev 99, 2026-10-09).** Rev 98 found that
+detection was the limit, so `SUPERSESSION_GATE=similarity` was added. It offers the nearest older
+memories by embedding alone, with no shared entity required. A no-LLM simulation on the stored
+embeddings put **37/45** labelled stale/new pairs in front of the LLM at cosine ≥ 0.5, top 5, against
+**18/45** for the entity gate.
+
+Both gates were then run on Haiku 5.5, now the background model:
+- the same 52 knowledge-update questions as rev 98;
+- one fresh database per gate, so each run has its own ingest and Dream pass;
+- distillation off, `--retrieval-only`;
+- about $1 for both runs.
+
+| gate (Haiku 5.5) | links made | newest-above-stale, `replace` → `+supersession` | paired |
+|---|---|---|---|
+| entity (0.5, top 3) | 40 | 0.614 → 0.636 | +1 / −0 of 44, p = 1.00 |
+| similarity (0.5, top 5) | 73 | 0.614 → **0.659** | +2 / −0 of 44, p = 0.50 |
+
+Evidence recall (0.978) and newest-in-top-k (0.955) were unchanged in both runs, and neither gate
+made any question worse. The baseline (0.614) matches rev 98's: `replace` makes no LLM calls, so
+changing the model doesn't move it. The 0.636 for the entity gate is below rev 98's 0.659 on
+Haiku 4.5, but the bigger difference is in links made: **40 links on Haiku 5.5 against 490 on
+Haiku 4.5** with the same gate.
+
+**Why the wider gate barely helped: a verdict-format bug, not a judgement failure.** In the
+similarity run, every stale evidence statement in the 15 still-failing questions was *unlinked*.
+Replaying those 15 pairs directly showed what happened:
+- The prompt asks for a bare list of numbers, with thinking off and a 32-token cap. Haiku 5.5
+  often answers in prose instead ("The new statement says 30 videos; the older one says 20. That
+  is an update…") and runs out of tokens before giving the number, so `_parse` finds nothing
+  usable.
+- In 6 of the 15 pairs, Haiku 5.5 named the update in that prose and the link was still lost.
+- The parser is also unsafe: it accepts any digit in the reply, so prose like "statement 1
+  says…" could create a link the model never asked for.
+
+Fixing the format alone ("output only the numbers or NONE") parses cleanly but drops 5.5 to 6/15:
+it then answers NONE on pairs it called updates when it could explain, so with thinking off the
+prose was doing the reasoning. **Explain-then-answer** works. The prompt asks for one or two
+sentences on whether the new statement changes the fact, then a final `ANSWER: <numbers|NONE>`
+line; the cap is 256 tokens and only that line is parsed. This marks **13/15** pairs superseded on
+Haiku 5.5 (12/15 on Haiku 4.5).
+
+All 15 probe pairs are true updates, so the probe measures recall only; how often the new format
+links things that aren't updates is not yet measured. Proposed next step, cheap on Haiku 5.5:
+1. adopt explain-then-answer with strict `ANSWER:`-line parsing (it fixes the false-link parse
+   risk regardless of gate);
+2. re-run both gates on this set;
+3. sample the links for false positives before considering a default.
+
+The default stays **off**. Results: `core/bench_runs/gx2b/` (gitignored).
+
+**GX-2 gates re-run with explain-then-answer verdicts (rev 100, 2026-10-30).** Both gates were run
+again after #272. Everything matched rev 99 (same 52 questions, Haiku 5.5, one fresh database per
+gate, distillation off, `--retrieval-only`) except the verdict prompt, which now asks for a short
+explanation and then a strictly parsed `ANSWER:` line, capped at 256 tokens.
+
+| gate (Haiku 5.5) | links made (rev 99) | newest-above-stale, `replace` → `+supersession` | paired |
+|---|---|---|---|
+| entity (0.5, top 3) | 75 (40) | 0.614 → **0.773** | +7 / −0 of 44, p = 0.016 |
+| similarity (0.5, top 5) | 156 (73) | 0.614 → **0.864** | +11 / −0 of 44, p = 0.001 |
+
+Neither gate made any question worse. Evidence recall held: 0.967 → 0.978 with the entity gate,
+0.967 → 0.967 with the similarity gate. These are the first GX-2 results that are significant on
+this set. The format fix, not the gate, gave most of the gain.
+
+**False positives (hand-judged, 15 random links per gate; a small sample).** *Corrected in rev
+101:* these labels were made from 220-character previews of each statement. Re-judged on the full
+text, the entity gate's sample is **12 of 14** true updates (one is ambiguous) and the similarity
+gate's is **6 of 15**. The counts quoted below are the original, too-low ones.
+
+*Entity gate: about 9 of 15 were true updates.* The true ones gave a new value for the same
+fact:
+- Instagram followers rising to 600;
+- 3 → 4 Korean restaurants tried;
+- a Ticket to Ride high score of 124 → 132;
+- 3 → 4 weeks of a tidying routine;
+- wake-up time moving from 7:30 to 6:15.
+
+The false ones share a topic but not a fact. Examples: a BBQ sauce statement linked to a new
+grill, and an old trip itinerary linked to a new trip.
+
+*Similarity gate: about 4 of 15 were true updates.* Examples of true ones: favourite BBQ sauce
+changed; 4 → 5 painting projects. Most of its links join statements that are alike in form but
+unrelated in fact:
+- "I think I've got everything" → "I think I'm good to go now";
+- "continue" → "No response is needed";
+- one book recommendation request → another;
+- a ski-trip question → a sightseeing plan in the same state.
+
+So the similarity gate wins on ordering because it links more, and it does so at low precision.
+A false link only reorders: nothing is hidden, and a "superseded" mark is added. The cost of that
+reordering does not show on a knowledge-update-only set. On the other question types it could:
+- push a still-valid statement below an unrelated "successor";
+- label a current statement stale in the context the answerer reads.
+
+**Decision.** The default stays **off**. If it is turned on, the entity gate is the candidate:
+roughly 0.6 precision against roughly 0.3, and most of the gain.
+
+Before either becomes a default, two steps:
+1. Tighten the verdict to require a *changed value of the same attribute*, since most false
+   positives are same-topic, different-fact.
+2. Run the paired accuracy measurement on the full LongMemEval mix, not just knowledge-update, to
+   price false links on the other question types. It goes with the deferred GX-1 run.
+
+The `unparsed` count is emitted as a metric but was not captured by the harness. Results:
+`core/bench_runs/gx2c/` (gitignored).
+
+**GX-2 same-fact verdict and a larger cap (rev 101, 2026-10-30).** Rev 100's false links share a
+topic but not a fact, so the verdict prompt was tightened. Rev 100's 30 sampled links were
+re-judged on full text and used as a labelled probe: 18 true updates, 11 false, 1 ambiguous and
+unscored.
+
+Each link was replayed with its gate's real candidate list (up to 3 older statements for the
+entity gate, 5 for similarity), on Haiku 5.5 with thinking off, 2 runs each. This adds two
+findings to rev 100:
+- **The 256-token cap still truncates.** The explanation runs per older statement, so with 4–5
+  candidates the reply often ran out of tokens before its `ANSWER:` line: 5 of 58 replies were
+  unparsed. At 640 tokens, none were.
+- **A literal "same attribute, changed value" rule overshoots.** Its first draft required the new
+  value to be stated. That rejected most of this benchmark's updates, which are implied ("I just
+  added a new coin" against "37 coins"; "I finished it" against a reading plan), and cut recall to
+  0.78.
+
+The adopted prompt keeps rev 99's explain-then-answer shape and adds three rules:
+- the new value may be stated or clearly implied;
+- sharing a topic is not enough, it must be the same fact about the same thing;
+- a different item, occasion or choice, and requests, questions or small talk that state no fact,
+  are not superseded.
+
+| verdict (in context, 2 runs × 28 scored links) | precision | recall | links per call | unparsed |
+|---|---|---|---|---|
+| rev 99 prompt, 256 cap (shipped in #272) | 0.79 | 0.79 | 1.31 | 5 / 58 |
+| rev 99 prompt, 640 cap | 0.76 | 0.91 | 1.47 | 0 / 58 |
+| **same-fact prompt, 640 cap (adopted)** | **0.88** | **0.82** | 1.02 | 0 / 58 |
+
+Caveats:
+- The sample is small and in-sample: the prompt was written after reading these false links. Its
+  wording uses generic examples, not the probe's own.
+- Every probe pair was linked in rev 100, so recall here means keeping links the old prompt made.
+  It does not measure finding new ones.
+
+Cost: a reply uses only the tokens it needs, so the larger cap costs nothing extra on short
+replies.
+
+**Out-of-sample check: no measurable change.** Both gates were re-run on the KU set, set up as in
+rev 100 with fresh databases.
+
+| gate (Haiku 5.5) | links (rev 100) | newest-above-stale, `replace` → `+supersession` | sampled links that were real updates (rev 100, full text) |
+|---|---|---|---|
+| entity | 71 (75) | 0.614 → 0.773, +7 / −0 | 12 / 15 (12 / 14) |
+| similarity | 155 (156) | 0.614 → 0.864, +11 / −0 | 4 / 13, 2 ambiguous (6 / 15) |
+
+The ordering numbers are identical, recall is 0.978 in both, and the link counts barely moved. The
+new sample was drawn with a different seed and judged on full text.
+
+The similarity gate's false links are still mostly same-topic, different-fact pairs. Examples:
+two drafts of the same story; a misplaced screwdriver against a request for one; a beginner trail
+against a harder one.
+
+So the replay's precision gain did not carry over: it was in-sample, and on the real pass the
+prompt change is neutral. The 640-token cap stays for the truncation it removes.
+
+Prompt wording looks exhausted as a lever for the similarity gate. The next options are
+structural:
+- a higher similarity floor;
+- fewer candidates;
+- requiring the entity gate or a shared value-bearing span.
+
+The default stays **off**, and the entity gate (about 0.8 precision on two samples) remains the
+candidate if it is ever turned on. Results: `core/bench_runs/gx2d/` (gitignored).
+
+**GX-2 anchored gate (rev 102, 2026-10-31).** Rev 101 showed that prompt wording does not fix the
+similarity gate's false links, so the next lever is structural: change which candidates reach the
+LLM.
+
+Every link from the rev 100 and rev 101 similarity runs (156 and 155) was classified:
+- **gold:** a stale knowledge-update evidence statement linked to the newest one; 29 and 31 links.
+  These are what the ordering metric scores.
+- **non-gold:** the rest, mostly false but not all.
+- **hand-labelled:** the 28 non-ambiguous links sampled in rev 100–101, 10 true and 18 false,
+  judged on full text.
+
+A candidate filter only removes candidates, so applying it to existing links estimates what it
+keeps. It ignores two effects: a removed candidate can free a slot for a lower-ranked one, and the
+LLM may answer differently with a shorter list.
+
+| filter on similarity links (both runs) | gold kept | non-gold kept | hand-true kept | hand-false kept |
+|---|---|---|---|---|
+| none (similarity gate) | 60 / 60 | 251 / 251 | 10 / 10 | 18 / 18 |
+| cosine ≥ 0.6 | 41 | 122 | 6 | 8 |
+| cosine ≥ 0.7 | 20 | 33 | 1 | 2 |
+| shares an entity | 33 | 99 | 7 | 4 |
+| both contain a number | 37 | 85 | 6 | 5 |
+| **shares an entity, or both contain a number** | **50** | **125** | **8** | **6** |
+
+Raising the cosine floor cuts gold and false links at about the same rate: the false links are as
+alike as the true ones, which is the whole problem. A shared anchor separates them better:
+- an update restates its subject, giving a shared entity;
+- or it restates its value: counts, scores, times, levels.
+
+"Shares an entity, or both contain a number" keeps 83% of gold links and half of the rest. On the
+hand labels it keeps 8 of 10 true links and 6 of 18 false ones, so sampled precision goes from
+about 0.36 to about 0.57.
+
+**`SUPERSESSION_GATE=anchored`** implements this: the similarity gate's candidates, keeping only
+those that share an entity with the new memory or where both statements contain a digit. The filter
+runs before the top-N cap, so a dropped candidate frees its slot.
+
+Two other filters were tried and rejected:
+- **Restrict to user turns** (keep a link only when both statements are user turns). It kept every
+  gold link, but that follows from LongMemEval marking evidence on user turns, and the product's
+  memories have no speaker field to filter on.
+- **A cosine floor alone**, which costs gold links at the same rate as false ones (table above).
+
+**Out-of-sample KU run.** The setup matched rev 101: Haiku 5.5, a fresh database, top 5,
+cosine ≥ 0.5, `--retrieval-only`.
+
+| gate (Haiku 5.5) | links | gold links | newest-above-stale | paired | sampled links that were real updates |
+|---|---|---|---|---|---|
+| entity (rev 101) | 71 | — | 0.773 | +7 / −0, p = 0.016 | 12 / 15 |
+| similarity (rev 101) | 155 | 31 | 0.864 | +11 / −0, p = 0.001 | 4 / 13 |
+| **anchored** | **99** | **26** | **0.818** | **+9 / −0, p = 0.004** | **12 / 15** |
+
+Recall was 0.978 and no question got worse. Compared with the similarity gate, the anchored gate:
+- makes 36% fewer links;
+- keeps 26 of 31 gold links, close to the offline estimate of 83%;
+- reaches the entity gate's sampled precision (12 of 15, judged on full text).
+
+On ordering it lands between the two older gates. The true links sampled include egg stock (30 →
+20 dozen), a 5K personal best, signed baseballs (15 → 20), and therapy frequency. The false ones:
+an assistant's laptop recommendation against a later storage question, two different trip
+itineraries, and two Instagram post drafts.
+
+It costs 2 ordering wins against the similarity gate and has about twice its precision. It gains
+2 against the entity gate at the same precision. **The anchored gate is the best balance of the
+three and the candidate if supersession is turned on.**
+
+The default stays **off**. Turning it on waits on the full-mix paired accuracy run with GX-1,
+which prices any false link on the other question types. Results: `core/bench_runs/gx2e/`
+(gitignored).
+
+**GX-1 + GX-2 full-mix paired accuracy (rev 103, 2026-10-31).** This is the run that rev 102
+and the GX-1 entry deferred. Setup:
+- the 90 stratified LongMemEval-S questions (`lme.json`, 15 per type);
+- Haiku 5.5 as the background model, answerer and judge, thinking off;
+- spaCy extraction, the local reranker, one fresh database;
+- one Dream pass per question with distillation on (default threshold 5) and anchored
+  supersession (cosine ≥ 0.5, top 5).
+
+Four variants share that one ingest and Dream pass. Dream wrote 5,522 entity summaries (about 61
+per question) and 62 supersession links. The run took about 1 h 12 min at concurrency 8 and cost
+an estimated $4: about 63 distill calls and 48 verdict calls per question, about 330k input tokens.
+
+| variant | accuracy | paired vs `replace` | KU | MS | SSA | SSP | SSU | TR |
+|---|---|---|---|---|---|---|---|---|
+| `replace` (Haiku 5.5 baseline) | 0.644 | — | 0.800 | 0.467 | 0.867 | 0.200 | 0.867 | 0.667 |
+| `replace+entities` | **0.700** | +7 / −2, p = 0.18 | 0.867 | 0.600 | 0.867 | 0.267 | 0.867 | 0.733 |
+| `replace+supersession` | 0.656 | +2 / −1, p = 1.00 | **0.933** | 0.400 | 0.867 | 0.200 | 0.867 | 0.667 |
+| `replace+entities+supersession` | 0.656 | +4 / −3, p = 1.00 | 0.933 | 0.400 | 0.867 | 0.200 | 0.867 | 0.667 |
+
+No answer failed. The baseline (0.644) is the new Haiku 5.5 reference. The h2h run's 0.633 used
+Haiku 4.5 as answerer and judge, with no Dream pass.
+
+- **Entity summaries (GX-1)** gain in four types: multi-session +2; knowledge-update,
+  temporal-reasoning and preference +1 each. They lose nothing on the single-session types, so
+  the decision rule's safety condition holds. But +7/−2 is not significant (p = 0.18), so the
+  rule is not met.
+- **Supersession (GX-2)** lifts knowledge-update from 0.800 to 0.933 (+2) and costs one
+  multi-session question.
+
+**The losses are answerer noise, not false links.** In every lost question inspected, the
+variants retrieved the same facts and the answer differed in arithmetic or reading. The
+multi-session loss, for example, saw the same three purchases ($800, $1,200, $500) in all four
+variants: two summed them correctly and two did not. Combining both features scores below entity
+summaries alone. Its 4 gains and 3 losses fall on different questions from either feature alone,
+which is the same noise, not an interaction.
+
+So a single run's variant-to-variant scatter is about ±3–4 questions, the same size as the
+effects being measured.
+
+**Decision.** Both defaults stay **off** for now. The next step measures that noise floor. A new
+harness flag, `--answer-only`, reuses this run's ingest and Dream pass and repeats only
+retrieve, answer and judge. Several repeats per variant then give a paired comparison with a
+known noise level, for a few cents each instead of re-ingesting.
+
+The preference type (0.20–0.27) is still the weakest. GX-1's note stands: about half its misses
+are the answerer declining with the memory in context, an answer-prompt issue. Results:
+`core/bench_runs/gx1/` (gitignored), database `bench_gx1`.
+
+**Benchmark assessment: the answer step was the bottleneck (rev 104, 2026-11-11).** Rev 103's
+0.644 was re-examined on the same ingest, with `--answer-only`-style passes that cost cents.
+Evidence labels were rebuilt from the raw dataset, since `lme.json` had been converted without
+them.
+
+*Where the misses came from.* 25 of the 32 baseline misses were the answerer declining. The
+harness reused the hallucination benchmark's answer prompt: use only the context, otherwise say
+"I don't know", add nothing. That prompt:
+- refused date arithmetic with both dates in context;
+- refused every preference question, which asks for a suggestion.
+
+With all the evidence in context, the answerer still got only 53 of 73 questions right.
+
+*Experiments.* Each row is one pass over `bench_gx1` with the `replace` variant, Haiku 5.5 as
+answerer and judge:
+
+| setup | overall | KU | MS | SSA | SSP | SSU | TR |
+|---|---|---|---|---|---|---|---|
+| rev 103 harness (repeat) | 0.644 | 0.87 | 0.40 | 0.87 | 0.20 | 0.87 | 0.67 |
+| + official per-type judge rules | 0.700 | 1.00 | 0.53 | 0.87 | 0.20 | 0.87 | 0.73 |
+| + LongMemEval answer prompt | 0.778 | 0.93 | 0.33 | 0.93 | 0.80 | 0.93 | 0.73 |
+| + top 20, 8,000-token context | 0.844 | 1.00 | 0.53 | 0.93 | 0.80 | 0.93 | 0.87 |
+| + thinking on | 0.867 | 1.00 | 0.47 | 0.93 | 1.00 | 0.93 | 0.87 |
+| top 50, 20,000 tokens (no thinking) | 0.833 | 1.00 | 0.53 | 0.87 | 0.87 | 0.93 | 0.80 |
+
+Reading the rows:
+- **Judge.** The official grader has per-type rules: off-by-one days are fine for
+  temporal-reasoning; an updated answer may mention the old value; preference answers are
+  graded against a rubric. Our generic judge matched a recommendation against rubric text.
+  This step, about 0.06, is fairer measurement, not a better system.
+- **Answer prompt.** It asks the answerer to list the relevant excerpts, reason step by step,
+  use the newest statement, personalize suggestions, and decline only when nothing relevant is
+  in context. With all the evidence in context it gets 67 of 73 right.
+- **Context.** The product's 1,500-token default fits about 8.3 of 10 retrieved turns. All the
+  evidence is in context for 73 of 90 questions at top 10 and 80 of 90 at top 20. Top 50 adds
+  nothing.
+- **Thinking on** is worth 2 questions, within run-to-run scatter, so it is not adopted.
+
+*What remains is retrieval for multi-session questions.* They need about 3 evidence sessions
+each ("how many", "total spent"). All of them are retrieved for 6 of 15 questions at top 10 and
+10 of 15 at top 20, and accuracy stays near 0.5 under every setup.
+
+Of the 12 misses in the best setup:
+- 8 are multi-session: 5 lack evidence, 3 are counting or joining errors;
+- 2 are temporal date arithmetic;
+- 2 are single-session questions where the user's turn was retrieved but the answer sat in the
+  adjacent turn.
+
+Other findings:
+- **MMR is slow.** It is pure Python and takes about 20 s per query at k = 50.
+- **No abstention questions.** The 90-question sample held none, because they sit at the end of
+  each type, so the looser prompt's tendency to guess was unmeasured.
+
+*Adopted in the harness.*
+- the LongMemEval answer prompt, with a 1,200-token reply;
+- the official per-type judge rules, kept in the one-word CORRECT/INCORRECT reply format;
+- defaults of `--k 20` and `--max-memory-tokens 8000`, for the harness only (the product default
+  of 1,500 is unchanged);
+- converter: evidence labels on by default, abstention questions as their own stratum, and
+  `--exclude` to draw a held-out sample.
+
+Caveats:
+- The prompt was written after reading these 90 questions' failures, so the table is in-sample.
+  The held-out validation below addresses this.
+- The judge is Haiku 5.5, not the GPT-4o the benchmark specifies.
+- Published competitor scores are mostly self-reported, with stronger answer models and 7k–30k
+  tokens of context.
+
+Ranked next levers for the multi-session gap:
+1. round and neighbour expansion;
+2. fact-augmented keys;
+3. enumeration through the graph for counting questions;
+4. event-date resolution and time-aware query expansion;
+5. a Dream-maintained observation log;
+6. a numpy MMR.
+
+*Held-out validation (2026-11-11).* The table above is in-sample, so the adopted harness was
+checked on 91 questions it had never seen: a stratified draw with `--exclude lme.json`, 13 of
+them abstention questions (7 multi-session, 6 single-session-user), evidence labels on. One
+ingest and Dream pass (anchored gate), then four answer passes over it with `--answer-only`:
+one with the rev 103 harness (top 10, 1,500 tokens) and three with the rev 104 harness.
+
+`replace` variant, Haiku 5.5 as answerer and judge:
+
+| harness | overall | answerable (78) | abstention (13) | KU | MS | SSA | SSP | SSU | TR |
+|---|---|---|---|---|---|---|---|---|---|
+| rev 103 | 0.747 | 0.705 | 13 | 0.85 | 0.70 | 1.00 | 0.15 | 1.00 | 0.69 |
+| rev 104, pass 1 | 0.879 | 0.872 | 12 | 1.00 | 0.60 | 1.00 | 0.85 | 1.00 | 0.92 |
+| rev 104, pass 2 | 0.868 | 0.859 | 12 | 1.00 | 0.70 | 0.92 | 0.77 | 1.00 | 0.85 |
+| rev 104, pass 3 | 0.879 | 0.872 | 12 | 1.00 | 0.65 | 1.00 | 0.77 | 1.00 | 0.92 |
+
+Paired against the rev 103 pass, the three rev 104 passes are +15/−3 (p = 0.008), +15/−4
+(p = 0.019) and +14/−2 (p = 0.004).
+
+- **The gain holds out of sample.** Overall 0.747 → 0.875 (mean of three), and 0.705 → 0.868 on
+  answerable questions. The overall step is smaller than the in-sample one because the old
+  prompt, which declines readily, gets all 13 abstention questions for free.
+- **The looser prompt does not guess.** It declines 12 of 13 unanswerable questions in every
+  pass. The one miss is the same question each time: the answer says the Master's degree is not
+  on record, but still gives a total for the other degrees.
+- **Multi-session did not move.** Answerable multi-session questions score 7 of 13 with the old
+  harness and 6, 8 and 7 of 13 with the new one. This is the gap the answer step cannot close.
+- **What the misses are.** Of the 11–12 misses per pass, 6–9 have all the evidence in context
+  (counting and totalling errors, and two preference questions), 2–4 lack evidence, and 1 is the
+  abstention question. All the evidence is in context for 72 of 79 labelled questions at top 20
+  (68 at top 10).
+
+*GX-1 and GX-2 under the fixed harness.* The same three passes scored all four variants:
+
+| variant | pass 1 | pass 2 | pass 3 | mean | paired vs `replace`, pooled |
+|---|---|---|---|---|---|
+| `replace` | 0.879 | 0.868 | 0.879 | 0.875 | — |
+| `replace+entities` | 0.890 | 0.835 | 0.857 | 0.861 | +9/−13 |
+| `replace+supersession` | 0.868 | 0.835 | 0.857 | 0.853 | +8/−14 |
+| `replace+entities+supersession` | 0.835 | 0.890 | 0.879 | 0.868 | +9/−11 |
+
+- **Noise floor.** The same variant, answered again over identical retrieval, changes verdict on
+  2 to 11 of the 91 questions, and its accuracy moves by up to 0.055. A variant differs from
+  `replace` on 7 to 10 questions within a pass, which is the same size.
+- **Neither feature shows an answer gain.** No variant beats `replace` on the mean, and rev 103's
+  +7/−2 for entity summaries does not reproduce. Both defaults stay off.
+- **Supersession still fixes ordering, but the answerer no longer needs it.** Newest-above-stale
+  goes from 7 to 10 of 13. Knowledge-update accuracy is 13 of 13 in every rev 104 pass with or
+  without it: each excerpt carries its date and the prompt says to use the most recent statement.
+- **Sample size.** An effect of one or two questions cannot be read at 91 questions. Deciding
+  these defaults by accuracy would need several hundred.
+
+Remaining caveats: the judge is still Haiku 5.5, and both samples come from LongMemEval-S.
+
+Scripts and per-question results: `core/bench_runs/assess/` and `core/bench_runs/fresh/`
+(gitignored).
+
+**Neighbour expansion (rev 105, 2026-11-12).** The first lever from the list above. Retrieval
+ranks single turns, but the answer to a retrieved question is often in the reply that follows
+it. `RETRIEVE_NEIGHBOR_TURNS` / `opts.neighbor_turns` (default 0, off) also injects the turns
+within that many positions of each hit:
+- only turns of the hit's own session, so it needs memories stored with a `session_id` and a
+  `turn_index` (the memory now stores `turn_index`; it was only part of the key before);
+- only from the token budget the hits left, best hit first and nearest turn first, so a
+  neighbour never displaces a retrieved memory;
+- placed next to its hit in turn order, and returned after the k hits with source `neighbor`.
+
+*Measured without an LLM* on both 90-question samples, at the harness defaults (top 20, 8,000
+tokens). Existing ingests were given their sessions and turn positions by a backfill. The
+count is questions with every labelled evidence turn in the injected context:
+
+| sample | off | ±1 turn | ±2 turns | ±1 with no budget limit | context tokens, off → ±1 |
+|---|---|---|---|---|---|
+| held-out (79 labelled) | 70 | 73 | 73 | 74 | 4,520 → 7,485 |
+| original (90 labelled) | 75 | 79 | 80 | 80 | 4,190 → 7,412 |
+
+- **It does what it was built for.** The gains are single-session questions whose answer sat in
+  the adjacent turn. About 13 neighbours fit per question, and no question loses evidence.
+- **It is not the multi-session lever.** Multi-session goes from 11 to 11 of 14 on the held-out
+  sample and from 8 to 9 of 15 on the original. Those questions miss whole sessions, which the
+  neighbours of other sessions' hits cannot supply.
+- **It reaches few of the remaining misses.** On the held-out sample the three questions that
+  gain evidence were already answered correctly in all three rev 104 passes, and none of the
+  ten stable misses gains any. On the original sample four of the fourteen misses gain evidence.
+- **It costs context.** The injected context grows by about two thirds.
+- **Whole sessions would reach further at a price.** Injecting each hit's whole session puts all
+  evidence in context for 76 of 79 and 86 of 90 questions, but needs about 18,000 tokens. Not
+  built.
+
+Answer accuracy has not been measured: that needs paid answer passes (`+neighbors` variant,
+`--answer-only`). The default stays off.
+
+Scripts and per-question results: `core/bench_runs/neighbour/` (gitignored).
+
+**Fact-augmented keys (rev 106, 2026-11-12).** The second lever from the list above. A free
+diagnostic (`bench_runs/factkeys/pooldiag.py`) located every labelled evidence turn missing from
+the top-20, 8,000-token context in the fused candidate pool (150 deep, before MMR):
+
+| sample | questions | in context | pool rank 50–150 | pool rank under 50 | not in pool |
+|---|---|---|---|---|---|
+| held-out | 78 | 137 | 8 | 3 | 2 |
+| original | 90 | 144 | 9 | 11 | 2 |
+
+The missed multi-session turns state the fact in passing, inside a request about something else
+("…I made a whole wheat baguette last Saturday" in a question about bread tips), so BM25 and the
+embedding both rank the turn by its main topic. The reranker only sees the top 50, but widening
+its window to 100 or 150 recovers nothing (held-out: 137 / 135 / 136 evidence turns found): the
+cross-encoder does not rate these turns relevant either.
+
+Fact keys put the stated fact into the index. A Dream State pass (`lifecycle/facts.py`) has the
+LLM write each memory's facts as short standalone sentences (relative dates resolved from the
+message date) and stores `facts` plus one embedding per fact on the memory. Retrieval gains two
+arms, BM25 over `facts` and the best cosine among a memory's fact embeddings (an exact scan of
+the tenant's memories, skipped above `FACT_VECTOR_SCAN_MAX`; the shared vector index holds only
+`embedding`). Both return the parent memory, so the value stays the original turn. The reranker
+scores each candidate as its facts followed by its text, because rating a passing-mention turn by
+its text alone pushed it back out of the top 20. Off by default.
+
+*Pilot (2026-11-12, $0.3–0.5 of Haiku 5.5, `FACT_KEYS_PREFIX=user:`).* Facts extracted for the
+three held-out multi-session questions that miss evidence: 715 user turns → 1,065 facts (about
+half the turns state a fact), 95 s at 8 parallel calls. Dates came out resolved ("last Saturday
+(2023/05/20)"). Evidence turns in the top-20 context, 15 labelled across the three questions:
+
+| fact keys | turns found | note |
+|---|---|---|
+| off | 10 | |
+| arms only | 12 | the missed turns reach pool rank 14–18, then lose the rerank |
+| arms + reranker sees facts | 13 | |
+
+The context shrinks (3,600–6,000 → 1,300–1,700 tokens), since fact matches are short user turns.
+Caveats: these three questions were picked because they miss evidence, so the pilot cannot show
+regressions elsewhere (a fact hit displacing an assistant reply, for one); answer accuracy is
+not measured. A bug found on the way: updating the search view to add `facts` replaced the whole
+link definition instead of merging it, dropping `text` from the index; the migration now sends the
+full field set (tested).
+
+*Full measurement (2026-11-12).* Facts were extracted for all 91 held-out questions: 21,516 user
+turns → 12,431 with facts, 30,793 facts, about 25 s per question at 12 parallel calls. Three
+`--answer-only` passes of `replace` against `replace+facts` (Haiku 5.5 answerer and judge, top 20,
+8,000 tokens), first with the arms at RRF weight 1.0, then at 0.3:
+
+| fact-arm weight | `replace` (3 passes) | `replace+facts` (3 passes) | evidence recall@k | single-session-assistant |
+|---|---|---|---|---|
+| 1.0 | 0.879 / 0.879 / 0.879 | 0.846 / 0.857 / 0.835 | 0.941 → 0.934 | 1.00 → 0.85 |
+| 0.3 | 0.890 / 0.868 / 0.879 | 0.857 / 0.879 / 0.879 | 0.941 → 0.951 | 1.00 → 1.00 |
+
+Paired per pass: weight 1.0 gives +4/−7, +6/−8, +3/−7; weight 0.3 gives +3/−6, +6/−5, +5/−5; none
+is significant. Multi-session accuracy does not move (0.68 → 0.67 at 1.0, 0.70 → 0.68 at 0.3).
+
+- **At weight 1.0 the arms hurt.** Two single-session-assistant questions lost their evidence
+  entirely: the fact arms, which only cover user turns, push many user turns above a long
+  assistant reply in fused rank, and the reply drops below the rerank window (top 50) before the
+  cross-encoder scores it. This is independent of what the cross-encoder reads: text only, facts
+  plus text, and the better of both all lose the same two.
+- **A free sweep over all 78 labelled questions** (evidence turns in the top-20 context, base 137
+  of 150) picked weight 0.3 with the window left at 50: 140 found, multi-session 42 → 45 of 47,
+  3 questions better and 1 worse. A window of 100 at weight 1.0 found 139 (5 better, 3 worse);
+  weight 0.3 with window 100 found 137. The default is now 0.3.
+- **The extra evidence does not become answers.** Multi-session misses are about half missing
+  evidence and half counting errors over complete evidence; fact keys fix part of the first half,
+  and the passes show nothing moves. The three evidence turns the pilot recovered were not enough
+  to change an answer.
+
+Conclusion: fact keys work as an index (dates resolved, passing mentions found, no regression at
+0.3) but are not worth their cost as a retrieval lever: about $8–12 of extraction per 91
+questions, for +0.01 evidence recall and no measurable accuracy. Defaults stay off. The stored
+facts are the natural input to the next lever (enumeration and counting over facts).
+
+**Counting reader probe (rev 107, 2026-11-13) — negative.** The lever above, tested as a reader
+change before building anything. The 8 multi-session misses inspected were not retrieval
+failures: 7 had every evidence turn in the context. The errors were reading errors — one event
+counted twice across excerpts, a "past month" window that dropped last month's order, "last
+week" read too strictly, and "I don't know" with the evidence present. Probe: answer-only on
+cached k=20 / 8000-token contexts, Haiku 5.5, official per-type judge, 3 passes, ~$3 in all.
+Prompts: the current one (`base`); a structured one that lists every candidate with its date,
+merges mentions of the same item, filters by the window, then counts (`agg`); `agg` plus a
+presence check — if a thing the question names never appears, say it was not mentioned, and
+answer 0 only when the category is present but nothing matches (`agg2`); and `agg` with the
+stored facts appended (`aggf`).
+
+| set (questions) | prompt | answerable | abstention |
+|---|---|---|---|
+| bench_fresh, development (13 + 7) | base | 21/39 | 19/21 |
+| | agg | 28/39 | 9/21 |
+| | aggf | 28/39 | 10/21 |
+| | agg2 | 26/39 | 21/21 |
+| bench_gx1, validation (15 + 0) | base | 23/45 | — |
+| | agg2 | 21/45 | — |
+
+- **Without the presence check the structured prompt answers "0" or a partial total** when the
+  asked-about thing was never mentioned; abstention fell from 0.90 to 0.43.
+- **The development gain did not replicate.** `agg2` led on bench_fresh (47/60 against 40/60
+  overall) and trailed on the untouched bench_gx1 (21/45 against 23/45). Three passes over 15–20
+  questions are 15–20 samples; the gain was fitted to them.
+- **The stored facts add nothing** over the prompt alone (28/39 both ways).
+
+Conclusion: no reader or prompt change is adopted. The remaining multi-session gap is the
+answering model's reasoning over complete evidence, which this project does not ship, and a
+measurable test needs several hundred multi-session questions. Counting over facts stays unbuilt;
+if it is ever built, make it a user-facing retrieval option (deduplicated, dated facts per
+entity), not a benchmark patch. Scripts and results: `core/bench_runs/aggregate/`.
 
 ### Recall vs corpus size — the fusion-holds curve (HX-2)
 

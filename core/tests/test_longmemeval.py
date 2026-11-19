@@ -20,6 +20,7 @@ from arango_memory.eval.longmemeval import (
 )
 from arango_memory.eval.longmemeval_convert import _stratified_sample, convert
 from arango_memory.generation import FakeGenerator
+from arango_memory.retrieve.search import retrieve
 from arango_memory.security.redact import redact
 
 _SMOKE = Path(__file__).parent / "data" / "longmemeval_smoke.json"
@@ -47,6 +48,30 @@ def test_judge_abstention_grades_a_decline() -> None:
     assert judge_correct(
         "What is X?", "", "It is 42.", judge=_judge("INCORRECT"), abstention=True
     ) is False
+
+
+def test_judge_applies_the_official_per_type_rules() -> None:
+    seen: list[tuple[str, str | None]] = []
+
+    def handler(prompt: str, system: str | None) -> str:
+        seen.append((prompt, system))
+        return "CORRECT"
+
+    judge = FakeGenerator(handler=handler)
+    judge_correct("q", "18 days", "19 days", judge=judge, category="temporal-reasoning")
+    judge_correct("q", "Denver", "Boston, now Denver", judge=judge, category="knowledge-update")
+    judge_correct("q", "prefers Sony gear", "a Sony lens", judge=judge,
+                  category="single-session-preference")
+    judge_correct("q", "never said", "I don't know", judge=judge, abstention=True,
+                  category="temporal-reasoning")
+    judge_correct("q", "Target", "Target", judge=judge, category="single-session-user")
+    systems = [system or "" for _, system in seen]
+    assert "off-by-one" in systems[0]
+    assert "earlier information" in systems[1]
+    assert "rubric" in systems[2] and "Rubric: prefers Sony gear" in seen[2][0]
+    assert "unanswerable" in systems[3] and "off-by-one" not in systems[3]  # abstention wins
+    assert "subset" in systems[4]  # the base rule for the other types
+    assert all(system.endswith("CORRECT or INCORRECT.") for system in systems)
 
 
 # ── converter (no DB) ─────────────────────────────────────
@@ -192,10 +217,12 @@ def test_parse_variant() -> None:
     assert _parse_variant("replace+entities") == _Variant("replace", entities=True)
     assert _parse_variant("+supersession") == _Variant(supersession=True)
     assert _parse_variant("rrf+entities+supersession") == _Variant("rrf", None, True, True)
+    assert _parse_variant("replace+neighbors") == _Variant("replace", neighbors=True)
+    assert _parse_variant("replace+facts") == _Variant("replace", facts=True)
     with pytest.raises(ValueError, match="unknown rerank scoring"):
         _parse_variant("bogus")
     with pytest.raises(ValueError, match="unknown variant suffix"):
-        _parse_variant("replace+facts")
+        _parse_variant("replace+bogus")
 
 
 def test_convert_injects_session_and_question_dates() -> None:
@@ -235,6 +262,33 @@ def test_stratified_sample_spreads_across_types() -> None:
     assert types.count("A") >= 3 and types.count("B") >= 3 and types.count("C") == 2
 
 
+def test_stratified_sample_gives_abstention_its_own_bucket() -> None:
+    # Abstention questions end each type, so the first few per type never include one.
+    raw = [{"question_type": t, "question_id": f"{t}{i}{'_abs' if i >= 8 else ''}"}
+           for t in ("A", "B") for i in range(10)]
+    picked = _stratified_sample(raw, 6)
+    assert sum(item["question_id"].endswith("_abs") for item in picked) == 2
+
+
+def test_convert_cli_carries_evidence_and_excludes_a_prior_sample(tmp_path: Path) -> None:
+    import json
+
+    from arango_memory.eval.longmemeval_convert import main as convert_main
+
+    raw = [{"question_id": f"q{i}", "question_type": "A", "question": "?", "answer": "a",
+            "haystack_dates": ["2023/01/01"], "haystack_session_ids": ["s"],
+            "haystack_sessions": [[{"role": "user", "content": "hi", "has_answer": True}]]}
+           for i in range(4)]
+    src, first, fresh = tmp_path / "raw.json", tmp_path / "first.json", tmp_path / "fresh.json"
+    src.write_text(json.dumps(raw))
+    assert convert_main([str(src), str(first), "--limit", "2"]) == 0
+    assert convert_main([str(src), str(fresh), "--exclude", str(first), "--no-evidence"]) == 0
+    one = json.loads(first.read_text())["samples"]
+    two = json.loads(fresh.read_text())["samples"]
+    assert [s["sample_id"] for s in one] == ["q0", "q1"] and one[0]["qa"][0]["evidence"]
+    assert [s["sample_id"] for s in two] == ["q2", "q3"] and "evidence" not in two[0]["qa"][0]
+
+
 def _write_tmp(dataset: dict) -> Path:
     import json
     import tempfile
@@ -251,6 +305,8 @@ def test_cli_parser() -> None:
     )
     assert args.dataset == "d.json" and args.mode == "multihop" and args.k == 5
     assert args.rerank is True and args.min_accuracy == 0.5
+    defaults = _build_parser().parse_args(["d.json"])
+    assert (defaults.k, defaults.max_memory_tokens) == (20, 8000)
 
 
 # ── end-to-end aggregation (DB) ───────────────────────────
@@ -393,7 +449,7 @@ def test_supersession_variant_fixes_update_ordering(db: StandardDatabase,
     monkeypatch.setattr(settings, "supersession_min_similarity", -1.0)
 
     def handler(prompt: str, system: str | None) -> str:
-        return "1" if system and "SUPERSEDED" in system else ""
+        return "Older 1 is the stale city.\nANSWER: 1" if system and "SUPERSEDED" in system else ""
 
     report = run_longmemeval(
         db, [_sam_sample("lme-gx2-sam")], generator=FakeGenerator(handler=handler), k=10,
@@ -401,6 +457,22 @@ def test_supersession_variant_fixes_update_ordering(db: StandardDatabase,
     )
     assert report.by_variant[""].evidence["newest_above_stale"] == 0.0
     assert report.by_variant["+supersession"].evidence["newest_above_stale"] == 1.0
+
+
+def test_neighbors_variant_pulls_the_reply_within_its_own_session(db: StandardDatabase) -> None:
+    # Each chat is ingested as its own session, so the hit's neighbour is the reply that
+    # followed it and never the first turn of the next chat.
+    sample = _sam_sample("lme-nb-sam")
+    report = run_longmemeval(
+        db, [sample], generator=FakeGenerator(), k=1, judge_answers=False,
+        rerank_scorings=["replace", "replace+neighbors"],
+    )
+    assert set(report.by_variant) == {"replace", "replace+neighbors"}
+    hit = retrieve(db, query="Where does Sam live now?", tenant_id="lme-nb-sam",
+                   agent_id="assistant", k=1, rerank=True, neighbor_turns=1, record_access=False)
+    assert [h.text for h in hit.hits] == ["user: Sam does live in Boston now.",
+                                          "assistant: Got it, Boston."]
+    assert "pasta" not in hit.context
 
 
 def test_single_configuration_report_is_unchanged(db: StandardDatabase) -> None:
@@ -481,3 +553,29 @@ def test_checkpoint_refuses_to_clobber_without_resume(
     with pytest.raises(FileExistsError, match="resume"):
         run_longmemeval(db, load_dataset(_SMOKE), generator=FakeGenerator(), k=10,
                         checkpoint=ckpt)
+
+
+def test_answer_only_reuses_the_ingest(db: StandardDatabase) -> None:
+    samples = load_dataset(_SMOKE)
+    gen, _ = _counting({"currently live": "CORRECT", "sister": "INCORRECT"})
+    first = run_longmemeval(db, samples, generator=gen, judge=gen, k=10)
+    count = "FOR m IN memories FILTER m.tenant_id IN @t COLLECT WITH COUNT INTO c RETURN c"
+    ids = {"t": [s.sample_id for s in samples]}
+    before = next(iter(db.aql.execute(count, bind_vars=ids)))
+
+    again = run_longmemeval(db, samples, generator=gen, judge=gen, k=10, answer_only=True)
+    assert next(iter(db.aql.execute(count, bind_vars=ids))) == before  # nothing re-ingested
+    assert (again.n_questions, again.accuracy) == (first.n_questions, first.accuracy)
+
+
+def test_answer_only_refuses_a_missing_ingest_and_reingesting_flags(
+    db: StandardDatabase,
+) -> None:
+    missing = Sample(sample_id="lme-never-ingested", sessions=[], qa=[])
+    with pytest.raises(ValueError, match="no ingested memories"):
+        run_longmemeval(db, [missing], generator=FakeGenerator(), answer_only=True)
+    for flag in ("dream", "extract", "resume"):
+        with pytest.raises(ValueError, match="answer_only"):
+            run_longmemeval(db, [missing], generator=FakeGenerator(), answer_only=True,
+                            **{flag: True})
+    assert _build_parser().parse_args(["d.json", "--answer-only"]).answer_only is True

@@ -133,6 +133,8 @@ def _ensure_scope_indexes(db: StandardDatabase) -> None:
     for collection, name, fields in (
         # Vector arm + working buffer + forget + stats all scope memories this way.
         ("memories", "idx_mem_scope", ["tenant_id", "agent_id", "invalid_at"]),
+        # Neighbour expansion reads the turns next to a hit in its session.
+        ("memories", "idx_mem_turn", ["tenant_id", "agent_id", "session_id", "turn_index"]),
         # Dream / community / salience / ontology / entity API / forget scan entities.
         ("entities", "idx_entity_scope", ["tenant_id", "invalid_at"]),
         # LangChain history reads a session's episodes in order.
@@ -221,26 +223,38 @@ def ensure_vector_index(
         return False
 
 
+_VIEW_FIELDS: dict[str, Any] = {
+    "text": {"analyzers": ["text_en"]},
+    "prospective_queries": {"analyzers": ["text_en"]},
+    "facts": {"analyzers": ["text_en"]},
+    "tenant_id": {"analyzers": ["identity"]},
+    "agent_id": {"analyzers": ["identity"]},
+}
+
+
 def _ensure_search_view(db: StandardDatabase) -> None:
     """ArangoSearch view over memory text (BM25) with tenant/agent scope fields."""
     existing = {v["name"] for v in cast("list[dict[str, Any]]", db.views())}
     if SEARCH_VIEW in existing:
+        _ensure_view_fields(db)
         return
 
     db.create_arangosearch_view(
         name=SEARCH_VIEW,
         properties={
-            "links": {
-                "memories": {
-                    "fields": {
-                        "text": {"analyzers": ["text_en"]},
-                        "prospective_queries": {"analyzers": ["text_en"]},
-                        "tenant_id": {"analyzers": ["identity"]},
-                        "agent_id": {"analyzers": ["identity"]},
-                    },
-                },
-            },
+            "links": {"memories": {"fields": _VIEW_FIELDS}},
             "commitIntervalMsec": 1000,
             "consolidationIntervalMsec": 10000,
         },
     )
+
+
+def _ensure_view_fields(db: StandardDatabase) -> None:
+    """Bring an existing view's `memories` link up to `_VIEW_FIELDS` (FK-1 added `facts`).
+
+    ArangoDB replaces a link's definition on update instead of merging it, so the full field
+    set is sent. Idempotent."""
+    props = cast("dict[str, Any]", db.view(SEARCH_VIEW))
+    fields = props.get("links", {}).get("memories", {}).get("fields", {})
+    if not set(_VIEW_FIELDS) <= set(fields):
+        db.update_arangosearch_view(SEARCH_VIEW, {"links": {"memories": {"fields": _VIEW_FIELDS}}})

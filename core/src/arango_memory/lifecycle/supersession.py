@@ -2,7 +2,9 @@
 
 Graphiti closes a fact's validity window when a newer fact contradicts it. Our unit is the
 memory: a Dream State pass compares each not-yet-checked memory with the older memories of the
-same agent that share an entity with it and read alike, and asks the LLM which of them it
+same agent that share an entity with it and read alike (`SUPERSESSION_GATE=entity`) — or, with
+`SUPERSESSION_GATE=similarity`, the nearest ones by embedding alone, or with `anchored`, the
+nearest ones that also share an entity or a number with it — and asks the LLM which of them it
 updates. An updated memory gets `superseded_by` (the newer memory's key) and `valid_to` (the
 newer memory's time). Nothing is hidden — `invalid_at` stays null — because RQ-3 showed
 temporal reasoning needs the old statements; retrieval uses the link only to rank the current
@@ -32,10 +34,22 @@ from ..telemetry import metrics
 _SUPERSEDE_SYSTEM = (
     "You compare a NEW statement with OLDER statements from the same history. An older "
     "statement is SUPERSEDED when the new one gives a newer value for the same fact (a change, "
-    "update or correction), so the older one is no longer current. Statements that only "
-    "relate, add detail, or concern different facts are not superseded. Reply with the numbers "
-    "of the superseded older statements, comma-separated, or NONE."
+    "update or correction), so the older one is no longer current. The new value may be stated "
+    "or clearly implied (one more item added, a plan now done, a time moved). Sharing a topic is "
+    "not enough: it must be the same fact about the same thing. A different item, occasion or "
+    "choice, a statement that only relates or adds detail, and requests, questions or small talk "
+    "that state no fact are not superseded. First say in one or two sentences which fact each "
+    "older statement states and whether the new statement changes its value. Then end with a "
+    "final line `ANSWER: ` followed by the numbers of the superseded older statements, "
+    "comma-separated, or NONE."
 )
+# Explain-then-answer (DESIGN §23 rev 99): with thinking off, the short explanation is where the
+# model reasons — a bare-numbers reply made Haiku 5.5 miss most updates, and a 32-token cap cut
+# its prose off before the number. The explanation runs per older statement, so the cap must fit
+# five of them: at 256, about one reply in ten was cut off before its answer line (rev 101).
+_VERDICT_MAX_TOKENS = 640
+_ANSWER_LINE = re.compile(r"^\s*ANSWER:\s*(.*?)\s*\.?\s*$", re.MULTILINE)
+_ANSWER_VALUE = re.compile(r"NONE|\d+(?:\s*,\s*\d+)*")
 
 # Each statement is clipped before it reaches the prompt: long chat turns would otherwise make
 # one comparison cost as much as a whole distillation.
@@ -71,21 +85,64 @@ FOR eid IN ents
 _PER_ENTITY = 200
 _FETCH = 20
 
+# Similarity gate: the nearest memories of the same agent by embedding alone, no shared entity
+# required. Exact scan over the agent's memories (idx_mem_scope narrows it to tenant + agent).
+# Rows run oldest-first and each is stamped, so every older memory is already checked: skipping
+# unchecked ones keeps newer near-duplicates from crowding the older candidates out of the LIMIT.
+_SIMILAR = """
+FOR o IN memories
+  FILTER o.tenant_id == @tenant_id AND o.agent_id == @agent_id AND o.invalid_at == null
+     AND o._key != @key AND o.superseded_by == null AND o.type != "working"
+     AND o.supersession_checked_at != null
+  LET sim = COSINE_SIMILARITY(o.embedding, @vec)
+  FILTER sim >= @min_sim
+  SORT sim DESC
+  LIMIT @limit
+  RETURN { key: o._key, text: o.text, event_time: o.event_time, created_at: o.created_at }
+"""
+# Equal or mixed-format times are still sorted out in Python, so fetch a little deeper.
+_SIMILAR_FETCH = 50
+
+# Anchored gate: the similarity candidates, each flagged with whether it shares an entity with the
+# new memory. Most of the similarity gate's false links share a topic but no fact (DESIGN §23 rev
+# 102); an update restates its subject (a shared entity) or a value (a number on both sides).
+_ANCHORED = (
+    "LET mine = (FOR e IN 1..1 OUTBOUND CONCAT('memories/', @key) mentions RETURN e._id)\n"
+    + _SIMILAR.replace(
+        "  RETURN { key: o._key,",
+        "  LET shared = LENGTH((FOR e IN 1..1 OUTBOUND o mentions FILTER e._id IN mine LIMIT 1 "
+        "RETURN 1)) > 0\n  RETURN { shared, key: o._key,",
+    )
+)
+_NUMBER = re.compile(r"\d")
+
 
 @dataclass
 class SupersessionResult:
     checked: int = 0
     compared: int = 0  # LLM comparisons made
     superseded: int = 0
+    unparsed: int = 0  # replies with no well-formed ANSWER line — no links made
+
+
+def _anchored(new_text: str, old: dict[str, Any]) -> bool:
+    return bool(old["shared"]) or bool(_NUMBER.search(new_text) and _NUMBER.search(old["text"]))
 
 
 def _clip(text: str) -> str:
     return text if len(text) <= _MAX_CHARS else text[:_MAX_CHARS] + "…"
 
 
-def _parse(reply: str, n: int) -> list[int]:
-    """1-based indices from the LLM reply, kept only when in range; NONE → []."""
-    return sorted({i for i in map(int, re.findall(r"\d+", reply)) if 1 <= i <= n})
+def _parse(reply: str, n: int) -> list[int] | None:
+    """1-based indices from the reply's last `ANSWER:` line, kept only when in range; `NONE` →
+    []. None when there is no well-formed answer line: digits in the explanation ("statement 1
+    says…") must never become links."""
+    lines = _ANSWER_LINE.findall(reply)
+    if not lines or not _ANSWER_VALUE.fullmatch(lines[-1]):
+        return None
+    if lines[-1] == "NONE":
+        return []
+    return sorted({i for i in map(int, re.findall(r"\d+", lines[-1])) if 1 <= i <= n})
 
 
 def run_supersession(
@@ -110,18 +167,29 @@ def run_supersession(
             bind: dict[str, Any] = {
                 "key": row["key"], "tenant_id": tenant_id, "agent_id": row["agent_id"],
                 "vec": row["embedding"], "min_sim": settings.supersession_min_similarity,
-                "per_entity": _PER_ENTITY, "limit": _FETCH,
             }
-            found = cast(Cursor, db.aql.execute(_CANDIDATES, bind_vars=bind))
-            older = [o for o in found if when(o) < mine][: settings.supersession_max_candidates]
+            gate = settings.supersession_gate
+            if gate == "entity":
+                query, bind["limit"], bind["per_entity"] = _CANDIDATES, _FETCH, _PER_ENTITY
+            else:
+                query = _ANCHORED if gate == "anchored" else _SIMILAR
+                bind["limit"] = _SIMILAR_FETCH
+            found = cast(Cursor, db.aql.execute(query, bind_vars=bind))
+            older = [o for o in found if when(o) < mine
+                     and (gate != "anchored" or _anchored(row["text"], o))]
+            older = older[: settings.supersession_max_candidates]
         if older:
             prompt = f"NEW: {_clip(row['text'])}\nOLDER:\n" + "\n".join(
                 f"{i}. {_clip(o['text'])}" for i, o in enumerate(older, 1)
             )
-            reply = gen.complete(prompt, system=_SUPERSEDE_SYSTEM, max_tokens=32)
+            reply = gen.complete(prompt, system=_SUPERSEDE_SYSTEM, max_tokens=_VERDICT_MAX_TOKENS)
             result.compared += 1
+            picked = _parse(reply, len(older))
+            if picked is None:
+                result.unparsed += 1
+                picked = []
             valid_to = row.get("event_time") or row.get("created_at")
-            for i in _parse(reply, len(older)):
+            for i in picked:
                 memories.update({"_key": older[i - 1]["key"], "superseded_by": row["key"],
                                  "valid_to": valid_to, "superseded_at": now})
                 result.superseded += 1
@@ -129,5 +197,5 @@ def run_supersession(
         result.checked += 1
 
     metrics.emit("supersession", checked=result.checked, compared=result.compared,
-                 superseded=result.superseded)
+                 superseded=result.superseded, unparsed=result.unparsed)
     return result

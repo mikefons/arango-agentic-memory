@@ -17,11 +17,33 @@ are versioned together and released from this repository.
   (default off) appends an `Entity summaries:` section to the `/v1/retrieve` context, made
   from the Dream State summaries of the entities the hits mention. It shares
   `max_memory_tokens` with the memories (at most 20% of it).
+- Neighbour expansion in retrieval: `RETRIEVE_NEIGHBOR_TURNS` / `opts.neighbor_turns` (default
+  0, off) also injects the turns within that many positions of each hit, in the hit's session,
+  such as the reply to a retrieved question. Neighbours only use token budget the hits left and
+  appear next to their hit in turn order. Memories now store `turn_index`; the feature needs
+  it together with a `session_id`, so memories written before this change have no neighbours.
+  The LongMemEval harness stores each chat as its own session and gains a `+neighbors` variant.
+- Fact-augmented keys (FK-1), behind `FACT_KEYS` (default off). Dream State has the LLM state
+  the facts each memory carries, as short standalone sentences with relative dates resolved, and
+  stores them with one embedding per fact (`FACT_KEYS_PREFIX=user:` mines only the user's turns).
+  Retrieval (`RETRIEVE_FACT_KEYS` / `opts.fact_keys`, default off) then matches the query against
+  the facts too, through a BM25 arm and a best-fact-cosine arm, so a turn that mentions something
+  in passing is found by it; the memory itself is still what is returned. The search view gains a
+  `facts` field (added to existing views at startup). The vector arm is an exact scan, skipped
+  above `FACT_VECTOR_SCAN_MAX` memories per tenant. The LongMemEval harness gains a `+facts`
+  variant. On the LongMemEval held-out sample it recovers a few more evidence turns but does not
+  change answer accuracy, so it stays off.
 - Memory-level fact supersession (GX-2), behind `FACT_SUPERSESSION` (default off). Dream State
   links a memory to the older statements it updates (`superseded_by`, `valid_to`; nothing is
   hidden). Retrieval (`opts.supersession`) ranks the current statement directly above a stale
   one it retrieved, pulling it in if missed, and marks the stale line `(superseded <time>)`.
   `/v1/dream` reports `memories_superseded`.
+- `SUPERSESSION_GATE=similarity`: GX-2 candidates by embedding similarity alone (default `entity`).
+- `SUPERSESSION_GATE=anchored`: GX-2 similarity candidates that also share an entity or a number
+  with the new memory. This drops most same-topic, different-fact pairs before any LLM call.
+  On the knowledge-update set, newest-above-stale went from 0.614 to 0.818, with 99 links and
+  about 0.8 sampled precision. The similarity gate scores 0.864 but makes 155 links at about 0.3
+  precision (DESIGN §23 rev 102).
 - Point-in-time retrieval: `opts.as_of` (ISO date/date-time) limits retrieval to memories
   that existed by then, with supersession judged as of then.
 - LongMemEval harness: `--dream` runs a Dream State pass per question; `+entities` /
@@ -39,8 +61,24 @@ are versioned together and released from this repository.
   asserts in `X-On-Behalf-Of-Tenant` / `-Scope` / `-Agents`, capped by the key's tenant (or `"*"`),
   scope and agents. A delegate that asserts nothing, or a non-delegate credential sending those
   headers, gets `403`.
+- LongMemEval harness: `--answer-only` reuses the ingest and Dream pass an earlier run left in
+  `ARANGO_DB`, and only retrieves, answers and judges. Repeat passes measure answerer and judge
+  noise for cents rather than a re-ingest. It refuses `--extract`, `--dream` and `--resume`,
+  and checks every question's tenant before any LLM call.
 
 ### Changed
+
+- LongMemEval harness (DESIGN §23 rev 104):
+  - It answers with a LongMemEval prompt in place of the hallucination benchmark's
+    "context only, else decline" prompt, which caused 25 of 32 misses.
+  - It grades with the official per-type judge rules.
+  - It defaults to `--k 20` and a new `--max-memory-tokens 8000`.
+  - Scores are not comparable with earlier runs: on the same ingest, 0.644 became 0.844.
+  - On a held-out sample of 91 questions it scores 0.875 against 0.747 for the old harness,
+    and declines 12 of 13 unanswerable questions.
+- `longmemeval_convert`: evidence labels are on by default (`--no-evidence` drops them).
+  `--stratified` samples abstention questions as their own stratum. A new `--exclude
+  <dataset>` draws a held-out sample.
 
 - The background LLM moves to Claude Haiku 5.5: `BACKGROUND_MODEL` now defaults to
   `claude-haiku-5-5` (was `claude-haiku-4-5`). It is used for HyDE, the gate, Dream State,
@@ -57,6 +95,23 @@ are versioned together and released from this repository.
 
 ### Fixed
 
+- JWT auth: a bearer token with an unknown `kid` made the core refetch the issuer's JWKS before
+  the token was authenticated, so unauthenticated requests with random `kid`s could keep the IdP
+  busy and tie up request threads. Refetches are now limited to one per 30 seconds and a fetch
+  times out after 5. This needs PyJWT 2.14 or later, so the floor rises from `pyjwt>=2.9.0` to
+  `pyjwt>=2.14.0`.
+- GX-2 supersession verdicts: the LLM now explains in one or two sentences, then ends with an
+  `ANSWER: <numbers|NONE>` line (256-token cap, was 32). Only that line is parsed, strictly. The
+  bare-number format made Haiku 5.5 reply in prose that the cap cut off before the number, and
+  the old parser accepted any digit in a reply, so prose like "statement 1 says…" could create a
+  link. Replies without a well-formed answer line link nothing and are counted as `unparsed`.
+- GX-2 supersession verdicts: the cap rises from 256 to 640 tokens. The explanation covers each
+  older statement, and with 4–5 candidates about one reply in ten was cut off before its answer
+  line. The prompt now also requires the *same fact about the same thing*: a shared topic, a
+  different item or occasion, or a statement with no fact (a request or small talk) is not an
+  update, while a clearly implied new value ("added another one") is. In a labelled replay,
+  precision went from 0.79 to 0.88 and recall from 0.79 to 0.82, but on a fresh KU run the
+  ordering metric and link counts did not change (DESIGN §23 rev 101).
 - The `[crewai]` extra is now marked `python_version < '3.14'`, matching crewai's own cap. On
   Python 3.14, pip skipped every current crewai and fell back to an old, uncapped release that
   crashes on import (chromadb's pydantic-v1 settings). The CrewAI CI job is pinned to Python 3.12,

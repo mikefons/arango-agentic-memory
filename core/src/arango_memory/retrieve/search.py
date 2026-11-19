@@ -64,6 +64,39 @@ FOR doc IN {SEARCH_VIEW}
             strength: doc.strength, accessed_at: doc.accessed_at, created_at: doc.created_at }}
 """
 
+# FK-1: the same view, matched on the facts Dream State stored on each memory.
+_FACT_BM25_QUERY = f"""
+FOR doc IN {SEARCH_VIEW}
+  SEARCH ANALYZER(doc.facts IN TOKENS(@query, "text_en"), "text_en")
+     AND doc.tenant_id == @tenant_id
+     AND doc.agent_id IN @agent_ids
+  FILTER doc.invalid_at == null
+  SORT BM25(doc) DESC
+  LIMIT @pool
+  RETURN {{ key: doc._key, text: doc.text, score: BM25(doc), agent_id: doc.agent_id,
+            embedding: doc.embedding, type: doc.type, event_time: doc.event_time,
+            strength: doc.strength, accessed_at: doc.accessed_at, created_at: doc.created_at }}
+"""
+
+# FK-1: a memory's score is its best-matching fact embedding. Exact scan of the tenant's memories
+# (no index on the per-fact vectors), so the caller gates it on tenant size.
+_FACT_VECTOR_QUERY = """
+FOR doc IN memories
+  FILTER doc.tenant_id == @tenant_id AND doc.agent_id IN @agent_ids
+     AND doc.invalid_at == null AND doc.fact_embeddings != null
+  LET score = MAX(FOR v IN doc.fact_embeddings RETURN COSINE_SIMILARITY(v, @qvec))
+  SORT score DESC
+  LIMIT @pool
+  RETURN { key: doc._key, text: doc.text, score: score, agent_id: doc.agent_id,
+           embedding: doc.embedding, type: doc.type, event_time: doc.event_time,
+           strength: doc.strength, accessed_at: doc.accessed_at, created_at: doc.created_at }
+"""
+_TENANT_SIZE = """
+RETURN LENGTH(FOR doc IN memories
+  FILTER doc.tenant_id == @tenant_id AND doc.agent_id IN @agent_ids AND doc.invalid_at == null
+  RETURN 1)
+"""
+
 # Force the ArangoSearch view to index pending commits before returning, so a write
 # is immediately visible to BM25 retrieval (MA-1 read-your-writes). arangosearch's
 # `waitForSync` query option triggers the view commit; scoped to the tenant to keep
@@ -195,6 +228,32 @@ FOR key IN @keys
 # Hops followed from a stale hit to the statement that is current now (or as of `as_of`).
 _SUCCESSOR_HOPS = 5
 
+# Neighbour expansion: the turns within @window positions of each hit, in the hit's session,
+# nearest first. A hit stored without a session or a position has none, and a turn at the hit's
+# own position is not a neighbour — callers that never set `turn_index` leave every memory at 0.
+# idx_mem_turn serves the inner lookup.
+_NEIGHBORS = """
+FOR key IN @keys
+  LET hit = DOCUMENT("memories", key)
+  FILTER hit != null AND hit.session_id != null AND hit.turn_index != null
+  LET near = (
+    FOR n IN memories
+      FILTER n.tenant_id == @tenant_id AND n.agent_id == hit.agent_id
+         AND n.session_id == hit.session_id
+         AND n.turn_index >= hit.turn_index - @window
+         AND n.turn_index <= hit.turn_index + @window
+         AND n.turn_index != hit.turn_index
+         AND n.invalid_at == null AND n.type != "working"
+      SORT ABS(n.turn_index - hit.turn_index), n.turn_index
+      LIMIT @cap
+      RETURN { key: n._key, text: n.text, agent_id: n.agent_id, type: n.type,
+               event_time: n.event_time, created_at: n.created_at,
+               offset: n.turn_index - hit.turn_index }
+  )
+  FOR n IN near
+    RETURN MERGE(n, { anchor: key })
+"""
+
 _ENCODER = tiktoken.get_encoding("cl100k_base")
 
 _RRF_K = 60
@@ -241,6 +300,9 @@ class _Candidate:
     superseded_by: str | None = None  # GX-2: the newer memory that updates this one
     valid_to: str | None = None       # GX-2: when it stopped being current
     stale: bool = False               # GX-2: superseded within this query's time view
+    facts: list[str] = field(default_factory=list)  # FK-1: shown to the reranker with the text
+    anchor: str | None = None         # neighbour expansion: the hit this turn sits next to
+    offset: int = 0                   # …and its position relative to that hit
 
 
 def _candidate(row: dict[str, Any]) -> _Candidate:
@@ -342,6 +404,8 @@ def _arm_weight(name: str) -> float:
         "bm25": settings.rrf_bm25_weight,
         "graph": settings.rrf_graph_weight,
         "vector": settings.rrf_vector_weight,
+        "fact_bm25": settings.rrf_fact_weight,
+        "fact_vector": settings.rrf_fact_weight,
     }.get(name, 1.0)
 
 
@@ -413,8 +477,41 @@ def _mmr(
     return selected
 
 
-def _assemble_tiered(hits: list[_Candidate], max_tokens: int) -> tuple[str, int]:
-    """Tiered token-budget assembly with roll-up of unused budget (§9)."""
+def _neighbors(
+    db: StandardDatabase,
+    selected: list[_Candidate],
+    window: int,
+    *,
+    tenant_id: str,
+    as_of: datetime | None,
+) -> list[_Candidate]:
+    """The turns within `window` positions of each selected hit, in its session. Each turn is
+    returned once, tied to its best-ranked hit; a turn that is itself a hit is left out. Ordered
+    best hit first, nearest turn first — the order the token budget is spent in."""
+    rank = {c.key: i for i, c in enumerate(selected)}
+    rows = _run(db, _NEIGHBORS, {"keys": list(rank), "tenant_id": tenant_id, "window": window,
+                                 "cap": 2 * window})
+    rows.sort(key=lambda r: (rank[r["anchor"]], abs(r["offset"]), r["offset"]))
+    out: list[_Candidate] = []
+    seen = set(rank)
+    for row in rows:
+        if row["key"] in seen:
+            continue
+        seen.add(row["key"])
+        cand = _candidate(row)
+        cand.anchor, cand.offset = row["anchor"], row["offset"]
+        cand.signals.add("neighbor")
+        cand.fused_score = selected[rank[cand.anchor]].fused_score
+        out.append(cand)
+    return _as_of_filter(out, as_of) if as_of is not None else out
+
+
+def _assemble_tiered(
+    hits: list[_Candidate], max_tokens: int, neighbors: Sequence[_Candidate] = (),
+) -> tuple[str, int, list[_Candidate]]:
+    """Tiered token-budget assembly with roll-up of unused budget (§9). Returns the context, its
+    token count, and the `neighbors` that fit: they only take budget the hits left, so expansion
+    never displaces a retrieved memory, and each is placed next to its hit in turn order."""
     caps = {tier: int(frac * max_tokens) for tier, frac in _TIER_FRACTIONS.items()}
     tier_used = dict.fromkeys(_TIER_FRACTIONS, 0)
     chosen: list[_Candidate] = []
@@ -442,10 +539,21 @@ def _assemble_tiered(hits: list[_Candidate], max_tokens: int) -> tuple[str, int]
             total += cost
 
     chosen.sort(key=lambda c: -c.fused_score)
+    chosen_keys = {c.key for c in chosen}
+    around: dict[str, list[_Candidate]] = {}
+    for cand in neighbors:
+        cost = _count_tokens(cand.text)
+        if cand.anchor in chosen_keys and total + cost <= max_tokens:
+            around.setdefault(cand.anchor, []).append(cand)
+            total += cost
     # IN-4: prefix the memory's provenance time (a field, not part of the matched text) into the
     # injected line, so the answerer can reason over *when* without the date diluting retrieval.
-    context = "\n".join(_assemble_line(c) for c in chosen)
-    return context, total
+    context = "\n".join(
+        _assemble_line(c)
+        for hit in chosen
+        for c in sorted([hit, *around.get(hit.key, [])], key=lambda c: c.offset)
+    )
+    return context, total, [c for group in around.values() for c in group]
 
 
 def retrieve(
@@ -472,6 +580,8 @@ def retrieve(
     entity_summaries: bool | None = None,
     supersession: bool | None = None,
     as_of: str | None = None,
+    neighbor_turns: int | None = None,
+    fact_keys: bool | None = None,
 ) -> RetrieveResult:
     """Instrumented retrieval (DESIGN.md §18): span + metrics + §15 degradation.
 
@@ -485,7 +595,11 @@ def retrieve(
     Dream State summaries of the entities the hits mention. `supersession=None` uses
     `settings.fact_supersession` (GX-2): rank a stale statement's current successor above it
     and mark it superseded. `as_of` (ISO date/time) restricts the view to memories that
-    existed by then, with supersession judged as of that time. Any failure degrades to an empty
+    existed by then, with supersession judged as of that time. `neighbor_turns=None` uses
+    `settings.retrieve_neighbor_turns`: also inject the turns within that many positions of
+    each hit, in its session, from whatever budget the hits left. `fact_keys=None` uses
+    `settings.retrieve_fact_keys` (FK-1): also match the query against the facts Dream State
+    stored on each memory. Any failure degrades to an empty
     (memory-less) result and a `degraded` event, so a memory fault never breaks the turn.
     """
     if as_of and _event_sort_key(as_of) is None:  # a caller error, not a memory fault
@@ -517,6 +631,8 @@ def retrieve(
                 entity_summaries=entity_summaries,
                 supersession=supersession,
                 as_of=as_of,
+                neighbor_turns=neighbor_turns,
+                fact_keys=fact_keys,
             )
     except Exception as exc:  # noqa: BLE001 — §15: memory failures never break the turn
         metrics.emit("degraded", op="retrieve", reason=type(exc).__name__)
@@ -550,6 +666,7 @@ def _gather_fused(
     dimensions: int,
     decay_binds: dict[str, Any],
     now: str,
+    fact_keys: bool = False,
 ) -> list[_Candidate]:
     """One query's arms (BM25 + vector + graph) → RRF fusion → recency boost.
 
@@ -576,6 +693,20 @@ def _gather_fused(
         )
         ranked_lists.append(vector_rows)
         names.append("vector")
+
+    # FK-1: match the query against the facts stored on each memory.
+    if fact_keys:
+        fact_rows = _run(db, _FACT_BM25_QUERY, {"query": query, **scope})
+        if fact_rows:
+            ranked_lists.append(fact_rows)
+            names.append("fact_bm25")
+        size = cast(int, next(iter(cast(Cursor, db.aql.execute(
+            _TENANT_SIZE, bind_vars={"tenant_id": tenant_id, "agent_ids": agent_ids})))))
+        if query_vec and size <= settings.fact_vector_scan_max:
+            fact_vec_rows = _run(db, _FACT_VECTOR_QUERY, {"qvec": query_vec, **scope})
+            if fact_vec_rows:
+                ranked_lists.append(fact_vec_rows)
+                names.append("fact_vector")
 
     # Graph expansion (§9 stage 4): traverse from the entities of the top hits to
     # surface connected memories that lexical/vector search alone would miss.
@@ -771,6 +902,37 @@ def _head_scores(
     raise ValueError(f"unknown rerank_scoring {scoring!r}")
 
 
+_FACTS_OF = """
+FOR key IN @keys
+  LET doc = DOCUMENT("memories", key)
+  FILTER doc != null AND doc.facts != null
+  RETURN { key: key, facts: doc.facts }
+"""
+
+
+def _attach_facts(db: StandardDatabase, candidates: list[_Candidate]) -> None:
+    """FK-1: load the stored facts of these candidates, so the reranker can judge a turn by what
+    it states and not only by what it is mostly about."""
+    by_key = {c.key: c for c in candidates}
+    if not by_key:
+        return
+    for row in _run(db, _FACTS_OF, {"keys": list(by_key)}):
+        by_key[row["key"]].facts = list(row["facts"])
+
+
+def _rerank_scores(rk: Reranker, query: str, head: list[_Candidate]) -> Sequence[float]:
+    """Cross-encoder scores for `head`; a candidate with facts is read per `fact_keys_rerank`."""
+    mode = settings.fact_keys_rerank
+    if mode == "text" or not any(c.facts for c in head):
+        return rk.score(query, [c.text for c in head])
+    joint = [f"{' '.join(c.facts)}\n{c.text}" if c.facts else c.text for c in head]
+    if mode == "facts":
+        return rk.score(query, joint)
+    plain = rk.score(query, [c.text for c in head])
+    both = rk.score(query, joint)
+    return [max(a, b) for a, b in zip(plain, both, strict=True)]
+
+
 def _rerank(
     candidates: list[_Candidate],
     query: str,
@@ -795,7 +957,7 @@ def _rerank(
         return candidates
     try:
         rk = reranker or get_reranker()
-        scores = rk.score(query, [c.text for c in head])
+        scores = _rerank_scores(rk, query, head)
         if len(scores) != len(head):
             raise ValueError(f"reranker returned {len(scores)} scores for {len(head)} texts")
         final = _head_scores(
@@ -843,6 +1005,8 @@ def _retrieve_impl(
     entity_summaries: bool | None = None,
     supersession: bool | None = None,
     as_of: str | None = None,
+    neighbor_turns: int | None = None,
+    fact_keys: bool | None = None,
 ) -> RetrieveResult:
     """BM25 (+ vector when trained) → RRF → (rerank) → MMR → tiered token-budget assembly.
 
@@ -860,6 +1024,8 @@ def _retrieve_impl(
     # Multi-agent read (MA-2): a 1-element list on the default path keeps the same plan.
     agent_ids = read_agent_ids or [agent_id]
 
+    use_fact_keys = settings.retrieve_fact_keys if fact_keys is None else fact_keys
+
     def gather(q: str, vec: list[float]) -> list[_Candidate]:
         """Run the per-query arm gather with this call's shared scope bound."""
         return _gather_fused(
@@ -874,6 +1040,7 @@ def _retrieve_impl(
             dimensions=emb.dimensions,
             decay_binds=decay_binds,
             now=now,
+            fact_keys=use_fact_keys,
         )
 
     if mode == "multihop":
@@ -921,6 +1088,8 @@ def _retrieve_impl(
     # before MMR. Opt-in via the `rerank` flag or `settings.rerank_enabled`; off the lite
     # default. Degrades to the fused order on any reranker error (handled in `_rerank`).
     if settings.rerank_enabled if rerank is None else rerank:
+        if use_fact_keys:
+            _attach_facts(db, fused[: settings.rerank_top_n])
         fused = _rerank(
             fused, query, reranker=reranker, top_n=settings.rerank_top_n,
             scoring=rerank_scoring or settings.rerank_scoring,
@@ -941,7 +1110,14 @@ def _retrieve_impl(
             db, [c.key for c in selected], tenant_id,
             int(_TIER_FRACTIONS["semantic"] * max_memory_tokens),
         )
-    context, tokens = _assemble_tiered(selected, max_memory_tokens - entity_tokens)
+    window = settings.retrieve_neighbor_turns if neighbor_turns is None else neighbor_turns
+    nearby = (
+        _neighbors(db, selected, window, tenant_id=tenant_id, as_of=as_of_key)
+        if window > 0 else []
+    )
+    context, tokens, nearby = _assemble_tiered(
+        selected, max_memory_tokens - entity_tokens, nearby
+    )
     if entities:
         context = f"{context}\n\n{entities}" if context else entities
         tokens += entity_tokens
@@ -953,7 +1129,7 @@ def _retrieve_impl(
     hits = [
         MemoryHit(text=c.text, score=round(c.fused_score, 6),
                   source="+".join(sorted(c.signals)), agent_id=c.agent_id, key=c.key)
-        for c in selected
+        for c in [*selected, *nearby]  # injected neighbours follow the k hits
     ]
     return RetrieveResult(context=context, hits=hits, tokens_injected=tokens)
 
@@ -969,6 +1145,7 @@ def diagnose_pool(
     n_lists: int | None = None,
     graph_hops: int | None = None,
     embedder: Embedder | None = None,
+    fact_keys: bool | None = None,
 ) -> list[MemoryHit]:
     """The full ranked fused candidate pool (BM25 ∪ vector ∪ graph → RRF → recency),
     *before* MMR and token-budget truncation — the lite single-shot pool `retrieve` picks
@@ -993,6 +1170,7 @@ def diagnose_pool(
         dimensions=emb.dimensions,
         decay_binds=decay_binds,
         now=now,
+        fact_keys=settings.retrieve_fact_keys if fact_keys is None else fact_keys,
     )
     return [
         MemoryHit(text=c.text, score=round(c.fused_score, 6),

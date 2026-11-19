@@ -57,6 +57,8 @@ Status: ✅ shipped · 🔄 built, merge pending · ✖ closed (won't do). Unmar
 | 23 | GX-1 | Entity summaries in `/v1/retrieve` (Graphiti's ENTITIES section) 🔄 — built in #266, off by default; **benchmark deferred** | S | — |
 | 24 | GX-2 | Memory-level fact supersession + `as_of` retrieval (the scoped newness signal RQ-3 called for) 🔄 — built, off by default | L | — |
 | 25 | GX-3 | Fact retrieval arm over typed-relation statements (needs an LLM/GLiREL extractor) | L | GX-2 |
+| 26 | LM-1 | Neighbour expansion: inject the turns next to each hit (`opts.neighbor_turns`) 🔄 — built, off by default; answer accuracy not yet measured | S | — |
+| 27 | FK-1 | Fact-augmented keys: Dream-extracted facts per memory, matched by two extra retrieval arms 🔄 — built, off by default; measured, no accuracy gain | M | — |
 
 Recommended sequence: **MA-1 → MA-2 → MA-3 → MA-4 → MA-5 → MA-6**, with MA-7/MA-8
 schedulable any time (no dependencies on the others). MA-1…MA-8 are **shipped**. **RQ-1**
@@ -1441,6 +1443,16 @@ arango-memory-longmemeval lme.json --rerank --extract --dream \
   don't know" with the relevant memory already in context. That is an answer-prompt issue entity
   summaries can't fix, and worth its own look.
 
+**Run (2026-10-31, DESIGN §23 rev 103):** 90 questions on Haiku 5.5, about $4. `replace+entities`
+scored **0.700** against 0.644 (+7/−2, p = 0.18), with gains in four types and no single-session
+losses. That is not significant, so the default stays off for now. A run's answer-to-answer
+scatter is about ±3–4 questions. Next: repeat answer passes with the new `--answer-only` flag on
+the same ingest to measure that noise floor, then decide.
+
+**Held-out re-run (2026-11-11, DESIGN §23 rev 104):** the +7/−2 did not reproduce. On 91 fresh
+questions under the fixed harness, `replace+entities` averaged 0.861 against 0.875 over three
+answer passes (+9/−13 pooled), inside the run-to-run scatter. The default stays off.
+
 ### GX-2 — Memory-level fact supersession + `as_of` retrieval  🔄 (built; off by default)
 
 **Decision (2026-10-04):** the unit is the *memory*, not an extracted fact. Our typed
@@ -1454,6 +1466,76 @@ accuracy run waits with the GX-1 benchmark.
 **0.659** (+2/−0 of 44, p = 0.50), with recall unchanged, for about $2.50. The limit is detection: 9 of
 16 missed stale/new pairs share no spaCy entity. Follow-up: a similarity-only candidate gate.
 
+**Similarity gate (2026-10-09, DESIGN §23 rev 99):** `SUPERSESSION_GATE=similarity` is built. On Haiku
+5.5 it reached only 0.659 (entity gate: 0.636), from a baseline of 0.614, although it offered twice
+the pairs. The cause is a reply-format bug: with a bare-number reply format and a 32-token cap, Haiku 5.5
+explains in prose and runs out of tokens before the number. An explain-then-`ANSWER:`-line prompt
+links 13 of 15 missed pairs in a probe. Next: adopt it with strict parsing, re-run both gates, and
+check the links for false positives.
+
+**Explain-then-answer adopted (2026-10-30):** the verdict prompt now ends with a strictly parsed
+`ANSWER:` line (256-token cap), and unparseable replies link nothing.
+
+**Re-run (2026-10-30, DESIGN §23 rev 100):** newest-above-stale went from 0.614 to
+- **0.773** with the entity gate (+7/−0 of 44, p = 0.016);
+- **0.864** with the similarity gate (+11/−0 of 44, p = 0.001).
+
+Recall held in both runs. A hand-judged sample of links puts precision at about 12/14 for the
+entity gate and about 6/15 for the similarity gate (re-judged on full text in rev 101); the false
+links share a topic but not a fact.
+The default stays off. Next:
+- a "same attribute, changed value" verdict;
+- a full-mix paired accuracy run (with GX-1) to price false links on the other question types.
+
+**Same-fact verdict (2026-10-30, DESIGN §23 rev 101):** the prompt now requires the same fact
+about the same thing, a stated or clearly implied new value, and nothing for a shared topic alone.
+The cap rose from 256 to 640 tokens, because with 4–5 candidates the 256 cap cut off about one
+reply in ten. In a labelled in-context replay, precision went from 0.79 to 0.88 and recall from
+0.79 to 0.82. On the KU re-run nothing measurable changed: 0.773 for the entity gate and 0.864
+for similarity, the same as before. Similarity-gate precision is still about 4 in 13, so prompt
+wording is exhausted as a lever. Next options are structural: a higher similarity floor, fewer
+candidates, or requiring a shared entity or value. The entity gate (about 0.8 precision) remains
+the default candidate.
+
+**Anchored gate (2026-10-31, DESIGN §23 rev 102):** `SUPERSESSION_GATE=anchored` keeps similarity
+candidates only when they share an entity or both contain a number. Applied to the existing links,
+it keeps 50 of 60 gold links and 125 of 251 others; hand-labelled precision rises from about 0.36
+to about 0.57. A cosine floor cuts gold and false links alike.
+
+KU run: newest-above-stale went from 0.614 to **0.818** (+9/−0 of 44, p = 0.004), with 99 links
+and sampled precision of 12/15. For comparison:
+- entity gate: 0.773, 71 links, 12/15;
+- similarity gate: 0.864, 155 links, 4/13.
+
+That makes the anchored gate the candidate if supersession is turned on. Next: the full-mix paired
+accuracy run, with GX-1.
+
+**Full-mix run (2026-10-31, DESIGN §23 rev 103):** with the anchored gate, `replace+supersession`
+scored 0.656 against 0.644 (+2/−1). Knowledge-update went from 0.800 to **0.933**. The one loss
+was a multi-session question, and it came from answerer arithmetic over identical context, not a
+false link. The default stays off (see the held-out validation below).
+
+**Harness assessment (2026-11-11, DESIGN §23 rev 104):** the rev 103 numbers were held down by
+the answer step, not retrieval. With a LongMemEval answer prompt, the official per-type judge and
+a top-20, 8,000-token context, the same ingest scores 0.844 (0.644 before).
+
+**Held-out validation (2026-11-11, same section):** on 91 fresh questions, 13 of them abstention
+questions, the fixed harness scores 0.875 (mean of three answer passes) against 0.747 for the old
+one, and declines 12 of 13 unanswerable questions. Under it, neither GX-1 nor GX-2 shows an
+answer gain: every variant is within the run-to-run scatter of `replace` (the same variant
+re-answered changes on 2–11 questions). Supersession still orders knowledge updates (7 → 10 of
+13), but knowledge-update answers are already 13 of 13 without it. Both defaults stay off.
+
+The remaining gap is multi-session questions (about 0.65). On the held-out sample about half of
+their misses lack evidence and half are counting errors over complete evidence. Candidate items,
+in order:
+- round and neighbour expansion — built as LM-1 below; it helps single-session questions and
+  not multi-session ones;
+- fact-augmented keys;
+- graph enumeration for counting questions — tried as a reader change, no gain (rev 107);
+- event-date resolution;
+- a Dream-maintained observation log.
+
 Original scope note:
 
 Graphiti stores facts with valid/invalid times, and a contradicting fact closes the old one.
@@ -1463,6 +1545,52 @@ mechanism. Today supersession is entity-level, decided in Dream State
 (`lifecycle/conflict.py`). Scope: typed relations as facts with valid-from/valid-to;
 same-fact contradiction detection in Dream State; newest-first only among conflicting facts;
 an `as_of` retrieve filter. Measure with the RQ-3 ordering metric plus accuracy.
+
+### LM-1 — Neighbour expansion  🔄 (built; off by default)
+
+From the LongMemEval assessment (DESIGN §23 rev 104), not from Graphiti. Retrieval ranks single
+turns; the answer to a retrieved question is often in the next turn.
+
+**Built.** `RETRIEVE_NEIGHBOR_TURNS` / `opts.neighbor_turns` (default 0) injects the turns
+within that many positions of each hit, in the hit's session, from the token budget the hits
+left. Memories now store `turn_index`; the feature needs it with a `session_id`. The harness
+stores each chat as its own session and has a `+neighbors` variant.
+
+**Measured without an LLM (DESIGN §23 rev 105).** With ±1 turn, questions with all evidence in
+context go from 70 to 73 of 79 (held-out) and 75 to 79 of 90 (original), for about two thirds
+more context. Multi-session barely moves (11 → 11 of 14, 8 → 9 of 15). On the held-out sample
+none of the ten stable misses gains evidence.
+
+**Open.**
+- Answer accuracy: three `--answer-only` passes of `replace,replace+neighbors` on both ingests,
+  about $1.20. This is a user spend decision.
+- Whether to turn it on by default depends on that run and on the extra context being worth it.
+- Whole-session expansion reaches more multi-session evidence but needs about 18,000 tokens.
+
+### FK-1 — Fact-augmented keys  🔄 (built; off by default)
+
+From the LongMemEval assessment (DESIGN §23 rev 104), after LM-1. A turn is indexed under what it
+is mostly about, so a fact it states in passing ("by the way, I baked a baguette last Saturday",
+inside a request for bread tips) ranks far below the topic. A free diagnostic over both samples
+(DESIGN §23 rev 106) found 17 of the 31 evidence turns missing from the top-20 context at pool
+rank 50–150; widening the reranker window does not recover them.
+
+**Built.** `FACT_KEYS=true` makes Dream State extract each memory's facts (one LLM call per
+memory; `FACT_KEYS_PREFIX=user:` mines only the user's turns) and store them with one embedding
+per fact. `RETRIEVE_FACT_KEYS` / `opts.fact_keys` adds a BM25 arm and a best-fact-cosine arm; the
+memory is still what is returned. Harness variant `+facts`.
+
+**Measured (DESIGN §23 rev 106).** On 91 held-out questions, three answer passes: `replace` 0.879
+against `replace+facts` 0.872 at fact-arm weight 0.3 (0.846 at 1.0, where two single-session-
+assistant questions lost their evidence). Evidence recall@k 0.941 → 0.951, multi-session accuracy
+unchanged; no pass is significant. Extraction costs about $8–12 per 91 questions. Stays off.
+
+**Tried, not adopted (DESIGN §23 rev 107).** Using the stored facts for counting questions: the
+remaining multi-session misses are reading errors over complete evidence, and a structured
+counting prompt gained on the development sample but not on the validation sample. Needs several
+hundred multi-session questions to settle, so it is closed as won't-do.
+
+**Open.** An index for the fact-vector scan if the arms are ever enabled at scale.
 
 ### GX-3 — Fact retrieval arm
 

@@ -74,6 +74,15 @@ corpus, raise it (e.g. 500) **with rerank** to recover the tail-reachable golds 
 (§23), at more per-query DB work; also settable per request via `opts.candidate_pool`),
 `RETRIEVE_ENTITY_SUMMARIES` (`false` — append Dream State entity summaries to the retrieved
 context, within `MAX_MEMORY_TOKENS`; also `opts.entity_summaries`),
+`RETRIEVE_NEIGHBOR_TURNS` (`0` — also inject the turns within this many positions of each hit,
+in the hit's session, from whatever token budget the hits left; needs memories stored with a
+`session_id` and `turn_index`; also `opts.neighbor_turns`),
+`FACT_KEYS` (`false` — Dream State extracts the facts each memory carries, one LLM call per
+memory, plus one embedding per fact; `FACT_KEYS_PREFIX` limits it to memories whose text starts
+with it, e.g. `user:`; `FACT_KEYS_MAX_PER_MEMORY` 5; `FACT_KEYS_CONCURRENCY` 4 parallel calls),
+`RETRIEVE_FACT_KEYS` (`false` — also match the query against those facts; also `opts.fact_keys`;
+`FACT_VECTOR_SCAN_MAX` 20000 skips the exact fact-vector scan on larger tenants;
+`RRF_FACT_WEIGHT` 0.3; `FACT_KEYS_RERANK` `facts`|`text`|`max` — what the reranker reads),
 `GRAPH_MAX_NEIGHBORS` (200 — SC-1c: caps the graph arm's `relates_to` fan-out so a dense
 single-tenant graph can't blow up retrieval; the arm is a down-weighted expander so a bounded
 neighbourhood costs little), `GRAPH_MAX_MEMORIES_PER_ENTITY` (50 — SC-1d: caps the memories
@@ -127,7 +136,11 @@ lifecycle: `DECAY_LAMBDA` (0.02),
 `FACT_SUPERSESSION` (`false` — GX-2: Dream State links a memory to the older statements it updates,
 one LLM call per new memory with candidates, and retrieval ranks current statements above stale
 ones; also `opts.supersession`), `SUPERSESSION_MIN_SIMILARITY` (0.5 — embedding cosine an older
-statement needs to be compared), `SUPERSESSION_MAX_CANDIDATES` (3),
+statement needs to be compared), `SUPERSESSION_MAX_CANDIDATES` (3), `SUPERSESSION_GATE` (`entity` —
+older statements must share an entity; `similarity` compares the nearest ones by embedding alone,
+an exact scan of the agent's memories per new memory, and more memories find candidates, so
+expect more LLM comparisons per Dream pass; `anchored` keeps only the similarity candidates that
+share an entity or a number with the new memory),
 `CORROBORATION_BASE` (0.5), `ONTOLOGY_EVOLUTION` (`false`),
 `ONTOLOGY_MIN_SUPPORT` (3); working memory: `WORKING_SESSION_TTL_SECONDS` (3600),
 `WORKING_CAPACITY` (7), `TOPIC_SHIFT_THRESHOLD` (0.7), `TOPIC_EWA_ALPHA` (0.5),
@@ -196,6 +209,9 @@ Verification is **fail-closed** (a JWKS-fetch error is a `401`, never an open pa
 **Revocation is by expiry only** — there's no server-side denylist, so configure the IdP
 for **short-lived tokens** (revocation latency = token TTL). **Rotation** is the IdP's
 job (signing-key rotation is picked up via JWKS `kid`); you don't edit anything here.
+A token with an unknown `kid` forces at most one JWKS refetch per 30 seconds (and a fetch times
+out after 5), so unauthenticated tokens with random `kid`s can't keep the IdP busy. A freshly
+rotated key may therefore wait up to 30 seconds before tokens signed with it verify.
 
 > **Secrets:** never commit keys. Use the host's environment or a gitignored
 > `.env`. The repo's gitleaks hook + CI secret scan guard against leaks.
@@ -376,8 +392,14 @@ committed). Needs real embeddings **and** a real generator (the answerer + the L
    questions evenly across all six types for a representative first pass (it prints the type
    distribution):
    `python -m arango_memory.eval.longmemeval_convert longmemeval_s.json lme.json --stratified --limit 90`
+   Abstention questions (`_abs`) are sampled as their own stratum, and evidence labels are
+   carried by default (`--no-evidence` drops them). `--exclude lme.json` skips an earlier
+   sample's questions, for a held-out set.
 2. Run (compose with `--rerank` / `MODE=multihop` as for the other benchmarks):
    `make longmemeval LME_DATASET=lme.json MODE=lite RERANK=--rerank`
+   The harness retrieves 20 memories into an 8,000-token context (`--k`, `--max-memory-tokens`;
+   `LME_K` in the Makefile). It answers with a LongMemEval prompt and grades with the official
+   per-type rules (DESIGN §23 rev 104).
 
 **Ingestion is batched (IN-5).** Each history is ingested in **one `store_many` call** — bulk
 record (IN-1) plus, with `--extract`, the **batched graph pass** (IN-2). The old per-turn
@@ -386,7 +408,8 @@ affordable** — pass it to run with the **graph ON**, which measures the *produ
 supersession for `knowledge-update`, cross-session links for `multi-session`), not just the
 BM25+vector substrate. Session dates ride as an **`event_time` field** surfaced in the retrieved
 context (IN-4), never folded into the matched text (an earlier text-prefix version lifted
-`temporal-reasoning` but cost `single-session-user` recall). `--limit`/`--stratified` still
+`temporal-reasoning` but cost `single-session-user` recall). Each chat is stored as its own session
+with a turn position, so a `+neighbors` variant can inject the turn before and after each hit. `--limit`/`--stratified` still
 recommended for a first pass (each question still embeds its whole history); keep
 `EXTRACTION_PROVIDER=fake` + `MEMORY_MODE=lite` unless you specifically want LLM extraction.
 
@@ -399,7 +422,7 @@ read it alongside the LoCoMo/MuSiQue retrieval-recall numbers (which isolate the
 **Comparing rerank scorings (RQ-3).** `--rerank-scoring replace,rrf,event_time:0.2` evaluates
 each variant against **one** ingest per question (read-only retrieval probes, so variants see
 identical state) and adds an exact **McNemar** paired test of each variant against the first.
-Convert with **`--evidence`** to carry the `has_answer` turns + session dates; the report then
+The converter carries the `has_answer` turns + session dates by default; the report then
 adds **evidence recall@k** and, for `knowledge-update`, **newest-above-stale** — is the updated
 statement of a fact ranked above the stale one — scored deterministically, no LLM judge.
 **`--retrieval-only`** skips the answerer + judge (no LLM spend) and reports only those evidence
@@ -407,6 +430,9 @@ metrics — cheap enough to sweep `event_time` weights. `--types` / `--offset` /
 disjoint dev/test splits, e.g. tune on `--types knowledge-update --limit 26` and report on
 `--types knowledge-update --offset 26`. Don't re-run a variant into an existing `ARANGO_DB` with
 `--extract`: `store_many` would re-count graph beliefs — use a fresh DB per ingest.
+To repeat only the answer step, use **`--answer-only`** with the same `ARANGO_DB`. It skips ingest
+and Dream and reuses what the earlier run stored, so repeated passes measure answerer and judge
+noise cheaply. Give each pass its own `--checkpoint`.
 For long runs pass **`--checkpoint scores.jsonl`**: each question's scores are appended as it
 finishes, and **`--resume`** (same `ARANGO_DB`) skips scored questions and purges + redoes any
 interrupted one — a DB outage an hour in costs one question, not the run. Keep checkpoints out

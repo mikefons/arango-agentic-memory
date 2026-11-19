@@ -89,6 +89,6 @@ def test_assemble_tiered_respects_token_budget() -> None:
         _Candidate(f"k{i}", "word " * 50, [], "episodic", fused_score=1.0 - i * 0.01)
         for i in range(20)
     ]
-    context, tokens = _assemble_tiered(cands, max_tokens=60)
+    context, tokens, _ = _assemble_tiered(cands, max_tokens=60)
     assert 0 < tokens <= 60
     assert context.startswith("- ")
