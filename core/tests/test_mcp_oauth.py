@@ -7,7 +7,9 @@ delegate key — never the caller's token (MCP spec: no token passthrough).
 
 from __future__ import annotations
 
+import asyncio
 import json
+import logging
 import socket
 import threading
 import time
@@ -26,7 +28,7 @@ from mcp import ClientSession
 from mcp.client.streamable_http import streamable_http_client
 
 from arango_memory.config import ApiKeyEntry, settings
-from arango_memory.mcp.oauth import OAuthConfig
+from arango_memory.mcp.oauth import JwtTokenVerifier, OAuthConfig
 from arango_memory.mcp.server import build_http_app, build_server, main
 
 _KEY = rsa.generate_private_key(public_exponent=65537, key_size=2048)
@@ -40,15 +42,17 @@ def _free_port() -> int:
         return int(s.getsockname()[1])
 
 
-@pytest.fixture(scope="module")
-def issuer() -> Iterator[str]:
-    """A minimal OIDC issuer: discovery document + JWKS."""
+def _run_idp(doc_issuer: str | None = None) -> Iterator[str]:
+    """A minimal OIDC issuer: discovery document + JWKS. `doc_issuer` overrides the `issuer`
+    its discovery document claims (default: its own URL, as a correct IdP reports)."""
     port = _free_port()
     base = f"http://127.0.0.1:{port}"
     jwk = json.loads(jwt.algorithms.RSAAlgorithm.to_jwk(_KEY.public_key()))
     jwk.update({"kid": _KID, "use": "sig", "alg": "RS256"})
     docs = {
-        "/.well-known/openid-configuration": {"issuer": base, "jwks_uri": f"{base}/jwks"},
+        "/.well-known/openid-configuration": {
+            "issuer": doc_issuer or base, "jwks_uri": f"{base}/jwks",
+        },
         "/jwks": {"keys": [jwk]},
     }
 
@@ -67,6 +71,17 @@ def issuer() -> Iterator[str]:
     threading.Thread(target=httpd.serve_forever, daemon=True).start()
     yield base
     httpd.shutdown()
+
+
+@pytest.fixture(scope="module")
+def issuer() -> Iterator[str]:
+    yield from _run_idp()
+
+
+@pytest.fixture(scope="module")
+def lying_issuer() -> Iterator[str]:
+    """An IdP whose discovery document names a different issuer than the URL it is served from."""
+    yield from _run_idp(doc_issuer="https://elsewhere.example")
 
 
 def _token(issuer: str, aud: str, *, key: rsa.RSAPrivateKey = _KEY, **claims: Any) -> str:
@@ -251,3 +266,42 @@ async def test_role_claim_drives_core_scope_while_oauth_scope_gates_access(
     # A role without the OAuth scope is still refused at the door.
     no_scope = _token(issuer, url, scope="profile", memory_access=["memory-writer"])
     assert _rpc(url, no_scope).status_code == 403
+
+
+def test_discovery_issuer_must_match_the_configured_issuer(
+    issuer: str, lying_issuer: str
+) -> None:
+    # OIDC Discovery §4.3. The token is correctly signed and carries the configured `iss`;
+    # only the discovery document disagrees about who the issuer is.
+    def verify(base: str) -> Any:
+        verifier = JwtTokenVerifier(
+            OAuthConfig(issuer=base, resource_url="https://mcp.test/mcp", delegate_key="d")
+        )
+        return asyncio.run(verifier.verify_token(_token(base, "https://mcp.test/mcp")))
+
+    records: list[str] = []
+
+    class _Capture(logging.Handler):  # the app's logging setup bypasses caplog's root handler
+        def emit(self, record: logging.LogRecord) -> None:
+            records.append(record.getMessage())
+
+    log = logging.getLogger("arango_memory.mcp.oauth")
+    handler = _Capture(level=logging.WARNING)
+    log.addHandler(handler)
+    try:
+        assert verify(issuer) is not None  # a correct IdP still verifies
+        assert verify(lying_issuer) is None
+    finally:
+        log.removeHandler(handler)
+    assert any("does not match the configured issuer" in m for m in records)
+
+
+def test_jwks_client_uses_the_shared_refresh_cooldown(issuer: str) -> None:
+    from arango_memory.security import jwt_auth
+
+    verifier = JwtTokenVerifier(
+        OAuthConfig(issuer=issuer, resource_url="https://mcp.test/mcp", delegate_key="d")
+    )
+    client = verifier._jwks_client()
+    assert client.cooldown_duration == jwt_auth._JWKS_REFRESH_COOLDOWN_SECONDS > 0
+    assert client.timeout == jwt_auth._JWKS_FETCH_TIMEOUT_SECONDS

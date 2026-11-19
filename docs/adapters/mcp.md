@@ -117,6 +117,10 @@ URL in `aud`**; dynamic client registration (or pre-registered clients) for MCP 
 ideally write access as a *user* entitlement (a role mapped to a claim) rather than a scope any
 client can request.
 
+The server rejects every token if the discovery document's `issuer` differs from the issuer you
+configured (OIDC Discovery §4.3), so configure the issuer exactly as the IdP reports it, including
+any trailing slash. A token with an unknown `kid` forces at most one JWKS refetch per 30 seconds.
+
 **Keycloak reference setup** (verified end to end, including dynamic registration and PKCE login):
 ```bash
 KEYCLOAK_ADMIN_PASSWORD=… python core/scripts/keycloak_mcp_realm.py \

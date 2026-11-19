@@ -57,6 +57,8 @@ are versioned together and released from this repository.
   verified tenant, scope and agents. A Keycloak reference setup (`core/scripts/keycloak_mcp_realm.py`)
   was verified end to end: dynamic client registration, PKCE login, role-based write access, tenant
   enforcement. `core/scripts/mcp_oauth_e2e.py` reproduces it.
+  The server checks that the discovery document's `issuer` equals the configured issuer, and
+  limits JWKS refetches for unknown `kid`s the same way the core does.
 - **Core delegate keys.** An `API_KEYS` entry with `"delegate": true` acts on behalf of a caller it
   asserts in `X-On-Behalf-Of-Tenant` / `-Scope` / `-Agents`, capped by the key's tenant (or `"*"`),
   scope and agents. A delegate that asserts nothing, or a non-delegate credential sending those

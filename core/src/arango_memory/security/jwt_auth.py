@@ -42,15 +42,21 @@ def _jwks_uri() -> str:
     return f"{settings.oidc_issuer.rstrip('/')}/.well-known/jwks.json"
 
 
+def new_jwks_client(uri: str) -> jwt.PyJWKClient:
+    """A JWKS client with the unknown-`kid` refetch cooldown and fetch timeout applied. Every
+    verifier of IdP tokens (the core and the MCP server) builds its client through this."""
+    return jwt.PyJWKClient(
+        uri,
+        cooldown_duration=_JWKS_REFRESH_COOLDOWN_SECONDS,
+        timeout=_JWKS_FETCH_TIMEOUT_SECONDS,
+    )
+
+
 def _jwks_client() -> jwt.PyJWKClient:
     uri = _jwks_uri()
     client = _jwks_clients.get(uri)
     if client is None:
-        client = jwt.PyJWKClient(
-            uri,
-            cooldown_duration=_JWKS_REFRESH_COOLDOWN_SECONDS,
-            timeout=_JWKS_FETCH_TIMEOUT_SECONDS,
-        )
+        client = new_jwks_client(uri)
         _jwks_clients[uri] = client
     return client
 

@@ -22,7 +22,7 @@ import anyio
 import jwt
 from mcp.server.auth.provider import AccessToken
 
-from ..security.jwt_auth import claim_tokens, scope_from_claim
+from ..security.jwt_auth import claim_tokens, new_jwks_client, scope_from_claim
 
 logger = logging.getLogger(__name__)
 
@@ -94,8 +94,16 @@ class JwtTokenVerifier:
             if uri is None:
                 discovery = f"{self.config.issuer.rstrip('/')}/.well-known/openid-configuration"
                 with urllib.request.urlopen(discovery, timeout=10) as res:  # noqa: S310 — https IdP
-                    uri = str(json.load(res)["jwks_uri"])
-            self._jwks = jwt.PyJWKClient(uri)
+                    doc = json.load(res)
+                # OIDC Discovery §4.3: the document's issuer must equal the issuer it was
+                # fetched for, or whoever answers at that URL could point us at their own keys.
+                if doc.get("issuer") != self.config.issuer:
+                    raise ValueError(
+                        f"discovery issuer {doc.get('issuer')!r} does not match the configured "
+                        f"issuer {self.config.issuer!r}"
+                    )
+                uri = str(doc["jwks_uri"])
+            self._jwks = new_jwks_client(uri)
         return self._jwks
 
     def _decode(self, token: str) -> dict[str, Any]:
