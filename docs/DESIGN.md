@@ -1,7 +1,7 @@
 # ArangoDB Agentic Memory System — Design Specification
 
 > **Status:** ✅ **v1 build sequence complete (Steps 0–7).** v2: all §21 adapters shipped (MCP, LangChain/LangGraph, CrewAI) + full §19 entity API + **Step 3e heavy extraction tier done**, hardened into a deployable service. Authoritative reference.
-> **Last updated:** 2026-08-14 (rev 90 — HX-1c attribution: split the +0.111 → graph **+0.089**, reranker **+0.022** (substrate 0.411 → +rerank 0.433 → product 0.522); the entity graph is the dominant lever; §23)
+> **Last updated:** 2026-08-14 (rev 90 — HX-1c attribution: split the +0.111 → graph **+0.089**, reranker **+0.022** (substrate 0.411 → +rerank 0.433 → product 0.522); the August attribution was not reproduced in rev 108; §23)
 >
 > The **rev-by-rev build log** lives in [`HISTORY.md`](HISTORY.md); user-visible changes are in
 > [`CHANGELOG.md`](../CHANGELOG.md); the doc map is [`docs/README.md`](README.md). This file is
@@ -1110,6 +1110,10 @@ graph) — splits the +0.111:
 | **+ reranker only** — graph OFF, real reranker | **0.433** | reranker: **+0.022** |
 | **+ reranker + graph** — the product | **0.522** | graph: **+0.089** |
 
+> **Update (rev 108):** this attribution did not reproduce on the held-out sets under the current
+> pipeline; the graph arm no longer changes retrieved evidence. See "Graph-arm ablation (rev 108)"
+> below.
+
 **The entity graph is the dominant lever: ~80% of the +0.111 gain (+0.089) is the graph; ~20% (+0.022)
 is the reranker.** The project's differentiator — the graph + supersession — does the heavy lifting, not
 an off-the-shelf cross-encoder. (Per-type numbers at n=15 are noisy — the non-deterministic answerer/judge
@@ -1778,6 +1782,44 @@ answering model's reasoning over complete evidence, which this project does not 
 measurable test needs several hundred multi-session questions. Counting over facts stays unbuilt;
 if it is ever built, make it a user-facing retrieval option (deduplicated, dated facts per
 entity), not a benchmark patch. Scripts and results: `core/bench_runs/aggregate/`.
+
+**Graph-arm ablation (rev 108, 2026-11-19) — the HX-1c attribution is not reproduced.** HX-1c
+(above) credited the entity graph with +0.089 of the +0.111 product gain. Re-measured on the two
+held-out sets with the current pipeline and the rev 104 harness, retrieval is identical with the
+graph arm off.
+
+Method: answer-free retrieval through the real harness (`--answer-only --retrieval-only`, k=20,
+8000-token budget, `replace` scoring). Graph off means the arm's seed step returns nothing, so no
+graph row joins the fused pool; the harness's paired-variant mechanism runs both settings on the
+same stored state. `RRF_GRAPH_WEIGHT=0` is not an off switch: the arm still runs and its rows
+still enter the pool at weight zero. No LLM calls.
+
+| set | questions with evidence | evidence recall@20, graph on | graph off | questions that differ |
+|---|---|---|---|---|
+| bench_fresh | 79 | 0.941 | 0.941 | 0 |
+| bench_gx1 | 90 | 0.938 | 0.938 | 0 |
+
+The knowledge-update ordering metric (newest above stale) is identical too. On a six-question
+spot check the graph arm changed 0–1 of the 20 hits per question; evidence recall did not
+change on any question of either set. At the default weight of 0.1 it only reorders the tail.
+
+- **What this shows.** On held-out LongMemEval, the graph arm no longer changes which evidence
+  reaches the answerer. The paid answer passes were not run: the context differs by at most one
+  non-evidence turn, so any accuracy difference would be answerer noise.
+- **Why it may have differed in August (hypothesis, not tested).** HX-1b/1c ran before the
+  `n_probe` fix (rev 92, every trained tenant was under-probing the vector arm by about 30% recall),
+  at k=10, with the old answer prompt and judge. A graph arm can rescue evidence a weak vector arm
+  misses and add nothing once the vector arm is fixed. The August "graph OFF" run also skipped
+  extraction entirely, so it removed more than the arm.
+- **What it does not show.** Open-corpus and multi-hop sets (MuSiQue, LoCoMo), where traversal
+  could matter; the Haiku-extracted graph; Dream-time supersession and entity summaries, which sit
+  on top of extraction; and answer accuracy with no extraction at all under the current harness.
+  Single LongMemEval tenants hold about 500 turns, the setting where a graph adds least.
+
+Conclusion: treat "the entity graph is the dominant lever" as a historical, unreproduced
+statement, not a current result. The graph stays in the product for entity resolution, supersession
+and the entity API; its value as a retrieval arm is unproven until a multi-hop set shows it.
+Scripts and results: `core/bench_runs/graphoff/`.
 
 ### Recall vs corpus size — the fusion-holds curve (HX-2)
 

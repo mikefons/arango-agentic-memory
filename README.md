@@ -48,7 +48,7 @@ HTTP surface: `/health`, **`/docs`** (OpenAPI), `/v1/store`, `/v1/retrieve`, `/v
 | fusion substrate (BM25 + vector, graph OFF) | 0.411 | 0.067 |
 | **full product** (+ entity graph + cross-encoder reranker) | **0.522** | **0.267** |
 
-The entity graph + supersession + reranker lift accuracy **+0.111 (+27% rel)**, every question-type improved, none regressed. An isolation run attributes the gain: **the entity graph is the dominant lever (+0.089, ~80%)**, the cross-encoder reranker a smaller +0.022 — the graph, this project's differentiator, does the heavy lifting. Details, per-type table, and caveats in [DESIGN §23](docs/DESIGN.md). Retrieval-recall benchmarks (LoCoMo / MuSiQue) are the companion metric that isolates the memory layer.
+The entity graph + supersession + reranker lift accuracy **+0.111 (+27% rel)**, every question-type improved, none regressed. An August isolation run split the gain into the entity graph (+0.089) and the cross-encoder reranker (+0.022). A later check did not reproduce the graph's share: on two held-out sets the graph arm no longer changes which evidence is retrieved, so treat that split as historical. Details, per-type table, and caveats in [DESIGN §23](docs/DESIGN.md) (rev 108). Retrieval-recall benchmarks (LoCoMo / MuSiQue) are the companion metric that isolates the memory layer.
 
 ## Quick start (local dev)
 
