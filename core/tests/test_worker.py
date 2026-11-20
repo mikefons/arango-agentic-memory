@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import time
+
 from arango.database import StandardDatabase
 from pytest import MonkeyPatch
 
@@ -180,4 +182,60 @@ def test_batch_size_one_never_calls_claim_many(db: StandardDatabase) -> None:
     queue = Spy()
     _burst(queue, "t_one_only", "a", 2)
     assert WriteWorker(queue, db, backoff_base=0.0, batch_size=1).drain() == 2
+
+
+def _wait_until(predicate, timeout: float = 8.0) -> bool:  # type: ignore[no-untyped-def]
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if predicate():
+            return True
+        time.sleep(0.05)
+    return False
+
+
+def test_worker_thread_survives_a_queue_error_and_keeps_draining(db: StandardDatabase) -> None:
+    class FlakyClaim(InProcessQueue):
+        failed = False
+
+        def claim_many(self, limit: int) -> list:  # type: ignore[type-arg, override]
+            if not self.failed:
+                self.failed = True
+                raise RuntimeError("transient DB error while claiming")
+            return super().claim_many(limit)
+
+    queue = FlakyClaim()
+    worker = WriteWorker(queue, db, backoff_base=0.0, batch_size=8)
+    worker.start()
+    try:
+        _burst(queue, "t_survive", "a", 3)
+        assert _wait_until(lambda: queue.pending_count("t_survive") == 0)
+        assert worker.is_alive()  # the error did not kill the thread
+        assert db.collection("memories").count() == 3
+    finally:
+        worker.stop()
+    assert not worker.is_alive()
+
+
+def test_a_failed_ack_releases_the_batch_and_it_is_committed_again(db: StandardDatabase) -> None:
+    class FlakyAck(InProcessQueue):
+        failed = False
+
+        def ack_many(self, claims):  # type: ignore[no-untyped-def, override]
+            if not self.failed:
+                self.failed = True
+                raise RuntimeError("transient DB error while acking")
+            super().ack_many(claims)
+
+    queue = FlakyAck()
+    worker = WriteWorker(queue, db, backoff_base=0.0, batch_size=8)
+    worker.start()
+    try:
+        _burst(queue, "t_ack", "a", 4)
+        assert _wait_until(lambda: queue.pending_count("t_ack") == 0)
+        assert worker.is_alive()
+        # released, then committed again: idempotency keys mean no duplicates
+        assert db.collection("memories").count() == 4
+        assert db.collection(DEAD_LETTER_COLLECTION).count() == 0
+    finally:
+        worker.stop()
 

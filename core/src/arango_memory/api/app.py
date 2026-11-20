@@ -381,7 +381,9 @@ def _require_ontology() -> None:
 
 
 # ── Route handlers ────────────────────────────────────────
-async def health(client: ArangoMemoryClient = Depends(get_client)) -> dict[str, object]:
+async def health(
+    request: Request, client: ArangoMemoryClient = Depends(get_client)
+) -> dict[str, object]:
     # **Liveness** — is the process up? Always 200 when serving; *not* gated on the DB
     # (so a DB blip can't trigger a liveness-probe restart loop — that's /ready's job).
     # `arango` is informational; `latency` is process-global p50/p95/p99 (§18/§23),
@@ -395,11 +397,15 @@ async def health(client: ArangoMemoryClient = Depends(get_client)) -> dict[str, 
             vector = vector_index_state(client.db)
         except Exception:  # noqa: BLE001 — health must never raise
             vector = "unknown"
+    # The write worker drains every async write. If its thread is gone, queued writes pile up
+    # unseen, so say so here. Still 200: restarting on it is the platform's call, not liveness's.
+    worker = getattr(request.app.state, "worker", None)
     return {
         "status": "ok",
         "arango": arango,
         "vector": vector,
         "mode": settings.memory_mode,
+        "write_worker": "running" if worker is not None and worker.is_alive() else "stopped",
         "latency_ms": latency.snapshot(),
     }
 

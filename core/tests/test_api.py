@@ -23,6 +23,7 @@ def test_health(api: TestClient) -> None:
     assert body["vector"] in {"trained", "deferred"}  # MA-8: vector-arm state surfaced
     assert body["mode"] == "lite"
     assert isinstance(body["latency_ms"], dict)  # process-global p50/p95/p99 (§23)
+    assert body["write_worker"] == "running"  # the lifespan starts it; a dead one must show
 
 
 def test_ready_200_when_db_reachable(api: TestClient) -> None:
