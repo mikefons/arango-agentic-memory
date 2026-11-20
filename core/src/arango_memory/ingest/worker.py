@@ -16,7 +16,9 @@ from __future__ import annotations
 import dataclasses
 import threading
 import time
-from typing import cast
+from collections.abc import Callable, Sequence
+from concurrent.futures import Future, ThreadPoolExecutor
+from typing import Any, cast
 
 from arango.cursor import Cursor
 from arango.database import StandardDatabase
@@ -28,13 +30,46 @@ from ..models import utcnow_iso
 from ..schema.collections import DEAD_LETTER_COLLECTION
 from ..telemetry import metrics
 from ..telemetry.logging import logger, request_id_var, tenant_var
-from .extract import Extractor, get_extractor
+from .extract import ExtractedEntity, ExtractedRelation, Extractor, get_extractor, is_io_bound
 from .procedural import record_step
 from .queue import Claim, Intent, StepIntent, WriteIntent, WriteQueue
 from .store import StoreItem, store, store_many
 
 _POLL_INTERVAL = 0.05
 _ERROR_BACKOFF_MAX = 30.0  # longest pause after repeated worker errors (seconds)
+# ArangoDB errors that mean "another writer got there first": write-write conflict and unique
+# constraint violation. Concurrent agent groups can hit them on a shared entity or edge.
+_CONFLICT_CODES = frozenset({1200, 1210})
+_CONFLICT_RETRIES = 3
+
+
+def _is_conflict(exc: BaseException) -> bool:
+    return getattr(exc, "error_code", None) in _CONFLICT_CODES
+
+
+class _SerializedExtractor:
+    """Lets agent groups share a CPU-bound extractor: calls take a lock, so the models run one
+    at a time (they contend under the GIL anyway) while the DB round trips overlap."""
+
+    io_bound = False
+
+    def __init__(self, inner: Extractor) -> None:
+        self._inner = inner
+        self._lock = threading.Lock()
+        self.name = inner.name
+
+    def extract(self, text: str) -> list[ExtractedEntity]:
+        with self._lock:
+            return self._inner.extract(text)
+
+    def extract_relations(
+        self, text: str, entities: Sequence[ExtractedEntity]
+    ) -> list[ExtractedRelation]:
+        with self._lock:
+            return self._inner.extract_relations(text, entities)
+
+    def __getattr__(self, attr: str) -> Any:
+        return getattr(self._inner, attr)
 
 
 def commit_intent(
@@ -93,6 +128,8 @@ class WriteWorker:
         max_retries: int | None = None,
         backoff_base: float | None = None,
         batch_size: int | None = None,
+        concurrency: int | None = None,
+        db_factory: Callable[[], StandardDatabase] | None = None,
     ) -> None:
         self._queue = queue
         self._db = db
@@ -102,8 +139,30 @@ class WriteWorker:
         self._max_retries = max_retries if max_retries is not None else settings.write_max_retries
         self._backoff = backoff_base if backoff_base is not None else settings.write_backoff_base
         self._batch_size = batch_size if batch_size is not None else settings.write_batch_size
+        self._concurrency = (
+            concurrency if concurrency is not None else settings.write_worker_concurrency
+        )
+        if self._concurrency > 1 and not is_io_bound(self._extractor):
+            self._extractor = _SerializedExtractor(self._extractor)
+        # Each pool thread opens its own connection (a shared one is not safe to drive from
+        # several threads); without a factory the pool shares `db`.
+        self._db_factory = db_factory
+        self._local = threading.local()
+        self._pool: ThreadPoolExecutor | None = None
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
+
+    def _conn(self) -> StandardDatabase:
+        """The DB handle for the calling thread: the worker's own, or a pool thread's."""
+        if self._db_factory is None or not getattr(self._local, "in_pool", False):
+            return self._db
+        db = getattr(self._local, "db", None)
+        if db is None:
+            db = self._local.db = self._db_factory()
+        return cast(StandardDatabase, db)
+
+    def _mark_pool_thread(self) -> None:
+        self._local.in_pool = True
 
     # ── Processing ────────────────────────────────────────
     def process(self, intent: Intent) -> bool:
@@ -130,7 +189,7 @@ class WriteWorker:
 
     def _commit(self, intent: Intent) -> None:
         commit_intent(
-            self._db,
+            self._conn(),
             intent,
             embedder=self._embedder,
             extractor=self._extractor,
@@ -172,12 +231,26 @@ class WriteWorker:
         ]
         tenant_token = tenant_var.set(first.tenant_id)
         try:
-            store_many(
-                self._db, items, tenant_id=first.tenant_id, agent_id=first.agent_id,
-                embedder=self._embedder, extractor=self._extractor,
-                mode=settings.memory_mode, extract=True,
-            )
-            return True
+            for attempt in range(_CONFLICT_RETRIES + 1):
+                try:
+                    store_many(
+                        self._conn(), items, tenant_id=first.tenant_id, agent_id=first.agent_id,
+                        embedder=self._embedder, extractor=self._extractor,
+                        mode=settings.memory_mode, extract=True,
+                    )
+                    return True
+                except Exception as exc:  # noqa: BLE001
+                    # Another agent group wrote the same entity or edge at the same moment.
+                    # Commits are idempotency-keyed, so run the batch again before giving up.
+                    if _is_conflict(exc) and attempt < _CONFLICT_RETRIES:
+                        logger.info(
+                            "batch hit a write conflict; retrying",
+                            extra={"tenant_id": first.tenant_id, "attempt": attempt + 1},
+                        )
+                        time.sleep(0.05 * (attempt + 1))
+                        continue
+                    raise
+            return False
         except Exception as exc:  # noqa: BLE001 — a bad batch falls back to per-intent retry
             logger.warning(
                 "batch commit failed; retrying per intent",
@@ -187,25 +260,50 @@ class WriteWorker:
         finally:
             tenant_var.reset(tenant_token)
 
-    def _commit_claims(self, claims: list[Claim]) -> None:
-        """Commit a round of claims, then ack them all. Batchable intents are grouped by
-        (tenant, agent) and bulk-committed; a failed group, and everything not batchable, goes
-        through `process()` one intent at a time, so retry and dead-lettering still isolate a bad
-        intent. Commits are idempotency-keyed, so a retry after a partial batch is safe."""
-        singles: list[Claim] = []
-        groups: dict[tuple[str, str], list[Claim]] = {}
-        for claim in claims:
-            intent = claim.intent
-            if len(claims) > 1 and self._batchable(intent):
-                groups.setdefault((intent.tenant_id, intent.agent_id), []).append(claim)
-            else:
-                singles.append(claim)
-        for group in groups.values():
-            if len(group) == 1 or not self._store_batch(group):
-                singles.extend(group)
+    def _commit_unit(self, claims: list[Claim], *, batching: bool) -> None:
+        """Commit one tenant+agent's claims in order: batchable intents through a single
+        `store_many`, and a failed batch plus everything not batchable through `process()` one
+        intent at a time, so retry and dead-lettering still isolate a bad intent."""
+        group = [c for c in claims if batching and self._batchable(c.intent)]
+        singles = [c for c in claims if c not in group]
+        if len(group) == 1 or (group and not self._store_batch(group)):
+            singles = group + singles
         for claim in singles:
             self.process(claim.intent)  # commits or dead-letters; either way it's done
+
+    def _run_unit(self, claims: list[Claim], batching: bool) -> None:
+        self._mark_pool_thread()
+        self._commit_unit(claims, batching=batching)
+
+    def _commit_claims(self, claims: list[Claim]) -> None:
+        """Commit a round of claims, then ack them all. The claims split into one unit per
+        (tenant, agent); with `write_worker_concurrency` > 1 the units run in parallel, each
+        agent's writes still in order on a single thread. Commits are idempotency-keyed, so a
+        retry after a partial batch is safe."""
+        units: dict[tuple[str, str], list[Claim]] = {}
+        for claim in claims:
+            units.setdefault((claim.intent.tenant_id, claim.intent.agent_id), []).append(claim)
+        batching = len(claims) > 1
+        if self._concurrency > 1 and len(units) > 1:
+            pool = self._ensure_pool()
+            futures: list[Future[None]] = [
+                pool.submit(self._run_unit, unit, batching) for unit in units.values()
+            ]
+            errors = [f.exception() for f in futures]  # waits for every unit before releasing
+            failed = next((e for e in errors if e is not None), None)
+            if failed is not None:
+                raise failed
+        else:
+            for unit in units.values():
+                self._commit_unit(unit, batching=batching)
         self._queue.ack_many(claims)
+
+    def _ensure_pool(self) -> ThreadPoolExecutor:
+        if self._pool is None:
+            self._pool = ThreadPoolExecutor(
+                max_workers=self._concurrency, thread_name_prefix="write-unit"
+            )
+        return self._pool
 
     def drain(self) -> int:
         """Process all currently queued intents synchronously. Returns count handled."""
@@ -216,7 +314,7 @@ class WriteWorker:
         return handled
 
     def _dead_letter(self, intent: Intent, error: Exception | None) -> None:
-        self._db.collection(DEAD_LETTER_COLLECTION).insert(
+        self._conn().collection(DEAD_LETTER_COLLECTION).insert(
             {
                 "_key": intent.key,
                 "kind": "step" if isinstance(intent, StepIntent) else "write",
@@ -263,6 +361,9 @@ class WriteWorker:
         if self._thread is not None:
             self._thread.join(timeout=2.0)
             self._thread = None
+        if self._pool is not None:
+            self._pool.shutdown(wait=True)
+            self._pool = None
 
     def is_alive(self) -> bool:
         """True while the background thread is running. `/health` reports it, because a dead

@@ -334,6 +334,10 @@ class Settings(BaseSettings):
     # `store_many` per tenant+agent group, one ack). 1 = one `store()` per intent (the default).
     # Higher cuts the DB round trips per write (~25 → a handful per batch); see ROADMAP WQ-1.
     write_batch_size: int = Field(default=1, ge=1, le=256)
+    # How many tenant+agent groups one round of claimed intents may commit at the same time.
+    # 1 = serial (the default). Each agent's writes still go in order on one thread; the groups of
+    # different agents run in parallel, each on its own DB connection. See ROADMAP WQ-1a.
+    write_worker_concurrency: int = Field(default=1, ge=1, le=16)
     # Abuse limits (DESIGN.md §17). Request-size cap is always on (a memory turn is
     # far smaller than 1 MiB); rate limiting is opt-in (0 = off — the dev/CI default).
     max_request_bytes: int = Field(default=1_048_576, ge=1)

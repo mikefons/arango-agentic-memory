@@ -148,7 +148,8 @@ share an entity or a number with the new memory),
 `EMBEDDING_CACHE` (`true`), `EMBEDDING_CACHE_SIZE` (10000); conflict: `ENTITY_MERGE_THRESHOLD` (0.9),
 `ENTITY_FLAG_THRESHOLD` (0.6); durable writes: `WRITE_MAX_RETRIES` (5),
 `WRITE_BACKOFF_BASE` (0.5), `WRITE_QUEUE_BACKEND` (`memory`; set `arango` in prod),
-`WRITE_LEASE_SECONDS` (60), `WRITE_BATCH_SIZE` (1; see Batch commit below); security: `REDACT_PII` (`true`), `API_KEYS` (unset = auth
+`WRITE_LEASE_SECONDS` (60), `WRITE_BATCH_SIZE` (1; see Batch commit below),
+`WRITE_WORKER_CONCURRENCY` (1; see Parallel agent groups below); security: `REDACT_PII` (`true`), `API_KEYS` (unset = auth
 open), `OIDC_ISSUER` (unset = JWT off; see Authentication below), `MAX_REQUEST_BYTES`
 (1 MiB), `RATE_LIMIT_PER_MINUTE` (0 = off); scaling: `REDIS_URL` (unset = per-instance
 limiter + cache; see Optional shared layer).
@@ -239,6 +240,27 @@ test burst this took the database calls from 31 per write to 1.3.
   fetch), `.match`, `.increment`, `.upsert`, `.edges` and `.relate`), one sample per batch. The `write` key then holds one sample per batch (its `count`
   is the number of writes it covered), not per write.
 - The lease (`WRITE_LEASE_SECONDS`) must outlast a whole batch, not one write; 60 s is ample.
+
+### Parallel agent groups (`WRITE_WORKER_CONCURRENCY`)
+A batch round commits one `store_many` per agent, one after another, and each call costs a fixed
+number of database round trips (about 2 s on Railway to ArangoGraph). Four agents writing at once
+therefore drain in about four calls' time. Set `WRITE_WORKER_CONCURRENCY` to the number of agents
+you expect to write together (2–4 is typical, max 16) and the groups in a round commit in
+parallel instead, each on its own database connection. It only helps with `WRITE_BATCH_SIZE` above
+1, and a round with a single agent in it runs as before.
+
+- **Order.** One agent's writes always run in order on one thread; the round is acked after every
+  group has finished.
+- **Conflicts.** Groups that touch the same entity or edge at the same moment can hit an ArangoDB
+  write-write conflict or unique-key violation. The batch retries up to three times (log line
+  `batch hit a write conflict; retrying`), then falls back to per-intent commits as usual.
+- **Failure handling.** If a group raises (for example the database dropped while dead-lettering),
+  the other groups finish first, then the round is released and committed again.
+- **Extractors.** A CPU-bound extractor (spaCy, GLiNER, the fake one) is serialised by a lock;
+  I/O-bound ones (Haiku) run concurrently. The embedder must tolerate concurrent calls, as it
+  already does when request threads embed queries while the worker embeds writes.
+- **Connections.** Each pool thread opens its own connection, so the core holds up to
+  `WRITE_WORKER_CONCURRENCY` more connections to the database.
 
 ### Queue backend (`WRITE_QUEUE_BACKEND`)
 - **`memory`** (default) — in-process; fast and zero-config for dev/CI. Intents that

@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import threading
 import time
 
 from arango.database import StandardDatabase
 from pytest import MonkeyPatch
 
 import arango_memory.ingest.worker as worker_mod
+from arango_memory.client import ArangoMemoryClient
 from arango_memory.ingest.queue import InProcessQueue, WriteIntent
 from arango_memory.ingest.worker import WriteWorker
 from arango_memory.schema.collections import DEAD_LETTER_COLLECTION
@@ -239,3 +241,160 @@ def test_a_failed_ack_releases_the_batch_and_it_is_committed_again(db: StandardD
     finally:
         worker.stop()
 
+
+
+# ── Worker pool (WQ-1a): agent groups commit in parallel ─────────────────────────────
+
+def _three_agents(queue: InProcessQueue, tenant: str) -> None:
+    for agent in ("fin", "leg", "tech"):
+        _burst(queue, tenant, agent, 3)
+
+
+def test_agent_groups_commit_at_the_same_time_each_on_its_own_thread(
+    db: StandardDatabase, monkeypatch: MonkeyPatch
+) -> None:
+    barrier = threading.Barrier(3, timeout=5)  # only passes if all three calls overlap
+    seen: list[tuple[str, str, list[int]]] = []
+    real = worker_mod.store_many
+
+    def overlapping(db_: StandardDatabase, items: list, **kw: object) -> object:  # type: ignore[type-arg]
+        agent = str(kw["agent_id"])
+        if agent not in {a for a, _, _ in seen}:  # a conflict retry must not wait again
+            barrier.wait()
+            seen.append((agent, threading.current_thread().name, [i.turn_index for i in items]))
+        return real(db_, items, **kw)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(worker_mod, "store_many", overlapping)
+    queue = InProcessQueue()
+    worker = WriteWorker(queue, db, backoff_base=0.0, batch_size=16, concurrency=3)
+    _three_agents(queue, "t_pool")
+    try:
+        assert worker.drain() == 9
+    finally:
+        worker.stop()
+
+    assert not barrier.broken
+    assert len({thread for _, thread, _ in seen}) == 3
+    assert all(turns == [0, 1, 2] for _, _, turns in seen)  # each agent's order is kept
+    assert db.collection("memories").count() == 9
+    assert db.collection(DEAD_LETTER_COLLECTION).count() == 0
+    assert queue.pending_count("t_pool") == 0
+
+
+def test_concurrency_one_commits_groups_one_after_another(
+    db: StandardDatabase, monkeypatch: MonkeyPatch
+) -> None:
+    threads: set[str] = set()
+    real = worker_mod.store_many
+
+    def spy(db_: StandardDatabase, items: list, **kw: object) -> object:  # type: ignore[type-arg]
+        threads.add(threading.current_thread().name)
+        return real(db_, items, **kw)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(worker_mod, "store_many", spy)
+    queue = InProcessQueue()
+    worker = WriteWorker(queue, db, backoff_base=0.0, batch_size=16, concurrency=1)
+    _three_agents(queue, "t_serial")
+    worker.drain()
+    assert threads == {threading.current_thread().name}
+    assert worker._pool is None  # nothing was spawned
+
+
+def test_parallel_groups_that_share_entities_commit_what_a_serial_run_commits(
+    db: StandardDatabase, client: ArangoMemoryClient
+) -> None:
+    serial, pooled = InProcessQueue(), InProcessQueue()
+    for q, tenant in ((serial, "t_ps"), (pooled, "t_pp")):
+        for agent in ("a1", "a2", "a3", "a4"):
+            _burst(q, tenant, agent, 6)  # every agent mentions Alice and Bob
+    WriteWorker(serial, db, backoff_base=0.0, batch_size=32, concurrency=1).drain()
+    worker = WriteWorker(
+        pooled, db, backoff_base=0.0, batch_size=32, concurrency=4,
+        db_factory=lambda: ArangoMemoryClient(client.config).connect(),
+    )
+    try:
+        worker.drain()
+    finally:
+        worker.stop()
+
+    def count(coll: str, tenant: str) -> int:
+        return int(next(iter(db.aql.execute(
+            f"RETURN LENGTH(FOR d IN {coll} FILTER d.tenant_id == @t RETURN 1)",
+            bind_vars={"t": tenant},
+        ))))
+
+    for coll in ("episodes", "memories", "entities"):
+        assert count(coll, "t_ps") == count(coll, "t_pp"), coll
+    assert count("memories", "t_pp") == 24
+    assert db.collection(DEAD_LETTER_COLLECTION).count() == 0
+    assert pooled.pending_count("t_pp") == 0
+
+
+class _Conflict(Exception):
+    error_code = 1200  # ArangoDB write-write conflict
+
+
+def test_a_conflict_inside_a_batch_is_retried_not_sent_to_the_per_intent_path(
+    db: StandardDatabase, monkeypatch: MonkeyPatch
+) -> None:
+    attempts = {"n": 0}
+    real = worker_mod.store_many
+
+    def conflicting(db_: StandardDatabase, items: list, **kw: object) -> object:  # type: ignore[type-arg]
+        attempts["n"] += 1
+        if attempts["n"] <= 2:
+            raise _Conflict("write-write conflict")
+        return real(db_, items, **kw)  # type: ignore[arg-type]
+
+    def never(*args: object, **kwargs: object) -> None:
+        raise AssertionError("fell back to per-intent store()")
+
+    monkeypatch.setattr(worker_mod, "store_many", conflicting)
+    monkeypatch.setattr(worker_mod, "store", never)
+    queue = InProcessQueue()
+    worker = WriteWorker(queue, db, backoff_base=0.0, batch_size=8, concurrency=2)
+    _burst(queue, "t_cf", "a", 3)
+    worker.drain()
+    assert attempts["n"] == 3
+    assert db.collection("memories").count() == 3
+
+
+def _store_down(*args: object, **kwargs: object) -> None:
+    raise RuntimeError("x")
+
+
+def test_a_failing_group_waits_for_the_others_then_releases_the_round(
+    db: StandardDatabase, monkeypatch: MonkeyPatch
+) -> None:
+    real = worker_mod.store_many
+    done = threading.Event()
+
+    def slow_good_fast_bad(db_: StandardDatabase, items: list, **kw: object) -> object:  # type: ignore[type-arg]
+        if kw["agent_id"] == "bad":
+            raise RuntimeError("batch down")
+        time.sleep(0.2)
+        out = real(db_, items, **kw)  # type: ignore[arg-type]
+        done.set()
+        return out
+
+    def dead_letter_down(self: WriteWorker, *a: object) -> None:
+        raise RuntimeError("cannot dead-letter")
+
+    monkeypatch.setattr(worker_mod, "store_many", slow_good_fast_bad)
+    monkeypatch.setattr(worker_mod, "store", _store_down)
+    monkeypatch.setattr(WriteWorker, "_dead_letter", dead_letter_down)
+    queue = InProcessQueue()
+    worker = WriteWorker(queue, db, backoff_base=0.0, max_retries=1, batch_size=8, concurrency=2)
+    _burst(queue, "t_fail", "good", 2)
+    _burst(queue, "t_fail", "bad", 2)
+    try:
+        try:
+            worker.drain()
+            raised = False
+        except RuntimeError:
+            raised = True
+    finally:
+        worker.stop()
+    assert raised
+    assert done.is_set()  # the healthy group finished before the error surfaced
+    assert db.collection("memories").count() == 2
