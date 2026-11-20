@@ -582,6 +582,7 @@ def write_entities_many(
     invariant) folds once per batch (Δt≈0)."""
     if not memories:
         return {}
+    timer = StageTimer("write_many.entities")  # /health write_many.entities.<stage>
     now = utcnow_iso()
     base = settings.corroboration_base
     result: dict[str, list[str]] = {mem.memory_key: [] for mem in memories}
@@ -606,16 +607,19 @@ def write_entities_many(
         return (mem, ents, rels, parse_explicit_time(mem.content))
 
     workers = min(settings.extraction_concurrency, len(memories)) if is_io_bound(extractor) else 1
-    if workers <= 1:
-        per_mem = [_extract_one(mem) for mem in memories]
-    else:
-        with ThreadPoolExecutor(max_workers=workers) as executor:
-            per_mem = list(executor.map(_extract_one, memories))
+    with timer.stage("extract"):
+        if workers <= 1:
+            per_mem = [_extract_one(mem) for mem in memories]
+        else:
+            with ThreadPoolExecutor(max_workers=workers) as executor:
+                per_mem = list(executor.map(_extract_one, memories))
 
     names = [e.name for _, ents, _, _ in per_mem for e in ents]
     if not names:
+        timer.record()
         return result
-    vec_by_name = embed_batch_cached(embedder, names, tenant_id=tenant_id)
+    with timer.stage("embed"):
+        vec_by_name = embed_batch_cached(embedder, names, tenant_id=tenant_id)
 
     # 2. accumulate per distinct (name, label) across the batch.
     accum: dict[tuple[str, str], _EntityAccum] = {}
@@ -634,11 +638,13 @@ def write_entities_many(
     #    The per-entity ANN query / O(cardinality²) scan loop was the graph-on ingest wall a
     #    real (high-cardinality) extractor exposed; folding it into a batch keeps it ~O(N·M)
     #    matmul in C. Belief/corroboration still fold by sum, so the result is unchanged.
-    use_ann = _use_ann(db, tenant_id, dimensions=embedder.dimensions)
     nls = list(accum.keys())
     qvecs = [accum[nl].vec for nl in nls]
-    pool = _resolution_pool(db, tenant_id, qvecs, use_ann=use_ann)
-    matches = _best_match_many(qvecs, pool, exclude=nls)
+    with timer.stage("pool"):  # the candidate fetch: index-state check + ANN/scan query
+        use_ann = _use_ann(db, tenant_id, dimensions=embedder.dimensions)
+        pool = _resolution_pool(db, tenant_id, qvecs, use_ann=use_ann)
+    with timer.stage("match"):
+        matches = _best_match_many(qvecs, pool, exclude=nls)
 
     key_by_nl: dict[tuple[str, str], str] = {}
     increments: dict[str, list[float]] = {}  # existing key -> [count, rel_sum]
@@ -660,7 +666,8 @@ def write_entities_many(
     if increments:
         inc_rows = [{"key": k, "count": c, "rel_sum": r} for k, (c, r) in increments.items()]
         inc_bind: dict[str, Any] = {"rows": inc_rows, "now": now, "base": base}
-        db.aql.execute(_BULK_INCREMENT, bind_vars=inc_bind)
+        with timer.stage("increment"):
+            db.aql.execute(_BULK_INCREMENT, bind_vars=inc_bind)
 
     # 5. bulk upsert own entities → resolved keys.
     if own:
@@ -673,9 +680,10 @@ def write_entities_many(
                             "count": a.count, "rel_sum": a.rel_sum})
         up_bind: dict[str, Any] = {
             "rows": up_rows, "tenant_id": tenant_id, "now": now, "base": base}
-        cur = cast(Cursor, db.aql.execute(_BULK_UPSERT_ENTITY, bind_vars=up_bind))
-        for row in cur:
-            key_by_nl[(row["name"], row["label"])] = row["key"]
+        with timer.stage("upsert"):
+            cur = cast(Cursor, db.aql.execute(_BULK_UPSERT_ENTITY, bind_vars=up_bind))
+            for row in cur:
+                key_by_nl[(row["name"], row["label"])] = row["key"]
 
     name_to_key: dict[str, str] = {}
     for (name, _label), key in key_by_nl.items():
@@ -692,11 +700,13 @@ def write_entities_many(
             produced_edges.append(_edge_doc(
                 f"{key}__{ekey}", f"entities/{key}", f"episodes/{ekey}", now))
             result[mkey].append(key)
-    if mention_edges:
-        db.collection("mentions").insert_many(mention_edges, overwrite_mode="ignore", silent=True)
-    if produced_edges:
-        db.collection("produced_by").insert_many(
-            produced_edges, overwrite_mode="ignore", silent=True)
+    with timer.stage("edges"):
+        if mention_edges:
+            db.collection("mentions").insert_many(
+                mention_edges, overwrite_mode="ignore", silent=True)
+        if produced_edges:
+            db.collection("produced_by").insert_many(
+                produced_edges, overwrite_mode="ignore", silent=True)
 
     # 7. aggregate relates_to across the batch (typed wins; co-occurrence capped per memory).
     pair_accum: dict[tuple[str, str], dict[str, Any]] = {}
@@ -739,8 +749,10 @@ def write_entities_many(
         rel_bind: dict[str, Any] = {
             "rows": rel_rows, "base": base, "now": now,
             "w_alpha": settings.weight_ewa_alpha, "w_neg_lam": -settings.weight_lambda}
-        db.aql.execute(_BULK_RELATE, bind_vars=rel_bind)
+        with timer.stage("relate"):
+            db.aql.execute(_BULK_RELATE, bind_vars=rel_bind)
 
     if detected:
         metrics.emit("conflict", detected=detected)
+    timer.record()
     return {mkey: list(dict.fromkeys(keys)) for mkey, keys in result.items()}
