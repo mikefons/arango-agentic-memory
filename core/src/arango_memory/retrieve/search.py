@@ -36,7 +36,7 @@ from ..schema.collections import (
     vector_index_state,
     vector_training_threshold,
 )
-from ..telemetry import metrics, span
+from ..telemetry import StageTimer, metrics, span
 from ..telemetry.logging import logger
 from .decompose import decompose
 from .enrich import QueryCache, hyde, should_skip_retrieval
@@ -606,10 +606,12 @@ def retrieve(
         raise ValueError(f"unparseable as_of {as_of!r}; use an ISO date or date-time")
     pool = candidate_pool if candidate_pool is not None else settings.candidate_pool
     started = time.perf_counter()
+    timer = StageTimer("retrieve")  # /health retrieve.<stage>: where a read's time goes
     try:
         with span("memory.retrieve", mode=mode):
             result = _retrieve_impl(
                 db,
+                timer=timer,
                 query=query,
                 tenant_id=tenant_id,
                 agent_id=agent_id,
@@ -643,6 +645,7 @@ def retrieve(
             extra={"reason": type(exc).__name__, "detail": str(exc)},
         )
         return RetrieveResult()
+    timer.record()
     metrics.emit(
         "retrieval",
         duration_ms=(time.perf_counter() - started) * 1000.0,
@@ -667,81 +670,89 @@ def _gather_fused(
     decay_binds: dict[str, Any],
     now: str,
     fact_keys: bool = False,
+    timer: StageTimer | None = None,
 ) -> list[_Candidate]:
     """One query's arms (BM25 + vector + graph) → RRF fusion → recency boost.
 
     The per-query core of retrieval, sorted by the recency-decayed fused score.
     Multihop (RQ-1) calls this once per sub-query and fuses the results a second time.
     """
+    t = timer if timer is not None else StageTimer("retrieve")
     scope = {"tenant_id": tenant_id, "agent_ids": agent_ids, "pool": candidate_pool}
-    bm25_rows = _run(db, _BM25_QUERY, {"query": query, **scope, **decay_binds})
+    with t.stage("bm25"):
+        bm25_rows = _run(db, _BM25_QUERY, {"query": query, **scope, **decay_binds})
 
     ranked_lists = [bm25_rows]
     names = ["bm25"]
     # Self-healing cold start (§7): once the corpus is warm, the first retrieval
     # builds the index lazily; until then we run BM25-only. The one-time build
     # cost moves to the durable write path in Step 3.
-    vector_ready = has_vector_index(db) or ensure_vector_index(
-        db,
-        dimensions=dimensions,
-        n_lists=n_lists or settings.vector_n_lists,
-        train_factor=settings.vector_train_factor,
-    )
-    if vector_ready and query_vec:  # query_vec empty → embedder degraded, BM25-only (§15)
-        vector_rows = _run(
-            db, _VECTOR_QUERY, {"qvec": query_vec, "nprobe": settings.n_probe, **scope}
+    with t.stage("vector_check"):
+        vector_ready = has_vector_index(db) or ensure_vector_index(
+            db,
+            dimensions=dimensions,
+            n_lists=n_lists or settings.vector_n_lists,
+            train_factor=settings.vector_train_factor,
         )
+    if vector_ready and query_vec:  # query_vec empty → embedder degraded, BM25-only (§15)
+        with t.stage("vector"):
+            vector_rows = _run(
+                db, _VECTOR_QUERY, {"qvec": query_vec, "nprobe": settings.n_probe, **scope}
+            )
         ranked_lists.append(vector_rows)
         names.append("vector")
 
     # FK-1: match the query against the facts stored on each memory.
     if fact_keys:
-        fact_rows = _run(db, _FACT_BM25_QUERY, {"query": query, **scope})
-        if fact_rows:
-            ranked_lists.append(fact_rows)
-            names.append("fact_bm25")
-        size = cast(int, next(iter(cast(Cursor, db.aql.execute(
-            _TENANT_SIZE, bind_vars={"tenant_id": tenant_id, "agent_ids": agent_ids})))))
-        if query_vec and size <= settings.fact_vector_scan_max:
-            fact_vec_rows = _run(db, _FACT_VECTOR_QUERY, {"qvec": query_vec, **scope})
-            if fact_vec_rows:
-                ranked_lists.append(fact_vec_rows)
-                names.append("fact_vector")
+        with t.stage("facts"):
+            fact_rows = _run(db, _FACT_BM25_QUERY, {"query": query, **scope})
+            if fact_rows:
+                ranked_lists.append(fact_rows)
+                names.append("fact_bm25")
+            size = cast(int, next(iter(cast(Cursor, db.aql.execute(
+                _TENANT_SIZE, bind_vars={"tenant_id": tenant_id, "agent_ids": agent_ids})))))
+            if query_vec and size <= settings.fact_vector_scan_max:
+                fact_vec_rows = _run(db, _FACT_VECTOR_QUERY, {"qvec": query_vec, **scope})
+                if fact_vec_rows:
+                    ranked_lists.append(fact_vec_rows)
+                    names.append("fact_vector")
 
     # Graph expansion (§9 stage 4): traverse from the entities of the top hits to
     # surface connected memories that lexical/vector search alone would miss.
     seed_keys = _seed_keys(ranked_lists)
     if seed_keys:
-        graph_rows = _run(
-            db,
-            _GRAPH_QUERY,
-            {
-                "seed_ids": [f"memories/{k}" for k in seed_keys],
-                "seed_keys": seed_keys,
-                "tenant_id": tenant_id,
-                "agent_ids": agent_ids,
-                "hops": graph_hops if graph_hops is not None else settings.graph_hops,
-                "max_neighbors": settings.graph_max_neighbors,
-                "max_memories_per_entity": settings.graph_max_memories_per_entity,
-                "pool": candidate_pool,
-                **decay_binds,
-            },
-        )
+        with t.stage("graph"):
+            graph_rows = _run(
+                db,
+                _GRAPH_QUERY,
+                {
+                    "seed_ids": [f"memories/{k}" for k in seed_keys],
+                    "seed_keys": seed_keys,
+                    "tenant_id": tenant_id,
+                    "agent_ids": agent_ids,
+                    "hops": graph_hops if graph_hops is not None else settings.graph_hops,
+                    "max_neighbors": settings.graph_max_neighbors,
+                    "max_memories_per_entity": settings.graph_max_memories_per_entity,
+                    "pool": candidate_pool,
+                    **decay_binds,
+                },
+            )
         if graph_rows:
             ranked_lists.append(graph_rows)
             names.append("graph")
 
-    fused = _rrf_fuse(ranked_lists, names)
+    with t.stage("fuse"):
+        fused = _rrf_fuse(ranked_lists, names)
 
-    # Recency/access boost (§9 stage 5, §11): decay the fused score by time since
-    # last access, so stale memories sink in ranking and token-budget priority.
-    # (The AQL arms above also fold decay into candidate *selection*; this uniform
-    # pass weights final magnitude — RRF discards per-arm score magnitude.)
-    for cand in fused:
-        cand.fused_score *= effective_strength(
-            cand.strength, cand.accessed_at or now, now, settings.decay_lambda
-        )
-    fused.sort(key=lambda c: -c.fused_score)
+        # Recency/access boost (§9 stage 5, §11): decay the fused score by time since
+        # last access, so stale memories sink in ranking and token-budget priority.
+        # (The AQL arms above also fold decay into candidate *selection*; this uniform
+        # pass weights final magnitude — RRF discards per-arm score magnitude.)
+        for cand in fused:
+            cand.fused_score *= effective_strength(
+                cand.strength, cand.accessed_at or now, now, settings.decay_lambda
+            )
+        fused.sort(key=lambda c: -c.fused_score)
     return fused
 
 
@@ -1007,6 +1018,7 @@ def _retrieve_impl(
     as_of: str | None = None,
     neighbor_turns: int | None = None,
     fact_keys: bool | None = None,
+    timer: StageTimer | None = None,
 ) -> RetrieveResult:
     """BM25 (+ vector when trained) → RRF → (rerank) → MMR → tiered token-budget assembly.
 
@@ -1017,6 +1029,7 @@ def _retrieve_impl(
     shared MMR/assembly tail — so it is a superset of the single-shot result.
     """
     emb = embedder or get_embedder()
+    t = timer if timer is not None else StageTimer("retrieve")
 
     # Reference instant + decay rate shared by the AQL arms and the post-fusion pass.
     now = utcnow_iso()
@@ -1041,6 +1054,7 @@ def _retrieve_impl(
             decay_binds=decay_binds,
             now=now,
             fact_keys=use_fact_keys,
+            timer=t,
         )
 
     if mode == "multihop":
@@ -1074,7 +1088,8 @@ def _retrieve_impl(
                 )
                 query_vec = _embed_query(emb, query, tenant_id=tenant_id)
         else:
-            query_vec = _embed_query(emb, query, tenant_id=tenant_id)
+            with t.stage("embed"):
+                query_vec = _embed_query(emb, query, tenant_id=tenant_id)
         fused = gather(query, query_vec)
 
     as_of_key = _event_sort_key(as_of) if as_of else None
@@ -1090,41 +1105,48 @@ def _retrieve_impl(
     if settings.rerank_enabled if rerank is None else rerank:
         if use_fact_keys:
             _attach_facts(db, fused[: settings.rerank_top_n])
-        fused = _rerank(
-            fused, query, reranker=reranker, top_n=settings.rerank_top_n,
-            scoring=rerank_scoring or settings.rerank_scoring,
-            time_weight=(settings.rerank_time_weight if rerank_time_weight is None
-                         else rerank_time_weight),
-        )
+        with t.stage("rerank"):
+            fused = _rerank(
+                fused, query, reranker=reranker, top_n=settings.rerank_top_n,
+                scoring=rerank_scoring or settings.rerank_scoring,
+                time_weight=(settings.rerank_time_weight if rerank_time_weight is None
+                             else rerank_time_weight),
+            )
 
-    selected = _mmr(fused, k)
-    selected.sort(key=lambda c: -c.fused_score)
+    with t.stage("mmr"):
+        selected = _mmr(fused, k)
+        selected.sort(key=lambda c: -c.fused_score)
     if settings.fact_supersession if supersession is None else supersession:
-        selected = _supersession(db, selected, k, tenant_id=tenant_id, agent_ids=agent_ids,
-                                 as_of=as_of_key)
+        with t.stage("supersession"):
+            selected = _supersession(db, selected, k, tenant_id=tenant_id,
+                                     agent_ids=agent_ids, as_of=as_of_key)
     # Entity summaries (Graphiti's ENTITIES section) take up to the semantic tier's share of
     # the budget first; the memories fill the rest, so the total stays within max_memory_tokens.
     entities, entity_tokens = "", 0
     if settings.retrieve_entity_summaries if entity_summaries is None else entity_summaries:
-        entities, entity_tokens = _entity_block(
-            db, [c.key for c in selected], tenant_id,
-            int(_TIER_FRACTIONS["semantic"] * max_memory_tokens),
-        )
+        with t.stage("entities"):
+            entities, entity_tokens = _entity_block(
+                db, [c.key for c in selected], tenant_id,
+                int(_TIER_FRACTIONS["semantic"] * max_memory_tokens),
+            )
     window = settings.retrieve_neighbor_turns if neighbor_turns is None else neighbor_turns
-    nearby = (
-        _neighbors(db, selected, window, tenant_id=tenant_id, as_of=as_of_key)
-        if window > 0 else []
-    )
-    context, tokens, nearby = _assemble_tiered(
-        selected, max_memory_tokens - entity_tokens, nearby
-    )
+    with t.stage("neighbors"):
+        nearby = (
+            _neighbors(db, selected, window, tenant_id=tenant_id, as_of=as_of_key)
+            if window > 0 else []
+        )
+    with t.stage("assemble"):
+        context, tokens, nearby = _assemble_tiered(
+            selected, max_memory_tokens - entity_tokens, nearby
+        )
     if entities:
         context = f"{context}\n\n{entities}" if context else entities
         tokens += entity_tokens
 
     # Spaced repetition (§11): refresh the memories actually surfaced (Δt → 0).
     if record_access:
-        reset_access(db, [c.key for c in selected])
+        with t.stage("access"):
+            reset_access(db, [c.key for c in selected])
 
     hits = [
         MemoryHit(text=c.text, score=round(c.fused_score, 6),
