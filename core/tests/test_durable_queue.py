@@ -93,3 +93,25 @@ def test_create_app_selects_durable_backend(
         ctx = {"tenant_id": "dq6", "agent_id": "a", "access_level": "write"}
         res = api.post("/v1/store", json={"content": "durable hello", "ctx": ctx})
         assert res.status_code == 200  # store enqueues onto the durable queue
+
+
+def test_claim_many_leases_the_oldest_free_intents_once(db: StandardDatabase) -> None:
+    q = ArangoQueue(db, lease_seconds=60)
+    for i in range(5):
+        q.enqueue(_intent(f"m{i}", "dq_many"))
+
+    first = q.claim_many(3)
+    assert [c.intent.content for c in first] == ["m0", "m1", "m2"]  # type: ignore[union-attr]
+    assert len(q) == 2  # the three are leased, not pending
+
+    second = q.claim_many(10)
+    assert [c.intent.content for c in second] == ["m3", "m4"]  # type: ignore[union-attr]
+    assert q.claim_many(10) == []  # nothing free while leased
+
+    q.ack_many(first)
+    assert db.collection("write_intents").count() == 2
+    q.ack_many(first)  # acking removed keys is not an error
+    q.ack_many(second)
+    assert db.collection("write_intents").count() == 0
+    assert q.pending_count("dq_many") == 0
+

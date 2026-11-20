@@ -18,6 +18,7 @@ import itertools
 import threading
 import uuid
 from collections import deque
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any, Protocol, cast
@@ -99,7 +100,9 @@ class Claim:
 class WriteQueue(Protocol):
     def enqueue(self, intent: Intent) -> None: ...
     def claim(self) -> Claim | None: ...
+    def claim_many(self, limit: int) -> list[Claim]: ...  # up to `limit`, oldest first
     def ack(self, claim: Claim) -> None: ...
+    def ack_many(self, claims: Sequence[Claim]) -> None: ...
     def nack(self, claim: Claim) -> None: ...
     def __len__(self) -> int: ...  # pending (unclaimed) intents
     def pending_count(self, tenant_id: str) -> int: ...  # not-yet-acked for a tenant
@@ -127,9 +130,24 @@ class InProcessQueue:
             self._inflight[handle] = intent
             return Claim(intent=intent, handle=handle)
 
+    def claim_many(self, limit: int) -> list[Claim]:
+        with self._lock:
+            claims: list[Claim] = []
+            while self._pending and len(claims) < limit:
+                intent = self._pending.popleft()
+                handle = str(next(self._handles))
+                self._inflight[handle] = intent
+                claims.append(Claim(intent=intent, handle=handle))
+            return claims
+
     def ack(self, claim: Claim) -> None:
         with self._lock:
             self._inflight.pop(claim.handle, None)
+
+    def ack_many(self, claims: Sequence[Claim]) -> None:
+        with self._lock:
+            for claim in claims:
+                self._inflight.pop(claim.handle, None)
 
     def nack(self, claim: Claim) -> None:
         """Release a leased intent back to the front of the queue (e.g. on shutdown)."""
@@ -163,6 +181,22 @@ FOR d IN @@coll
   LIMIT 1
   UPDATE d WITH { leased_until: @lease_until } IN @@coll OPTIONS { exclusive: true }
   RETURN NEW
+"""
+
+# Same lease, for a batch: the `limit` oldest free intents in one round trip.
+_CLAIM_MANY = """
+FOR d IN @@coll
+  FILTER d.leased_until == null OR d.leased_until < @now
+  SORT d.enqueued_at
+  LIMIT @limit
+  UPDATE d WITH { leased_until: @lease_until } IN @@coll OPTIONS { exclusive: true }
+  RETURN NEW
+"""
+
+# Ack a batch in one round trip; an already-removed key is not an error (acks are idempotent).
+_ACK_MANY = """
+FOR k IN @keys
+  REMOVE k IN @@coll OPTIONS { ignoreErrors: true }
 """
 
 _PENDING = """
@@ -220,9 +254,31 @@ class ArangoQueue:
         doc = rows[0]
         return Claim(intent=_to_intent(doc["kind"], doc["intent"]), handle=doc["_key"])
 
+    def claim_many(self, limit: int) -> list[Claim]:
+        now = utcnow_iso()
+        lease_until = (
+            datetime.fromisoformat(now) + timedelta(seconds=self._lease_seconds)
+        ).isoformat()
+        bind: dict[str, Any] = {
+            "@coll": WRITE_QUEUE_COLLECTION, "now": now, "lease_until": lease_until,
+            "limit": limit,
+        }
+        with self._lock:
+            rows = list(cast(Cursor, self._db.aql.execute(_CLAIM_MANY, bind_vars=bind)))
+        return [Claim(intent=_to_intent(d["kind"], d["intent"]), handle=d["_key"]) for d in rows]
+
     def ack(self, claim: Claim) -> None:
         with self._lock:
             self._db.collection(WRITE_QUEUE_COLLECTION).delete(claim.handle, ignore_missing=True)
+
+    def ack_many(self, claims: Sequence[Claim]) -> None:
+        if not claims:
+            return
+        bind: dict[str, Any] = {
+            "@coll": WRITE_QUEUE_COLLECTION, "keys": [c.handle for c in claims],
+        }
+        with self._lock:
+            self._db.aql.execute(_ACK_MANY, bind_vars=bind)
 
     def nack(self, claim: Claim) -> None:
         with self._lock:

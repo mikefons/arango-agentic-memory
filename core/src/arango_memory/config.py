@@ -330,6 +330,10 @@ class Settings(BaseSettings):
     write_queue_backend: Literal["memory", "arango"] = "memory"
     # How long a claimed intent stays leased before it's reclaimable (crash recovery).
     write_lease_seconds: int = Field(default=60, ge=1)
+    # WQ-1b: how many queued writes a worker commits per round (one queue claim, one bulk
+    # `store_many` per tenant+agent group, one ack). 1 = one `store()` per intent (the default).
+    # Higher cuts the DB round trips per write (~25 → a handful per batch); see ROADMAP WQ-1.
+    write_batch_size: int = Field(default=1, ge=1, le=256)
     # Abuse limits (DESIGN.md §17). Request-size cap is always on (a memory turn is
     # far smaller than 1 MiB); rate limiting is opt-in (0 = off — the dev/CI default).
     max_request_bytes: int = Field(default=1_048_576, ge=1)
