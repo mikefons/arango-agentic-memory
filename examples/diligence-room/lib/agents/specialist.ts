@@ -15,10 +15,9 @@ import type { SpecialistConfig, SpecialistRun, ExtractFn, StoreClaimFn } from ".
 // DILIGENCE_EXTRACT_CONCURRENCY; keep it modest so a big data room doesn't trip provider limits.
 const EXTRACT_CONCURRENCY = Number(process.env.DILIGENCE_EXTRACT_CONCURRENCY ?? 5);
 
-// Claim writes are committed synchronously by the live wiring, ~2.6s each on the hosted core, so
-// a serial loop over ~30 claims was the long pole. Write them with bounded concurrency; the core
-// upserts entities by natural key and commits are idempotency-keyed.
-// Override with DILIGENCE_STORE_CONCURRENCY.
+// Claim writes run with bounded concurrency. Enqueueing is cheap, but with the opt-in sync
+// writes (DILIGENCE_SYNC_WRITES=1) each store blocks on a commit, so a serial loop would be the
+// long pole. Override with DILIGENCE_STORE_CONCURRENCY.
 const STORE_CONCURRENCY = Number(process.env.DILIGENCE_STORE_CONCURRENCY ?? 4);
 
 export async function runSpecialist(

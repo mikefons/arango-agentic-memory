@@ -1595,9 +1595,11 @@ The durable write worker (`ingest/worker.py`) is one daemon thread, committing o
 time. On the hosted core (Railway + ArangoGraph) a write takes about 2.6 s at p50, so a burst of
 ~130 async claims takes minutes to drain. The Diligence Room hit this on 2026-11-20: after its
 specialists were parallelised, both `/v1/flush` barriers timed out with the queue still full and the
-memo's `prime` call timed out against the busy core. The demo now writes its claims synchronously
-with bounded concurrency, which works around it but leaves the async path slow for every other
-client.
+memo's `prime` call timed out against the busy core. Writing the claims synchronously instead
+(`DILIGENCE_SYNC_WRITES=1`) made it worse: every sync store forces an ArangoSearch view sync, and 16
+concurrent ones saturated the core, so the specialists and the red-team all timed out. The demo
+stays on the async queue, with a longer `prime` timeout and one retry, and the async path is slow
+for every other client too.
 
 Scope: a `write_worker_concurrency` setting and N worker threads (or a small pool) draining the
 queue, each with its own DB connection. Open questions: ordering (`turn_index`-sensitive writes
