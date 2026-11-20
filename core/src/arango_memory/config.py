@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # Access scopes, ordered least → most privileged (MA-7). `consolidate` is a superset
@@ -26,6 +26,17 @@ class ApiKeyEntry(BaseModel):
     tenant_id: str
     scope: Scope = "read"
     agent_ids: list[str] | None = None
+    # A delegate key (MCP-1) is a trusted service's credential — e.g. the MCP server in OAuth
+    # mode — that acts *on behalf of* a caller it has already authenticated, asserting that
+    # caller's identity in `X-On-Behalf-Of-*` headers. It must always assert; its `tenant_id`
+    # (or "*" for any tenant), `scope` and `agent_ids` cap what it may assert.
+    delegate: bool = False
+
+    @model_validator(mode="after")
+    def _wildcard_tenant_needs_delegate(self) -> ApiKeyEntry:
+        if self.tenant_id == "*" and not self.delegate:
+            raise ValueError('tenant_id "*" is only valid on a delegate key')
+        return self
 
 
 class Settings(BaseSettings):
