@@ -8,7 +8,7 @@
 import { generateObject, type LanguageModel } from "ai";
 import { z } from "zod";
 import type { SourceDoc } from "../fixtures/types";
-import { agentSignal } from "../model";
+import { agentCallOptions } from "../model";
 import type { ExtractFn, Triple } from "./types";
 
 /** Cap claims per document so a live run stays lean — a bloated claim pool slows the red-team's
@@ -44,7 +44,7 @@ export function makeExtractor(model: LanguageModel): ExtractFn {
       model,
       schema: ClaimSchema,
       system: SYSTEM,
-      abortSignal: agentSignal(),
+      ...agentCallOptions(),
       prompt:
         `Mandate: ${mandate}\n\n` +
         `Document (${doc.type}, source: ${doc.source}, as of ${doc.as_of}):\n${doc.text}\n\n` +

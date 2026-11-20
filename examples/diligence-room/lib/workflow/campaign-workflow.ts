@@ -34,19 +34,29 @@ function msg(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
 }
 
+/** Emit a step event with its wall-clock duration, and log it so Vercel's runtime logs show
+ *  where a live run spends its time. */
+async function emitStep(name: string, status: "ok" | "error", t0: number, detail?: string): Promise<void> {
+  const ms = Date.now() - t0;
+  console.log(`[campaign] ${name} ${status} ${ms}ms${detail ? ` — ${detail}` : ""}`);
+  await emit({ type: "step", step: { name, status, detail, ms } });
+}
+
 async function specialistStep(roomId: string, config: SpecialistConfig): Promise<void> {
   "use step";
+  const t0 = Date.now();
   try {
     const { claimsWritten } = await liveSpecialist(roomId, config);
-    await emit({ type: "step", step: { name: `specialist:${config.id}`, status: "ok", detail: `${claimsWritten} claim(s)` } });
+    await emitStep(`specialist:${config.id}`, "ok", t0, `${claimsWritten} claim(s)`);
   } catch (e) {
     // A specialist failure is non-fatal (matches runCampaign) — record it and carry on.
-    await emit({ type: "step", step: { name: `specialist:${config.id}`, status: "error", detail: msg(e) } });
+    await emitStep(`specialist:${config.id}`, "error", t0, msg(e));
   }
 }
 
 async function flushStep(roomId: string, phase: "flush:specialists" | "flush:redteam"): Promise<void> {
   "use step";
+  const t0 = Date.now();
   // Best-effort barrier: the flush is a read-your-writes convenience, not a hard gate. A slow or
   // wedged flush must never stall the durable run — bound it, and advance regardless.
   try {
@@ -54,38 +64,41 @@ async function flushStep(roomId: string, phase: "flush:specialists" | "flush:red
   } catch {
     // queue still draining or the call timed out — the next phase reads what has landed
   }
-  await emit({ type: "step", step: { name: phase, status: "ok" } });
+  await emitStep(phase, "ok", t0);
 }
 
 async function consolidateStep(roomId: string): Promise<void> {
   "use step";
+  const t0 = Date.now();
   await liveConsolidate(roomId);
-  await emit({ type: "step", step: { name: "consolidate", status: "ok" } });
+  await emitStep("consolidate", "ok", t0);
 }
 
 /** Cross-examine shared memory; emit the disputes. Returns whether the phase succeeded. */
 async function redTeamStep(roomId: string): Promise<boolean> {
   "use step";
+  const t0 = Date.now();
   try {
     const { disputes } = await liveRedTeam(roomId);
-    await emit({ type: "step", step: { name: "redteam", status: "ok", detail: `${disputes.length} dispute(s)` } });
+    await emitStep("redteam", "ok", t0, `${disputes.length} dispute(s)`);
     await emit({ type: "disputes", disputes });
     return true;
   } catch (e) {
-    await emit({ type: "step", step: { name: "redteam", status: "error", detail: msg(e) } });
+    await emitStep("redteam", "error", t0, msg(e));
     return false;
   }
 }
 
 async function synthesisStep(roomId: string): Promise<void> {
   "use step";
+  const t0 = Date.now();
   try {
     const memo = await liveSynthesis(roomId);
-    await emit({ type: "step", step: { name: "synthesis", status: "ok", detail: `${memo.findings.length} finding(s) → ${memo.recommendation}` } });
+    await emitStep("synthesis", "ok", t0, `${memo.findings.length} finding(s) → ${memo.recommendation}`);
     await emit({ type: "memo", memo });
   } catch (e) {
     // Non-fatal: a slow/failed memo shouldn't stall the run — record it and still finish.
-    await emit({ type: "step", step: { name: "synthesis", status: "error", detail: msg(e) } });
+    await emitStep("synthesis", "error", t0, msg(e));
   }
 }
 
@@ -98,9 +111,9 @@ async function finishStep(ok: boolean): Promise<void> {
 export async function runCampaignWorkflow(roomId: string): Promise<{ ok: boolean }> {
   "use workflow";
 
-  for (const s of specialists()) {
-    await specialistStep(roomId, s);
-  }
+  // The four specialists read disjoint slices and write under their own agent ids, so they run
+  // in parallel; the flush barrier below joins them before anyone reads shared memory.
+  await Promise.all(specialists().map((s) => specialistStep(roomId, s)));
   await flushStep(roomId, "flush:specialists");
   await consolidateStep(roomId);
 
