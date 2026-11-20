@@ -599,6 +599,79 @@ body {
   width: 0.9rem;
 }
 
+/* ── "Memo ready" notice — the memo never opens by itself ── */
+.memo-notice {
+  position: fixed;
+  left: 1rem;
+  right: 1rem;
+  bottom: 1.4rem;
+  margin-inline: auto;
+  width: fit-content;
+  z-index: 30; /* above the page, below the memo slide-over (40) */
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap; /* on a very narrow screen the button drops below the text */
+  gap: 0.6rem 0.8rem;
+  max-width: min(560px, calc(100vw - 2rem));
+  padding: 0.7rem 0.8rem 0.7rem 1rem;
+  background: var(--panel);
+  border: 1px solid color-mix(in srgb, var(--accent) 55%, var(--line));
+  border-radius: 12px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5);
+  animation: notice-in 0.3s cubic-bezier(0.22, 1, 0.36, 1);
+}
+@keyframes notice-in {
+  from { transform: translateY(12px); opacity: 0; }
+}
+.memo-notice-dot {
+  flex: none;
+  width: 0.6rem;
+  height: 0.6rem;
+  border-radius: 999px;
+  background: var(--faint);
+}
+.memo-notice-ok { background: var(--ok); }
+.memo-notice-warn { background: var(--down); }
+.memo-notice-down { background: #e5675f; }
+.memo-notice-text {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  flex: 1 1 9rem;
+  min-width: 0;
+  font-size: 0.82rem;
+}
+.memo-notice-text b {
+  white-space: nowrap;
+}
+.memo-notice-text span {
+  color: var(--muted);
+  font-size: 0.74rem;
+}
+.memo-notice-open {
+  flex: none;
+  padding: 0.38rem 0.8rem;
+  border: 1px solid var(--accent);
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  color: var(--accent);
+  font: inherit;
+  font-size: 0.82rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+.memo-notice-x {
+  flex: none;
+  border: 0;
+  background: transparent;
+  color: var(--faint);
+  font-size: 1.1rem;
+  line-height: 1;
+  padding: 0.2rem 0.35rem;
+  cursor: pointer;
+}
+.memo-notice-x:hover { color: var(--fg); }
+
 /* ── Memo slide-over (DR-3e) ── */
 .memo-overlay {
   position: fixed;

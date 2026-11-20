@@ -140,3 +140,12 @@ export function reduceCampaign(state: WarState, ev: CampaignEvent): WarState {
       return state;
   }
 }
+
+/**
+ * Whether to show the "memo ready" notice: the run finished with a memo, and the viewer has
+ * neither opened it nor dismissed the notice. The memo never opens by itself — it would cover
+ * the contradictions the viewer is still reading — so this notice is how they find out it's done.
+ */
+export function memoNoticeVisible(state: WarState, memoOpen: boolean, dismissed: boolean): boolean {
+  return state.run === "done" && Boolean(state.memo) && !memoOpen && !dismissed;
+}
