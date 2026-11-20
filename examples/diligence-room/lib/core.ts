@@ -119,6 +119,11 @@ export function gatherClaims(roomId: string, query: string, k = 60): Promise<Ret
   return retrieve(roomId, query, "redteam", [...SPECIALIST_AGENTS, SHARED_AGENT], k);
 }
 
+/** One-line outcome of a flush barrier, for the campaign log: drained, or how much was left. */
+export function flushDetail(r: FlushResult): string {
+  return r.status === "flushed" ? "drained" : `${r.status} — ${r.pending} write(s) still queued`;
+}
+
 /** Read-your-writes barrier for the Room (MA-1): block until queued writes land. */
 export function flush(roomId: string, agentId: string, timeoutMs = 8000): Promise<FlushResult> {
   return coreFetch<FlushResult>("/v1/flush", {

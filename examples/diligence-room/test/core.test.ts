@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { normalizeCoreUrl, resetRoom, roomTenant } from "../lib/core";
+import { flushDetail, normalizeCoreUrl, resetRoom, roomTenant } from "../lib/core";
 
 describe("normalizeCoreUrl", () => {
   it("strips trailing slashes so paths never double up", () => {
@@ -52,5 +52,12 @@ describe("resetRoom", () => {
     const body = JSON.parse(init?.body as string);
     expect(body.tenant_id).toBe("room:northwind-robotics"); // never a bare tenant / another demo
     expect(body.access_level).toBe("write");
+  });
+});
+
+describe("flushDetail", () => {
+  it("reports a drained queue, or how many writes the barrier gave up on", () => {
+    expect(flushDetail({ status: "flushed", pending: 0 })).toBe("drained");
+    expect(flushDetail({ status: "timeout", pending: 42 })).toBe("timeout — 42 write(s) still queued");
   });
 });

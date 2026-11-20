@@ -16,6 +16,7 @@ import {
   liveSynthesis,
 } from "../agents/live";
 import type { SpecialistConfig } from "../agents/types";
+import { flushDetail } from "../core";
 import type { CampaignEvent } from "../room-state";
 
 const encoder = new TextEncoder();
@@ -58,13 +59,15 @@ async function flushStep(roomId: string, phase: "flush:specialists" | "flush:red
   "use step";
   const t0 = Date.now();
   // Best-effort barrier: the flush is a read-your-writes convenience, not a hard gate. A slow or
-  // wedged flush must never stall the durable run — bound it, and advance regardless.
+  // wedged flush must never stall the durable run — bound it, and advance regardless. The result
+  // says whether the queue actually drained, so a run's logs show if the next phase read partial data.
+  let detail: string;
   try {
-    await liveFlush(roomId);
-  } catch {
-    // queue still draining or the call timed out — the next phase reads what has landed
+    detail = flushDetail(await liveFlush(roomId));
+  } catch (e) {
+    detail = `error — ${msg(e)}`;
   }
-  await emitStep(phase, "ok", t0);
+  await emitStep(phase, "ok", t0, detail);
 }
 
 async function consolidateStep(roomId: string): Promise<void> {
