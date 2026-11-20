@@ -7,7 +7,7 @@
 
 import type { RoleId } from "./agents-meta";
 import type { Phase, WarState } from "./campaign-state";
-import { PHASES } from "./campaign-state";
+import { PHASES, PHASE_LABELS } from "./campaign-state";
 
 export interface Narration {
   /** The main sentence — what's happening now. */
@@ -102,9 +102,14 @@ export function narrate(state: WarState): Narration {
   }
 
   if (state.run === "error") {
+    // Say why, not just that it stopped: the first failed phase's message (e.g. an empty room).
+    const failed = PHASES.find((p) => state.phases[p] === "error");
+    const why = failed ? state.errors[failed] : undefined;
     return {
       line: "The campaign stopped early.",
-      note: "A step failed — check the pipeline for the phase that errored.",
+      note: why
+        ? `${PHASE_LABELS[failed as Phase]} failed: ${why}`
+        : "A step failed — check the pipeline for the phase that errored.",
       agent: null,
       step: PHASES.filter((p) => state.phases[p] === "done").length,
       total,

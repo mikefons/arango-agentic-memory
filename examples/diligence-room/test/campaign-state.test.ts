@@ -88,3 +88,15 @@ describe("memoNoticeVisible — the memo never opens by itself", () => {
     expect(memoNoticeVisible(noMemo, false, false)).toBe(false);
   });
 });
+
+describe("reduceCampaign — failure messages", () => {
+  it("keeps the error detail of a failed phase", () => {
+    let s = initialWarState();
+    s = reduceCampaign(s, {
+      type: "step",
+      step: { name: "redteam", status: "error", detail: "no claims in shared memory" },
+    });
+    expect(s.phases.redteam).toBe("error");
+    expect(s.errors.redteam).toBe("no claims in shared memory");
+  });
+});

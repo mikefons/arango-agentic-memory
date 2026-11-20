@@ -79,6 +79,10 @@ export function makeMemoWriter(model: LanguageModel): MemoWriter {
 
 /** Run synthesis: turn a primed briefing into the memo. */
 export async function runSynthesis(briefing: string, write: MemoWriter): Promise<Memo> {
+  // A memo written from an empty briefing is invented. Fail the step instead.
+  if (!briefing.trim()) {
+    throw new Error("the team briefing is empty — shared memory had nothing to write a memo from");
+  }
   return write(briefing);
 }
 
