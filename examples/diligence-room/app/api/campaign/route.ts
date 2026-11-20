@@ -30,7 +30,7 @@ export async function POST(req: Request) {
     { roomId, specialists: specialists() },
     {
       runSpecialist: (config) => liveSpecialist(roomId, config),
-      flush: () => liveFlush(roomId),
+      flush: async () => void (await liveFlush(roomId)),
       consolidate: () => liveConsolidate(roomId),
       runRedTeam: () => liveRedTeam(roomId),
       runSynthesis: () => liveSynthesis(roomId),

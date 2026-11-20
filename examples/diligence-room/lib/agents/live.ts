@@ -16,7 +16,7 @@ import {
   salience,
   storeClaim,
 } from "../core";
-import type { Claim } from "../types";
+import type { Claim, FlushResult } from "../types";
 import type { SpecialistConfig } from "./types";
 import { makeExtractor } from "./extract";
 import { runSpecialist } from "./specialist";
@@ -112,6 +112,6 @@ export async function liveSynthesis(roomId: string): Promise<Memo> {
 
 /** The read-your-writes barrier bound to a Room — generous timeout so the queue actually
  *  drains (all extraction done) before the next phase reads. */
-export function liveFlush(roomId: string): Promise<void> {
-  return flush(roomId, "synthesis", FLUSH_TIMEOUT_MS).then(() => undefined);
+export function liveFlush(roomId: string): Promise<FlushResult> {
+  return flush(roomId, "synthesis", FLUSH_TIMEOUT_MS);
 }
