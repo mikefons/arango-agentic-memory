@@ -14,7 +14,7 @@
 
 import { generateObject, type LanguageModel } from "ai";
 import { z } from "zod";
-import { agentSignal } from "../model";
+import { agentCallOptions } from "../model";
 
 /** The kinds of dispute the red-team can raise (mirror the planted-defect kinds). */
 export type DisputeKind =
@@ -92,7 +92,7 @@ export function makeDisputeFinder(model: LanguageModel): DisputeFinder {
         model,
         schema: DisputeSchema,
         system: SYSTEM,
-        abortSignal: agentSignal(),
+        ...agentCallOptions(),
         // Cap the structured output so a long disputes list can't truncate mid-JSON — a truncated
         // response makes generateObject throw NoObjectGeneratedError and fail the whole phase.
         maxOutputTokens: 4096,

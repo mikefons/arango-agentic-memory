@@ -25,6 +25,18 @@ export function agentSignal(): AbortSignal {
   return AbortSignal.timeout(AGENT_TIMEOUT_MS);
 }
 
+/**
+ * Per-call options shared by every agent LLM call: the timeout, and extended thinking off.
+ * Haiku 5.5 thinks by default; claim extraction, dispute finding and the memo are structured
+ * outputs that don't need it, and it adds latency to each call.
+ */
+export function agentCallOptions() {
+  return {
+    abortSignal: agentSignal(),
+    providerOptions: { anthropic: { thinking: { type: "disabled" } } },
+  };
+}
+
 export function chooseProvider(env: {
   AI_GATEWAY_API_KEY?: string;
   ANTHROPIC_API_KEY?: string;

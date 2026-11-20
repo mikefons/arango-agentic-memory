@@ -19,6 +19,8 @@ export interface CampaignStep {
   name: string;
   status: StepStatus;
   detail?: string;
+  /** Wall-clock duration of the step, set by the durable workflow (live runs only). */
+  ms?: number;
 }
 
 export interface CampaignResult {
