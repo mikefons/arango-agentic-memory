@@ -142,6 +142,7 @@ a real generator; CI gates the *deterministic golden run* (DR-5a) with a recorde
 | 16 | DR-5b | Docs (this file → run guide) + deploy config (Fluid + core container) | S | all |
 | 17 | DR-5c | *(stretch)* `eve` variant — recast specialists as agent directories | M–L | DR-1b |
 | 18 | DR-5d | *(stretch)* Real connectors (web search / EDGAR) + continuous Cron re-investigation | L | DR-2a |
+| 19 | DR-7 | Live-run latency: split the red-team and synthesis steps into retrieval vs LLM time, then cut the larger share (scoped below) | M | DR-2a |
 
 **Recommended sequence:** DR-0 → one specialist (DR-1a) → the red-team + synthesis (DR-1c/d)
 on a *sequential* runner first (prove the thesis fast), then wrap in Workflows (DR-2), then
@@ -170,6 +171,87 @@ The demo is feature-complete. Run guide: [`examples/diligence-room/README.md`](.
 Isolation held throughout: **0 files changed under `examples/dungeon`** across every DR PR.
 
 ---
+
+### DR-7 — Live-run latency: the retrieval and LLM stages (scope)
+
+**Where a live run stands (2026-11-20, hosted core, after #284–#292).** One run takes about 58 s
+from the first specialist to the memo, down from over 5 minutes:
+
+| step | time | what is in it |
+|---|---|---|
+| specialists (4 in parallel) | 3.8 s | 23 docs, 5 extractions in flight per specialist |
+| flush:specialists | 14.8 s | the core drains ~104 queued claims (write path, see ROADMAP WQ-1) |
+| consolidate | 0.6 s | salience + communities |
+| red-team | 12.6 s | `gatherClaims` (core retrieve, k=24) **plus** one `generateObject` call |
+| flush:redteam | 4.2 s | |
+| synthesis | 20.0 s | `prime` (core retrieve, k=40) **plus** one `generateObject` call |
+
+The red-team and synthesis steps are about 33 s, over half the run, and each is two things in a
+row: a core read, then an LLM call. **We do not yet know the split.** The core's `/health`
+reported `retrieval.lite` with only two samples (p50 4.9 s, p95 9.7 s) for that run. The two are
+probably the red-team's gather and the synthesis `prime`, which would put about 15 s of the 33 s
+in core retrieval and only about 18 s in LLM generation, but that is an inference from two
+samples, not a measurement. An idle core answered `retrieval.lite` at about 1.2 s earlier, so
+retrieval may be slower here because it runs right after the write burst. Do not pick a fix
+before the split is measured.
+
+**Step 0 — measure (S, one small PR).** In the workflow steps, log the stages separately:
+- red-team: `gather` ms (core retrieve), LLM ms, input and output tokens, finish reason,
+  number of disputes, and the record-writes ms;
+- synthesis: `prime` ms, LLM ms, input and output tokens, finish reason, findings count;
+- core side: `retrieve`/`prime` already feed `/health` `retrieval.*`; add per-stage timers to the
+  retrieve path the way `write.*` has them (#289) if the core read is the larger share.
+Run it three times on a reset room and take medians. Output tokens divided by LLM ms gives the
+generation speed; if that is roughly constant, output length is what costs time.
+
+**Candidate levers, by which share Step 0 says is large**
+
+*If the LLM calls dominate (output-bound):*
+1. **Index-based evidence in the memo.** The memo's `evidence` arrays are the longest part of the
+   output (each finding repeats claim text). Number the claims in the briefing, have the model
+   output indices (`[3]`, `[7]`), and expand them to the claim text on our side. Far fewer output
+   tokens, and the evidence chains stop being able to quote a claim that is not in memory, which
+   is a correctness gain for the demo's central promise. Quality risk: low, but check the memo
+   still reads well with the expanded text.
+2. **Parallel red-team by dispute kind.** One call per kind (`contradiction`, `temporal_drift`,
+   `reliability`, `related_party`, `stale`), each over the **full** claim pool and reporting only
+   its kind, run together; then merge and de-duplicate. Wall time is the slowest call, not the sum,
+   and each sees every specialist's claims, so cross-specialist visibility, the point of the
+   red-team, is kept. Costs about 5x input tokens (input is the cheap, fast side) and needs a
+   de-duplication pass for a defect reported under two kinds.
+3. **Tighter schemas.** One-sentence summaries, a cap on findings, `maxOutputTokens` set from the
+   measured output. Cheapest, but cuts content, so it needs the coverage check below.
+
+*If core retrieval dominates:*
+4. **Why is `retrieve` 5–10 s here?** Measure with timers first. Suspects: contention with the
+   write drain just before it, the cost of the reranker or graph arm at k=40, and view-sync lag
+   after a burst of writes. Fixes depend on the answer (for example, lower k for the briefing, or
+   skip the reranker for `prime`).
+5. **Overlap the reads.** `prime` for synthesis needs the red-team's findings, but the specialists'
+   half of the briefing does not, so it could be fetched while the red-team runs. Changes the
+   "synthesis inherits the red-team's reasoning" story, so only if the read share is large.
+
+*Either way (perceived speed, not total time):*
+6. **Stream the structured output** (`streamObject`) so disputes and memo sections appear as they
+   are generated. Does not shorten the run; makes it feel shorter. Lowest priority now that the
+   memo no longer opens by itself and the viewer reads the contradictions while synthesis runs.
+
+Not worth doing: a different model (Haiku 5.5 is already the fast one, and extended thinking is
+already off for these calls) and anything on the write path (WQ-1 is done).
+
+**Guarding quality.** Any lever changes model input or output, so compare before and after on the
+same reset room, at least 5 runs each: (a) planted-defect coverage using the existing
+`goldenCoverage(DEFECTS, disputes)` from `lib/golden-oracle.ts` on the live disputes (it matches
+kind and subject, so a dropped dispute type shows up immediately); (b) the memo recommendation and
+finding count; (c) wall time per step from the new logs. A lever that drops coverage below the
+current baseline is rejected whatever it saves.
+
+**Acceptance.** The median live run is at most about 40 s (from 58 s), with planted-defect
+coverage no lower than the baseline over 5 runs, and the per-stage log lines in place so the next
+regression is visible. If Step 0 shows the split is close to even, expect a smaller win and say so.
+
+**Rough size.** Step 0: S. Lever 1 (index-based evidence): S–M. Lever 2 (parallel red-team): M.
+Lever 4 (core retrieval): S–M, depends on the finding.
 
 ### DR-0a — Scaffold (the first step, detailed)
 
