@@ -1591,18 +1591,96 @@ fusion. Only active when an LLM or GLiREL extractor is configured, so the keyles
 
 ### WQ-1 — Multi-worker write queue
 
-The durable write worker (`ingest/worker.py`) is one daemon thread, committing one intent at a
-time. On the hosted core (Railway + ArangoGraph) a write takes about 2.6 s at p50, so a burst of
-~130 async claims takes minutes to drain. The Diligence Room hit this on 2026-11-20: after its
-specialists were parallelised, both `/v1/flush` barriers timed out with the queue still full and the
-memo's `prime` call timed out against the busy core. Writing the claims synchronously instead
-(`DILIGENCE_SYNC_WRITES=1`) made it worse: every sync store forces an ArangoSearch view sync, and 16
-concurrent ones saturated the core, so the specialists and the red-team all timed out. The demo
-stays on the async queue, with a longer `prime` timeout and one retry, and the async path is slow
-for every other client too.
+**Problem.** The durable write worker (`ingest/worker.py`) is one daemon thread that commits one
+intent at a time. On the hosted core (Railway + ArangoGraph) a commit takes about 2.6 s at p50
+(1.5 s on a quiet core), so a burst of N async writes takes about N × 2 s to drain. Every `store`
+caller that does not pass `sync: true` pays this, and `/v1/flush` can only wait for it.
 
-Scope: a `write_worker_concurrency` setting and N worker threads (or a small pool) draining the
-queue, each with its own DB connection. Open questions: ordering (`turn_index`-sensitive writes
-for the same tenant), concurrent entity upserts under the same tenant, and the `arango` queue
-backend's claim/lease semantics across threads. Test with a burst of ~200 writes against a
-remote DB and check the flush time and entity counts against the single-worker run.
+**Evidence (Diligence Room, 2026-11-20).** One live run enqueues about 130 claims in under 4 s.
+Both flush barriers hit their 30 s cap with the queue still full, so the red-team read partial
+data, and the memo's `prime` call timed out against a busy core. The flush steps are 60 of the
+run's ~90 s. Writing the claims synchronously instead (`sync: true`, 4 in flight per agent) made
+it worse: each sync store also forces an ArangoSearch view sync, and ~16 in flight saturated the
+core (`/health` itself timed out; the specialists and red-team all failed). So "more concurrency" is
+not free, and the number has to be measured, not assumed.
+
+**What the code already gives us**
+- `ArangoQueue.claim` is one AQL `UPDATE … OPTIONS { exclusive: true }` that leases the oldest free
+  intent, so two workers cannot take the same one. `InProcessQueue` is lock-protected.
+- Commits are idempotency-keyed (`idx_idempotency` unique index), so redelivery after a lease
+  expiry is safe.
+- `pending_count(tenant)` counts every un-acked intent, so the flush barrier is already correct
+  with any number of workers.
+- Entities and steps have unique natural-key indexes (`idx_entity_natural_key`,
+  `idx_step_natural_key`), so concurrent upserts converge on one record.
+
+**What stops us from just starting N threads**
+1. **One DB handle.** `ArangoQueue` shares one connection between request threads (enqueue) and
+   the worker, serialised by `self._lock`; `WriteWorker` holds one more. N workers need N
+   connections (a python-arango handle is not assumed thread-safe), and
+   the queue's lock must not serialise the long `commit` calls. It only guards the short queue ops
+   today, which is fine, but each worker should own its connection.
+2. **Idle polling.** The loop polls every 50 ms when empty, which on the Arango backend is an AQL
+   claim query 20 times a second per worker. N workers multiply that on an idle core. Use a
+   condition variable / event for the in-process queue and exponential poll back-off for the Arango
+   queue.
+3. **Order is no longer FIFO per tenant.** What depends on commit order today:
+   - `StepIntent.prev_step_key` chains a procedural trace; steps for one agent must commit in
+     order, or the chain links to a step that does not exist yet.
+   - Full mode: `_track_session_topic` is a read-modify-write on the `sessions` doc, and
+     `_enforce_working_capacity` sorts by `created_at`. Concurrent turns of one session race.
+   - Lite mode (the default) has neither, so it is safe to parallelise first.
+   Ordering fix: shard workers by `(tenant_id, agent_id)` (hash to a worker) so one agent's writes
+   stay serial while different agents run in parallel. That alone covers the Diligence Room (four
+   specialists plus the red-team) and keeps step chains and sessions correct. A single agent's
+   burst is still serial, which is the case batching (below) addresses.
+4. **Unique-index conflicts.** Two workers upserting the same new entity can hit a unique-key
+   conflict on one of them. `process()` already retries with backoff and dead-letters after
+   `write_max_retries`, so the loser retries and converges. This needs a test, and the dead-letter
+   count is the acceptance signal.
+5. **Lease length.** `write_lease_seconds` is 60 s. A commit must always finish well inside it, or
+   a second worker takes the intent while the first is still running (harmless but wasteful). Fine
+   at 2.6 s, but worth alerting on commits over 30 s.
+6. **Shared resources.** Workers compete with request threads for the DB connection pool, the
+   embedding provider's rate limit, and (with a CPU extractor such as spaCy) the GIL. The sync
+   experiment above is the warning.
+
+**Step 0 — find where the 2.6 s goes (before writing any code).** `store()` does an episode insert,
+an embedding call, a memory insert, then `write_entities` (extraction plus entity resolution reads,
+upserts and edges). That is roughly 6–12 round trips to ArangoGraph plus 1–2 embedding calls. Time
+each stage on the hosted core for ~30 writes. If the embedding call dominates, batching embeddings
+beats threads. If DB round trips dominate, threads help until the DB pool saturates.
+
+**Design.**
+- **WQ-1a — worker pool.** `WRITE_WORKER_CONCURRENCY` (default 1, so nothing changes until it is
+  set). N threads, each with its own connection, routed by a stable hash of
+  `(tenant_id, agent_id)` so per-agent order holds. `stop()` joins all threads and releases any
+  leased intents (`nack`).
+- **WQ-1b — batch commit (optional, if Step 0 says so).** A worker claims up to K intents for the
+  same agent, embeds them in one call, and commits through the existing batched path
+  (`write_entities_many`, IN-2/IN-6). This helps the single-agent burst that sharding cannot, and it
+  cuts embedding calls K-fold.
+- **Observability.** Gauges for queue depth, oldest-intent age and worker utilisation on `/health`;
+  a per-commit duration histogram (the existing `write` latency already covers part of this). The
+  flush response already returns `pending`; the Diligence Room logs it once #287 merges.
+
+**Expected effect (estimate, not measured).** At 2.6 s per write, 130 claims take about 340 s on one
+worker. With four agents sharded across four workers that is about 85 s. With eight workers or
+batching, 30–45 s, bounded by the DB and the embedding provider and not by threads. A 30 s flush
+cap then mostly drains.
+
+**Acceptance**
+1. A burst of 200 writes from 4 agents against the hosted topology drains in under 60 s with
+   `WRITE_WORKER_CONCURRENCY=4`, and `/health` stays responsive (under 2 s) while it drains.
+2. Entity, edge and memory counts equal a single-worker run of the same burst; zero dead letters.
+3. Per-agent order holds: a step chain written as A→B→C never has a dangling `prev_step_key`.
+4. Default 1 behaves exactly as today (existing worker tests pass unchanged).
+5. Unit tests: sharded routing is stable; two workers never commit the same intent; shutdown
+   releases leased intents; an injected unique-key conflict retries and converges.
+
+**Rollout.** Ship with the default at 1. Set it to 4 on the Railway core, run the Diligence Room
+live, and read the flush log lines (`drained` or `N still queued`) and the step timings. Remove the
+demo's flush-cap workarounds only after that run is clean.
+
+**Size.** M for WQ-1a (about 250 lines plus tests), plus S for the Step 0 profiling. WQ-1b is a
+separate M and only if the profile justifies it.
