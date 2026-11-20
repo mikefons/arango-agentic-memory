@@ -15,6 +15,7 @@
 import { generateObject, type LanguageModel } from "ai";
 import { z } from "zod";
 import { mapLimit } from "../concurrency";
+import { llmStats, type OnLlmCall } from "./llm-stats";
 import { agentCallOptions } from "../model";
 
 /** The kinds of dispute the red-team can raise (mirror the planted-defect kinds). */
@@ -83,13 +84,14 @@ const SYSTEM =
   "your confidence. Do not invent facts.";
 
 /** Build a DisputeFinder bound to a model. */
-export function makeDisputeFinder(model: LanguageModel): DisputeFinder {
+export function makeDisputeFinder(model: LanguageModel, onCall?: OnLlmCall): DisputeFinder {
   return async (claims: ClaimRecord[]): Promise<Dispute[]> => {
     const rendered = claims
       .map((c, i) => `${i + 1}. [${c.agent_id ?? "?"}] ${c.text}`)
       .join("\n");
     try {
-      const { object } = await generateObject({
+      const started = Date.now();
+      const result = await generateObject({
         model,
         schema: DisputeSchema,
         system: SYSTEM,
@@ -99,7 +101,8 @@ export function makeDisputeFinder(model: LanguageModel): DisputeFinder {
         maxOutputTokens: 4096,
         prompt: `Claims in shared memory:\n${rendered}\n\nFind the disputes.`,
       });
-      return object.disputes;
+      onCall?.(llmStats(Date.now() - started, result));
+      return result.object.disputes;
     } catch (err) {
       // The red-team is one big structured-output call (small model, whole claim pool, 60s abort) —
       // the campaign's most fragile step. Degrade instead of hard-failing: log the real cause
