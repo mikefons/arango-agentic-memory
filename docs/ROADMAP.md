@@ -1687,9 +1687,18 @@ helps a single agent's burst, which sharding cannot. **So WQ-1b goes first.**
   the bulk graph pass (DESIGN §8 / `write_entities_many`): semantic dedup of two differently named
   but similar **new** entities inside one batch is left to consolidation, and the edge weight folds
   once per batch.
-- **WQ-1a — worker pool (second, only if still needed).** `WRITE_WORKER_CONCURRENCY` (default 1).
-  N threads, each with its own connection, routed by a stable hash of `(tenant_id, agent_id)` so
-  per-agent order holds. `stop()` joins all threads and releases any leased intents (`nack`).
+- **WQ-1a — parallel agent groups (built behind a setting).** `WRITE_WORKER_CONCURRENCY` (default
+  1 = serial). The worker still claims one round of up to `WRITE_BATCH_SIZE` intents, then splits it
+  into one unit per `(tenant_id, agent_id)` and commits the units in parallel on a thread pool, each
+  thread on its own DB connection. An agent's writes stay in order on one thread, and the round is
+  acked only after every unit finishes. This replaced the hash-routing sketch: with four agents a
+  stable hash into four workers collides about nine times in ten, so some agents would still drain
+  one after another. A CPU-bound extractor is wrapped in a lock (its calls run one at a time while
+  the database round trips overlap). Concurrent groups that write the same entity or edge can hit a
+  write-write conflict or a unique-key violation (seen locally with four agents mentioning the same
+  people); the batch retries up to three times before it falls back to per-intent commits. If any
+  unit raises, the others finish first, then the whole round is released and retried (commits are
+  idempotency-keyed).
 - **Observability.** The `write.*` stage timers (#289). Add gauges for queue depth, oldest-intent
   age and worker utilisation on `/health`. The flush response already returns `pending`, and the
   Diligence Room logs it (#287).

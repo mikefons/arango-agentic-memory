@@ -13,6 +13,11 @@ are versioned together and released from this repository.
 
 ### Added
 
+- `WRITE_WORKER_CONCURRENCY` (default 1 = off): the write worker commits the agent groups of one
+  claimed round in parallel, each on its own DB connection, instead of one after another. An
+  agent's writes stay in order, a conflict between groups that write the same entity retries the
+  batch, and a failing group lets the others finish before the round is released. Pair it with
+  `WRITE_BATCH_SIZE` above 1. See ops.md "Parallel agent groups".
 - Per-stage read timers on `/health`: `latency_ms` now also reports `retrieve.embed`, `.bm25`,
   `.vector_check`, `.vector`, `.facts`, `.graph`, `.fuse`, `.rerank`, `.mmr`, `.supersession`,
   `.entities`, `.neighbors`, `.assemble` and `.access`, one sample per read, so a slow read can

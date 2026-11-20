@@ -875,6 +875,7 @@ def create_app(client: ArangoMemoryClient | None = None) -> FastAPI:
         worker = WriteWorker(
             queue, worker_client.connect(),
             embedder=embedder, extractor=extractor, generator=generator,
+            db_factory=lambda: ArangoMemoryClient(mem_client.config).connect(),
         )
         worker.start()
         app.state.worker = worker
