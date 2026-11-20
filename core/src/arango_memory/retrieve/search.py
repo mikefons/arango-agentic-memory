@@ -460,20 +460,31 @@ def _mmr(
     lo = min(c.fused_score for c in candidates)
     hi = max(c.fused_score for c in candidates)
     span = (hi - lo) or 1.0
+    relevance = [(c.fused_score - lo) / span for c in candidates]
+    if lam >= 1.0:
+        # The diversity term is multiplied by zero, so skip the cosines (O(k²·n) pure-Python
+        # dot products over full embeddings). Stable sort keeps the first-listed on ties,
+        # which is what the strict `>` scan below picks.
+        order = sorted(range(len(candidates)), key=lambda i: -relevance[i])
+        return [candidates[i] for i in order[:k]]
+    # Each candidate's max cosine to the picked set only changes by the newest pick, so keep
+    # it as a running max instead of recomputing against every pick each round.
+    diversity = [0.0] * len(candidates)
+    remaining = list(range(len(candidates)))
     selected: list[_Candidate] = []
-    remaining = list(candidates)
     while remaining and len(selected) < k:
-        best: _Candidate | None = None
+        best = remaining[0]
         best_val = -math.inf
-        for cand in remaining:
-            relevance = (cand.fused_score - lo) / span
-            diversity = max((_cos(cand.embedding, s.embedding) for s in selected), default=0.0)
-            val = lam * relevance - (1.0 - lam) * diversity
+        for i in remaining:
+            val = lam * relevance[i] - (1.0 - lam) * diversity[i]
             if val > best_val:
-                best_val, best = val, cand
-        assert best is not None
-        selected.append(best)
+                best_val, best = val, i
         remaining.remove(best)
+        picked = candidates[best]
+        selected.append(picked)
+        for i in remaining:  # first pick replaces the 0.0 default (cosines may be negative)
+            sim = _cos(candidates[i].embedding, picked.embedding)
+            diversity[i] = sim if len(selected) == 1 else max(diversity[i], sim)
     return selected
 
 

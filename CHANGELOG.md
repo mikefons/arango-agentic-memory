@@ -71,6 +71,13 @@ are versioned together and released from this repository.
 
 ### Changed
 
+- Retrieval no longer spends time on MMR diversity it doesn't use. With the default
+  `MMR_LAMBDA=1.0` the diversity weight is zero, but `_mmr` still computed every pairwise cosine in
+  pure Python over full embeddings. At `1.0` it now sorts by relevance only (same selection order,
+  same tie-breaking); below `1.0` it keeps a running max cosine per candidate instead of
+  recomputing against every pick. On synthetic 1536-d candidates, 100 candidates and k=40:
+  4.5 s to under 1 ms at `1.0`, and 0.25 s at `0.7`. Selection is unchanged (an oracle test checks
+  it against the original formulation, ties and negative cosines included).
 - LongMemEval harness (DESIGN §23 rev 104):
   - It answers with a LongMemEval prompt in place of the hallucination benchmark's
     "context only, else decline" prompt, which caused 25 of 32 misses.
