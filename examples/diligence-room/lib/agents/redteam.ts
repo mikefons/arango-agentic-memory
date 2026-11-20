@@ -117,6 +117,14 @@ export async function runRedTeam(deps: {
   find: DisputeFinder;
   record: RecordDisputeFn;
 }): Promise<RedTeamRun> {
+  // An empty pool means the specialists' claims are not readable yet (typically the core's write
+  // queue has not drained), not that the deal is clean. Reporting "0 disputes" there would look
+  // like a result, so fail the step instead and let the run say why.
+  if (deps.claims.length === 0) {
+    throw new Error(
+      "no claims in shared memory — the specialists' writes may not have committed (is the core's write queue draining?)",
+    );
+  }
   const disputes = await deps.find(deps.claims);
   // Findings are independent writes; record them with bounded concurrency (see specialist.ts).
   await mapLimit(disputes, 4, (d) => deps.record(d));

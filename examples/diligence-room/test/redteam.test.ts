@@ -48,6 +48,21 @@ describe("runRedTeam (orchestration, LLM + core injected)", () => {
     expect(recorded.every((d) => d.confidence > 0 && d.confidence <= 1)).toBe(true);
   });
 
+  it("fails, and never calls the finder, when shared memory has no claims", async () => {
+    let calls = 0;
+    await expect(
+      runRedTeam({
+        claims: [],
+        find: async () => {
+          calls += 1;
+          return [];
+        },
+        record: async () => undefined,
+      }),
+    ).rejects.toThrow(/no claims in shared memory/);
+    expect(calls).toBe(0); // no model call is made on nothing
+  });
+
   it("records nothing when the finder sees no disputes", async () => {
     let writes = 0;
     const run = await runRedTeam({

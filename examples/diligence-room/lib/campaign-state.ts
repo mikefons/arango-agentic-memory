@@ -61,6 +61,8 @@ export interface WarState {
   agents: Record<RoleId, AgentState>;
   disputes: Dispute[];
   memo?: Memo;
+  /** The failure message of each errored phase (e.g. "no claims in shared memory — …"). */
+  errors: Partial<Record<Phase, string>>;
 }
 
 /** Map a phase name to the agent it belongs to (flush/consolidate belong to no agent). */
@@ -82,6 +84,7 @@ export function initialWarState(): WarState {
       AgentState
     >,
     disputes: [],
+    errors: {},
   };
 }
 
@@ -117,7 +120,11 @@ export function reduceCampaign(state: WarState, ev: CampaignEvent): WarState {
           agents[nextRole] = { ...agents[nextRole], status: "running" };
         }
       }
-      return { ...state, run: "running", phases, agents };
+      const errors =
+        ev.step.status === "error" && ev.step.detail
+          ? { ...state.errors, [phase]: ev.step.detail }
+          : state.errors;
+      return { ...state, run: "running", phases, agents, errors };
     }
     case "disputes":
       return {

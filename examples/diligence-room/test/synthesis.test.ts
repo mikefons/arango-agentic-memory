@@ -32,6 +32,16 @@ const MEMO: Memo = {
 };
 
 describe("runSynthesis (memo writer injected)", () => {
+  it("fails, and never calls the writer, on an empty briefing", async () => {
+    let calls = 0;
+    const write = async () => {
+      calls += 1;
+      throw new Error("should not be called");
+    };
+    await expect(runSynthesis("   \n", write)).rejects.toThrow(/briefing is empty/);
+    expect(calls).toBe(0);
+  });
+
   it("passes the briefing to the writer and returns its memo", async () => {
     let seen = "";
     const write: MemoWriter = async (briefing) => {

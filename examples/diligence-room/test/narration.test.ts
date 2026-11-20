@@ -53,4 +53,17 @@ describe("narrate — error", () => {
     s = reduceCampaign(s, { type: "done", ok: false });
     expect(narrate(s).line).toMatch(/stopped early/i);
   });
+
+  it("says why: the failed phase and its message", () => {
+    let s = initialWarState();
+    s = reduceCampaign(s, {
+      type: "step",
+      step: { name: "redteam", status: "error", detail: "no claims in shared memory" },
+    });
+    s = reduceCampaign(s, { type: "done", ok: false });
+    const n = narrate(s);
+    expect(n.line).toMatch(/stopped early/i);
+    expect(n.note).toContain("Red-team failed: no claims in shared memory");
+  });
 });
+
