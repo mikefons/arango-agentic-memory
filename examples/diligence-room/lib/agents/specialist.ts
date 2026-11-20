@@ -15,24 +15,30 @@ import type { SpecialistConfig, SpecialistRun, ExtractFn, StoreClaimFn } from ".
 // DILIGENCE_EXTRACT_CONCURRENCY; keep it modest so a big data room doesn't trip provider limits.
 const EXTRACT_CONCURRENCY = Number(process.env.DILIGENCE_EXTRACT_CONCURRENCY ?? 5);
 
+// Claim writes are committed synchronously by the live wiring, ~2.6s each on the hosted core, so
+// a serial loop over ~30 claims was the long pole. Write them with bounded concurrency; the core
+// upserts entities by natural key and commits are idempotency-keyed.
+// Override with DILIGENCE_STORE_CONCURRENCY.
+const STORE_CONCURRENCY = Number(process.env.DILIGENCE_STORE_CONCURRENCY ?? 4);
+
 export async function runSpecialist(
   config: SpecialistConfig,
   deps: { extract: ExtractFn; store: StoreClaimFn },
 ): Promise<SpecialistRun> {
-  // Extract every document concurrently; `mapLimit` preserves input order, so storing below
-  // stays in deterministic doc order — provenance and output are unchanged from the serial loop.
+  // Extract every document concurrently; `mapLimit` preserves input order, so the claim list
+  // (and the order writes start in) stays deterministic doc order.
   const perDoc = await mapLimit(config.docs, EXTRACT_CONCURRENCY, async (doc) => ({
     doc,
     triples: await deps.extract(doc, config.mandate),
   }));
 
-  const claims: SpecialistRun["claims"] = [];
-  for (const { doc, triples } of perDoc) {
-    for (const triple of triples) {
-      await deps.store(config.id, doc, triple);
-      claims.push({ doc: doc.id, triple });
-    }
-  }
+  const claims: SpecialistRun["claims"] = perDoc.flatMap(({ doc, triples }) =>
+    triples.map((triple) => ({ doc: doc.id, triple })),
+  );
+  const docById = new Map(config.docs.map((d) => [d.id, d]));
+  await mapLimit(claims, STORE_CONCURRENCY, ({ doc, triple }) =>
+    deps.store(config.id, docById.get(doc)!, triple),
+  );
 
   return {
     specialist: config.id,

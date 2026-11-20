@@ -104,3 +104,26 @@ describe("runSpecialist (orchestration, LLM + core injected)", () => {
     expect(run.claimsWritten).toBe(fin.docs.length);
   });
 });
+
+describe("runSpecialist — claim writes", () => {
+  it("writes claims concurrently but never more than the store concurrency at once", async () => {
+    const fin = specialist("financial")!;
+    const extract: ExtractFn = async (doc): Promise<Triple[]> => [
+      { subject: `${doc.id}-a`, predicate: "p", value: "1" },
+      { subject: `${doc.id}-b`, predicate: "p", value: "2" },
+    ];
+    let inFlight = 0;
+    let peak = 0;
+    const store: StoreClaimFn = async () => {
+      inFlight += 1;
+      peak = Math.max(peak, inFlight);
+      await new Promise((r) => setTimeout(r, 5));
+      inFlight -= 1;
+    };
+    const run = await runSpecialist(fin, { extract, store });
+    expect(run.claimsWritten).toBe(fin.docs.length * 2);
+    expect(peak).toBeGreaterThan(1);
+    expect(peak).toBeLessThanOrEqual(4);
+  });
+});
+

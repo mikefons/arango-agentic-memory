@@ -21,6 +21,9 @@ const CORE_API_KEY = process.env.CORE_API_KEY; // bearer key when the core enfor
 // Per-request timeout. 8s is fine for a local core, but a hosted core doing extraction +
 // embedding on a read/consolidate call can take longer — override with CORE_TIMEOUT_MS.
 const DEFAULT_TIMEOUT_MS = Number(process.env.CORE_TIMEOUT_MS ?? 30000);
+// The briefing read is the heaviest call (k=40 across every agent) and runs right after the
+// write-heavy phases, so give it more headroom than the default. Override with CORE_PRIME_TIMEOUT_MS.
+const PRIME_TIMEOUT_MS = Number(process.env.CORE_PRIME_TIMEOUT_MS ?? 60000);
 
 /** Strip any trailing slashes so `${CORE_URL}/path` never yields `//path` → 404. */
 export function normalizeCoreUrl(url: string): string {
@@ -147,6 +150,7 @@ export function prime(roomId: string, task: string): Promise<PrimeResult> {
       },
       opts: { mode: "lite", k: 40, max_memory_tokens: 3000 },
     }),
+    signal: AbortSignal.timeout(PRIME_TIMEOUT_MS),
   });
 }
 

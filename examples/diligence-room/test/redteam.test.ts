@@ -59,3 +59,30 @@ describe("runRedTeam (orchestration, LLM + core injected)", () => {
     expect(writes).toBe(0);
   });
 });
+
+describe("runRedTeam — recording", () => {
+  it("records findings concurrently, each exactly once", async () => {
+    const disputes: Dispute[] = Array.from({ length: 9 }, (_, i) => ({
+      subject: `s${i}`, kind: "contradiction", summary: "x", confidence: 0.5,
+    }));
+    let inFlight = 0;
+    let peak = 0;
+    const seen: string[] = [];
+    const run = await runRedTeam({
+      claims: CLAIMS,
+      find: async () => disputes,
+      record: async (d) => {
+        inFlight += 1;
+        peak = Math.max(peak, inFlight);
+        await new Promise((r) => setTimeout(r, 5));
+        seen.push(d.subject);
+        inFlight -= 1;
+      },
+    });
+    expect(run.disputes).toHaveLength(9);
+    expect([...seen].sort()).toEqual(disputes.map((d) => d.subject).sort());
+    expect(peak).toBeGreaterThan(1);
+    expect(peak).toBeLessThanOrEqual(4);
+  });
+});
+

@@ -59,6 +59,7 @@ Status: ✅ shipped · 🔄 built, merge pending · ✖ closed (won't do). Unmar
 | 25 | GX-3 | Fact retrieval arm over typed-relation statements (needs an LLM/GLiREL extractor) | L | GX-2 |
 | 26 | LM-1 | Neighbour expansion: inject the turns next to each hit (`opts.neighbor_turns`) 🔄 — built, off by default; answer accuracy not yet measured | S | — |
 | 27 | FK-1 | Fact-augmented keys: Dream-extracted facts per memory, matched by two extra retrieval arms 🔄 — built, off by default; measured, no accuracy gain | M | — |
+| 28 | WQ-1 | Write queue: more than one worker thread, so a burst of async writes drains in seconds, not minutes | M | — |
 
 Recommended sequence: **MA-1 → MA-2 → MA-3 → MA-4 → MA-5 → MA-6**, with MA-7/MA-8
 schedulable any time (no dependencies on the others). MA-1…MA-8 are **shipped**. **RQ-1**
@@ -1588,3 +1589,18 @@ multi-session evidence. Our GLiREL/Haiku extractors already produce typed relati
 graph edges. Scope: render them as fact sentences, embed them, and add a fourth arm to the
 fusion. Only active when an LLM or GLiREL extractor is configured, so the keyless default is unchanged.
 
+### WQ-1 — Multi-worker write queue
+
+The durable write worker (`ingest/worker.py`) is one daemon thread, committing one intent at a
+time. On the hosted core (Railway + ArangoGraph) a write takes about 2.6 s at p50, so a burst of
+~130 async claims takes minutes to drain. The Diligence Room hit this on 2026-11-20: after its
+specialists were parallelised, both `/v1/flush` barriers timed out with the queue still full and the
+memo's `prime` call timed out against the busy core. The demo now writes its claims synchronously
+with bounded concurrency, which works around it but leaves the async path slow for every other
+client.
+
+Scope: a `write_worker_concurrency` setting and N worker threads (or a small pool) draining the
+queue, each with its own DB connection. Open questions: ordering (`turn_index`-sensitive writes
+for the same tenant), concurrent entity upserts under the same tenant, and the `arango` queue
+backend's claim/lease semantics across threads. Test with a burst of ~200 writes against a
+remote DB and check the flush time and entity counts against the single-worker run.
