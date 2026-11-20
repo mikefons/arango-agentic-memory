@@ -112,6 +112,26 @@ def test_store_many_reports_where_a_batch_went(db: StandardDatabase) -> None:
     assert all(snap[k]["count"] == 1 for k in snap if k.startswith("write_many."))  # per batch
 
 
+def test_retrieve_reports_where_a_read_went(
+    db: StandardDatabase,
+    wait_for_searchable: Callable[..., RetrieveResult],
+) -> None:
+    ctx = {"tenant_id": "t_retr_stage", "agent_id": "a"}
+    store(db, content="Ada Lovelace worked with Charles Babbage in London.", **ctx)
+    wait_for_searchable(db, query="Lovelace", **ctx)
+    latency.clear()
+    result = retrieve(db, query="Lovelace Babbage", **ctx)
+    assert result.hits
+    snap = latency.snapshot()
+    stages = ("embed", "bm25", "vector_check", "fuse", "mmr", "neighbors", "assemble", "access")
+    for stage in stages:
+        assert f"retrieve.{stage}" in snap, stage
+    assert all(snap[k]["count"] == 1 for k in snap if k.startswith("retrieve."))  # per read
+    # a stage that did not run for this read has no sample (no reranker, no entity summaries)
+    assert "retrieve.rerank" not in snap
+    assert "retrieve.entities" not in snap
+
+
 def test_retrieval_feeds_global_latency_per_mode(
     db: StandardDatabase,
     wait_for_searchable: Callable[..., RetrieveResult],

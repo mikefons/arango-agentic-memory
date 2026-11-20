@@ -13,6 +13,10 @@ are versioned together and released from this repository.
 
 ### Added
 
+- Per-stage read timers on `/health`: `latency_ms` now also reports `retrieve.embed`, `.bm25`,
+  `.vector_check`, `.vector`, `.facts`, `.graph`, `.fuse`, `.rerank`, `.mmr`, `.supersession`,
+  `.entities`, `.neighbors`, `.assemble` and `.access`, one sample per read, so a slow read can
+  be traced to its stage. No behaviour change.
 - Batch commit for the write worker (`WRITE_BATCH_SIZE`, default 1 = off). The worker claims up
   to that many queued writes in one round trip, commits each tenant+agent group through the bulk
   `store_many` path, and acks them together, cutting the database round trips per write from about

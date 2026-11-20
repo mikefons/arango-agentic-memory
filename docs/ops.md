@@ -524,6 +524,10 @@ the `store_p50` column should stay roughly flat instead of climbing.
   for checking tail latency against the §23 targets (**core retrieval p99 ≤ 200ms;
   lite end-to-end ≤ 250ms**) without an OTEL exporter. Empty until traffic flows;
   it's a rolling **in-process** window, so it's per-instance.
+  Reads are split into per-stage keys, one sample per read: `retrieve.embed` (query
+  embedding), `.bm25`, `.vector_check`, `.vector`, `.facts`, `.graph`, `.fuse` (RRF + recency),
+  `.rerank`, `.mmr`, `.supersession`, `.entities`, `.neighbors`, `.assemble` and `.access` (the
+  spaced-repetition refresh write). A stage that did not run for a read has no sample.
   `write` is split into per-stage keys, one sample per write, so you can see where a commit's
   time goes: `write.redact`, `write.episode`, `write.embed`, `write.session`, `write.memory`,
   `write.entities`, and inside it `write.entities.extract`, `.embed`, `.candidates` (entity
