@@ -7,7 +7,9 @@ import { Pipeline } from "@/components/Pipeline";
 import { ContradictionFeed } from "@/components/ContradictionFeed";
 import { Narration } from "@/components/Narration";
 import { MemoPanel } from "@/components/MemoPanel";
+import { MemoReadyNotice } from "@/components/MemoReadyNotice";
 import { WhyStrip } from "@/components/WhySharedMemory";
+import { memoNoticeVisible } from "@/lib/campaign-state";
 import { RECOMMENDATION } from "@/lib/memo-export";
 import { useCampaign } from "@/components/useCampaign";
 
@@ -21,6 +23,12 @@ export default function WarRoom() {
   const [core, setCore] = useState<CoreState>("checking");
   const [active, setActive] = useState<number | null>(null);
   const [memoOpen, setMemoOpen] = useState(false);
+  const [noticeDismissed, setNoticeDismissed] = useState(false);
+  // Opening the memo (from the notice, the verdict pill or the callout strip) also retires the notice.
+  const openMemo = () => {
+    setMemoOpen(true);
+    setNoticeDismissed(true);
+  };
   const [live, setLive] = useState(false);
   const [resetting, setResetting] = useState(false);
   const [resetNonce, setResetNonce] = useState(0);
@@ -46,13 +54,12 @@ export default function WarRoom() {
     if (state.run === "running") {
       setActive(null);
       setMemoOpen(false);
+      setNoticeDismissed(false);
     }
   }, [state.run]);
 
-  // Auto-open the memo when the deal team finishes — the deliverable is the payoff.
-  useEffect(() => {
-    if (state.run === "done" && state.memo) setMemoOpen(true);
-  }, [state.run, state.memo]);
+  // The memo does not open by itself: it is a slide-over that would cover the contradiction feed
+  // the viewer may still be reading. A "memo ready" notice (below) lets them open it when ready.
 
   useEffect(() => {
     let alive = true;
@@ -88,7 +95,7 @@ export default function WarRoom() {
           {state.memo && (
             <button
               className={`wr-verdict wr-verdict-${RECOMMENDATION[state.memo.recommendation].tone}`}
-              onClick={() => setMemoOpen(true)}
+              onClick={openMemo}
             >
               <span className="wr-verdict-dot" />
               {RECOMMENDATION[state.memo.recommendation].label}
@@ -153,7 +160,15 @@ export default function WarRoom() {
         </aside>
       </section>
 
-      {state.run === "done" && state.memo && <WhyStrip onOpen={() => setMemoOpen(true)} />}
+      {state.run === "done" && state.memo && <WhyStrip onOpen={openMemo} />}
+
+      {state.memo && memoNoticeVisible(state, memoOpen, noticeDismissed) && (
+        <MemoReadyNotice
+          memo={state.memo}
+          onOpen={openMemo}
+          onDismiss={() => setNoticeDismissed(true)}
+        />
+      )}
 
       {memoOpen && state.memo && <MemoPanel memo={state.memo} onClose={() => setMemoOpen(false)} />}
     </main>

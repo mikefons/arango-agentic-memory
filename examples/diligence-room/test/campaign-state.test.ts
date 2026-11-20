@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   PHASES,
   initialWarState,
+  memoNoticeVisible,
   phaseAgent,
   reduceCampaign,
   type WarState,
@@ -62,5 +63,28 @@ describe("reduceCampaign — failure", () => {
     let s = initialWarState();
     s = reduceCampaign(s, { type: "done", ok: false });
     expect(s.run).toBe("error");
+  });
+});
+
+describe("memoNoticeVisible — the memo never opens by itself", () => {
+  const done = () => play();
+
+  it("shows once the run is done with a memo, until opened or dismissed", () => {
+    const s = done();
+    expect(s.run).toBe("done");
+    expect(memoNoticeVisible(s, false, false)).toBe(true);
+    expect(memoNoticeVisible(s, true, false)).toBe(false); // already open
+    expect(memoNoticeVisible(s, false, true)).toBe(false); // dismissed
+  });
+
+  it("stays hidden while running, when idle, and when the run finished without a memo", () => {
+    expect(memoNoticeVisible(initialWarState(), false, false)).toBe(false);
+    const running = reduceCampaign(initialWarState(), {
+      type: "step",
+      step: { name: "specialist:financial", status: "ok", detail: "5 claim(s)" },
+    });
+    expect(memoNoticeVisible(running, false, false)).toBe(false);
+    const noMemo = reduceCampaign(initialWarState(), { type: "done", ok: false });
+    expect(memoNoticeVisible(noMemo, false, false)).toBe(false);
   });
 });
