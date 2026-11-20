@@ -12,6 +12,7 @@
 import { generateObject, type LanguageModel } from "ai";
 import { z } from "zod";
 import { agentCallOptions } from "../model";
+import { llmStats, type OnLlmCall } from "./llm-stats";
 
 export type Recommendation = "proceed" | "proceed_with_conditions" | "pass";
 
@@ -64,16 +65,18 @@ const SYSTEM =
   "risks the red-team surfaced. Do not invent facts not present in the briefing.";
 
 /** Build a MemoWriter bound to a model. */
-export function makeMemoWriter(model: LanguageModel): MemoWriter {
+export function makeMemoWriter(model: LanguageModel, onCall?: OnLlmCall): MemoWriter {
   return async (briefing: string): Promise<Memo> => {
-    const { object } = await generateObject({
+    const started = Date.now();
+    const result = await generateObject({
       model,
       schema: MemoSchema,
       system: SYSTEM,
       ...agentCallOptions(),
       prompt: `Deal-team briefing (from shared memory):\n${briefing}\n\nWrite the investment memo.`,
     });
-    return object;
+    onCall?.(llmStats(Date.now() - started, result));
+    return result.object;
   };
 }
 

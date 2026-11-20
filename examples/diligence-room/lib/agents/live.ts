@@ -19,6 +19,7 @@ import {
 import type { Claim, FlushResult } from "../types";
 import type { SpecialistConfig } from "./types";
 import { makeExtractor } from "./extract";
+import { describeLlm, stageLine, type LlmCallStats } from "./llm-stats";
 import { runSpecialist } from "./specialist";
 import { disputeText, makeDisputeFinder, runRedTeam } from "./redteam";
 import { makeMemoWriter, memoHeadline, runSynthesis, type Memo } from "./synthesis";
@@ -73,11 +74,16 @@ const REDTEAM_K = Number(process.env.DILIGENCE_REDTEAM_K ?? 24);
 
 /** Cross-examine shared memory and record the red-team's disputes. */
 export async function liveRedTeam(roomId: string) {
+  const t0 = Date.now();
   const pool = await gatherClaims(roomId, GATHER_QUERY, REDTEAM_K);
+  const gatherMs = Date.now() - t0;
   const claims = pool.hits.map((h) => ({ text: h.text, agent_id: h.agent_id }));
-  return runRedTeam({
+  const seen: { llm?: LlmCallStats } = {};
+  const run = await runRedTeam({
     claims,
-    find: makeDisputeFinder(getModel()),
+    find: makeDisputeFinder(getModel(), (s) => {
+      seen.llm = s;
+    }),
     record: async (d) => {
       const finding: Claim = {
         subject: d.subject,
@@ -89,16 +95,37 @@ export async function liveRedTeam(roomId: string) {
       await storeClaim(roomId, "redteam", finding, { sync: SYNC_WRITES });
     },
   });
+  // Where this step's time goes: the core read, the model call, then recording the findings.
+  const afterGather = Date.now() - t0 - gatherMs;
+  console.log(
+    stageLine("redteam", [
+      ["gather", `${gatherMs}ms (${claims.length} claims)`],
+      ["llm", seen.llm ? describeLlm(seen.llm) : "n/a (call failed)"],
+      ["record+other", `${afterGather - (seen.llm?.ms ?? 0)}ms (${run.disputes.length} disputes)`],
+    ]),
+  );
+  return run;
 }
 
 /** Prime the team briefing, write the memo, and capture the verdict (MA-4). */
 export async function liveSynthesis(roomId: string): Promise<Memo> {
+  const t0 = Date.now();
   // One retry: the briefing read can hit a core that is still busy with the preceding writes.
+  let retried = false;
   const briefing = await prime(roomId, SYNTHESIS_TASK).catch((err) => {
+    retried = true;
     console.warn("[campaign] prime failed, retrying once:", err instanceof Error ? err.message : err);
     return prime(roomId, SYNTHESIS_TASK);
   });
-  const memo = await runSynthesis(briefing.context, makeMemoWriter(getModel()));
+  const primeMs = Date.now() - t0;
+  const seen: { llm?: LlmCallStats } = {};
+  const memo = await runSynthesis(
+    briefing.context,
+    makeMemoWriter(getModel(), (s) => {
+      seen.llm = s;
+    }),
+  );
+  const tVerdict = Date.now();
   const verdict: Claim = {
     subject: memo.target,
     predicate: "memo:verdict",
@@ -107,6 +134,13 @@ export async function liveSynthesis(roomId: string): Promise<Memo> {
     source_reliability: 0.9,
   };
   await storeClaim(roomId, "synthesis", verdict, { sync: false });
+  console.log(
+    stageLine("synthesis", [
+      ["prime", `${primeMs}ms (${briefing.context.length} chars${retried ? ", retried" : ""})`],
+      ["llm", seen.llm ? describeLlm(seen.llm) : "n/a"],
+      ["verdict write", `${Date.now() - tVerdict}ms (${memo.findings.length} findings)`],
+    ]),
+  );
   return memo;
 }
 
