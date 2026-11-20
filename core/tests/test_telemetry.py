@@ -8,7 +8,7 @@ import pytest
 from arango.database import StandardDatabase
 
 import arango_memory.retrieve.search as search_mod
-from arango_memory.ingest.store import store
+from arango_memory.ingest.store import StoreItem, store, store_many
 from arango_memory.retrieve.search import RetrieveResult, retrieve
 from arango_memory.telemetry import LatencyRecorder, MemoryMetrics, StageTimer, latency, metrics
 
@@ -94,6 +94,22 @@ def test_store_reports_where_the_write_time_went(db: StandardDatabase) -> None:
         assert key in snap, key
     assert "write.entities.extract" in snap
     assert snap["write.entities"]["p50"] >= snap["write.entities.extract"]["p50"]
+
+
+def test_store_many_reports_where_a_batch_went(db: StandardDatabase) -> None:
+    latency.clear()
+    items = [
+        StoreItem(content=f"Ada Lovelace met Charles Babbage in London, note {i}.", turn_index=i)
+        for i in range(4)
+    ]
+    store_many(db, items, tenant_id="t_stage_many", agent_id="a", extract=True)
+    snap = latency.snapshot()
+    batch_keys = ("embed", "existing", "insert", "entities")
+    for key in (f"write_many.{k}" for k in batch_keys):
+        assert key in snap, key
+    for stage in ("extract", "embed", "pool", "match", "upsert", "edges"):
+        assert f"write_many.entities.{stage}" in snap, stage
+    assert all(snap[k]["count"] == 1 for k in snap if k.startswith("write_many."))  # per batch
 
 
 def test_retrieval_feeds_global_latency_per_mode(

@@ -235,7 +235,8 @@ test burst this took the database calls from 31 per write to 1.3.
   are not merged until consolidation (exact-name repeats still merge); the edge weight folds once
   per batch. See `write_entities_many`.
 - **Observability.** `/health` `latency_ms` gains `write_many.embed`, `.existing`, `.insert` and
-  `.entities`, one sample per batch. The `write` key then holds one sample per batch (its `count`
+  `.entities` (and inside it `write_many.entities.extract`, `.embed`, `.pool` (the candidate
+  fetch), `.match`, `.increment`, `.upsert`, `.edges` and `.relate`), one sample per batch. The `write` key then holds one sample per batch (its `count`
   is the number of writes it covered), not per write.
 - The lease (`WRITE_LEASE_SECONDS`) must outlast a whole batch, not one write; 60 s is ample.
 
