@@ -115,6 +115,7 @@ def store_many(
     if not items:
         return []
     emb = embedder or get_embedder()
+    timer = StageTimer("write_many")  # /health write_many.<stage>: where a batch's time goes
     now = utcnow_iso()
 
     # 1. redact + idempotency key per item — deterministic, identical to store().
@@ -132,16 +133,18 @@ def store_many(
         prepared.append((item, content, ep_key))
 
     # 2. one embed batch for all distinct contents (cache-aware, §16).
-    vec_by_text = embed_batch_cached(emb, [c for _, c, _ in prepared], tenant_id=tenant_id)
+    with timer.stage("embed"):
+        vec_by_text = embed_batch_cached(emb, [c for _, c, _ in prepared], tenant_id=tenant_id)
 
     # 3. which episodes already exist (one round trip) — replays must not re-feed the graph.
     existing: set[str] = set()
     if extract:
-        cursor = cast(Cursor, db.aql.execute(
-            "FOR d IN DOCUMENT('episodes', @keys) RETURN d._key",
-            bind_vars={"keys": list({k for _, _, k in prepared})},
-        ))
-        existing = set(cursor)
+        with timer.stage("existing"):
+            cursor = cast(Cursor, db.aql.execute(
+                "FOR d IN DOCUMENT('episodes', @keys) RETURN d._key",
+                bind_vars={"keys": list({k for _, _, k in prepared})},
+            ))
+            existing = set(cursor)
 
     # 4. build docs, then 5. bulk-insert record, then 6. (optional) batched graph pass.
     episodes: list[dict[str, Any]] = []
@@ -176,13 +179,16 @@ def store_many(
     started = time.perf_counter()
     ent_by_mem: dict[str, list[str]] = {}
     with span("memory.write_many", tenant_id=tenant_id):
-        db.collection("episodes").insert_many(episodes, overwrite_mode="ignore", silent=True)
-        db.collection("memories").insert_many(memories, overwrite_mode="ignore", silent=True)
+        with timer.stage("insert"):
+            db.collection("episodes").insert_many(episodes, overwrite_mode="ignore", silent=True)
+            db.collection("memories").insert_many(memories, overwrite_mode="ignore", silent=True)
         if graph_inputs:  # IN-2: reflect the whole batch into the graph in a few round trips
-            ent_by_mem = write_entities_many(
-                db, graph_inputs, tenant_id=tenant_id, agent_id=agent_id,
-                extractor=extractor or get_extractor(), embedder=emb,
-            )
+            with timer.stage("entities"):
+                ent_by_mem = write_entities_many(
+                    db, graph_inputs, tenant_id=tenant_id, agent_id=agent_id,
+                    extractor=extractor or get_extractor(), embedder=emb,
+                )
+    timer.record()
     metrics.emit("write", duration_ms=(time.perf_counter() - started) * 1000.0, count=len(items))
     return [
         StoreResult(episode_id=ep, memory_ids=[mem], entity_ids=ent_by_mem.get(mem, []))

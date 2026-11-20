@@ -148,7 +148,7 @@ share an entity or a number with the new memory),
 `EMBEDDING_CACHE` (`true`), `EMBEDDING_CACHE_SIZE` (10000); conflict: `ENTITY_MERGE_THRESHOLD` (0.9),
 `ENTITY_FLAG_THRESHOLD` (0.6); durable writes: `WRITE_MAX_RETRIES` (5),
 `WRITE_BACKOFF_BASE` (0.5), `WRITE_QUEUE_BACKEND` (`memory`; set `arango` in prod),
-`WRITE_LEASE_SECONDS` (60); security: `REDACT_PII` (`true`), `API_KEYS` (unset = auth
+`WRITE_LEASE_SECONDS` (60), `WRITE_BATCH_SIZE` (1; see Batch commit below); security: `REDACT_PII` (`true`), `API_KEYS` (unset = auth
 open), `OIDC_ISSUER` (unset = JWT off; see Authentication below), `MAX_REQUEST_BYTES`
 (1 MiB), `RATE_LIMIT_PER_MINUTE` (0 = off); scaling: `REDIS_URL` (unset = per-instance
 limiter + cache; see Optional shared layer).
@@ -214,6 +214,30 @@ commits with exponential backoff (`WRITE_MAX_RETRIES` / `WRITE_BACKOFF_BASE`), t
 ```bash
 python -m arango_memory.ops replay      # re-enqueue + commit dead-lettered writes
 ```
+
+### Batch commit (`WRITE_BATCH_SIZE`)
+By default a worker commits one intent at a time with `store()`, about 25–30 database round
+trips each. On a core whose database is across a network (Railway to a managed ArangoGraph is
+about 90 ms a call) that is about 2–3 s per write, so a burst of 100 writes takes minutes to drain.
+Set `WRITE_BATCH_SIZE` above 1 (16 is a good start) and the worker claims up to that many intents in
+one queue round trip, groups them by tenant and agent, commits each group with one bulk
+`store_many` call (embeddings and entity writes batched too), and acks them together. On a local
+test burst this took the database calls from 31 per write to 1.3.
+
+- **Which writes batch.** Plain episodic writes with no `session_id`, in `lite` memory mode.
+  Session-bound writes, `working` memory and `full` mode keep the per-intent `store()` path,
+  because the bulk path skips prospective indexing, working-capacity eviction and per-session topic
+  tracking.
+- **Failure handling.** If a batch fails, its intents are retried one at a time, so retry,
+  backoff and dead-lettering still isolate a bad intent. Commits are idempotency-keyed, so this
+  is safe after a partial batch.
+- **Documented difference.** Within one batch, two differently named but similar *new* entities
+  are not merged until consolidation (exact-name repeats still merge); the edge weight folds once
+  per batch. See `write_entities_many`.
+- **Observability.** `/health` `latency_ms` gains `write_many.embed`, `.existing`, `.insert` and
+  `.entities`, one sample per batch. The `write` key then holds one sample per batch (its `count`
+  is the number of writes it covered), not per write.
+- The lease (`WRITE_LEASE_SECONDS`) must outlast a whole batch, not one write; 60 s is ample.
 
 ### Queue backend (`WRITE_QUEUE_BACKEND`)
 - **`memory`** (default) — in-process; fast and zero-config for dev/CI. Intents that

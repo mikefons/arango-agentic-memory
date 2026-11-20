@@ -60,3 +60,25 @@ def test_ack_is_idempotent() -> None:
     assert claim is not None
     queue.ack(claim)
     queue.ack(claim)  # double-ack is a no-op, never raises
+
+
+def test_claim_many_is_fifo_bounded_and_leases_once() -> None:
+    queue = InProcessQueue()
+    intents = [WriteIntent(content=str(i), tenant_id="t", agent_id="ag") for i in range(5)]
+    for i in intents:
+        queue.enqueue(i)
+
+    claims = queue.claim_many(3)
+    assert [c.intent for c in claims] == intents[:3]  # oldest first, at most `limit`
+    assert len(queue) == 2
+    assert queue.pending_count("t") == 5  # claimed-but-unacked still counts for the flush barrier
+
+    queue.ack_many(claims)
+    assert queue.pending_count("t") == 2
+    rest = queue.claim_many(10)
+    assert [c.intent for c in rest] == intents[3:]
+    assert queue.claim_many(10) == []
+    queue.ack_many(rest)
+    queue.ack_many(rest)  # double-ack is a no-op
+    assert queue.pending_count("t") == 0
+

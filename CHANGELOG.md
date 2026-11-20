@@ -13,6 +13,12 @@ are versioned together and released from this repository.
 
 ### Added
 
+- Batch commit for the write worker (`WRITE_BATCH_SIZE`, default 1 = off). The worker claims up
+  to that many queued writes in one round trip, commits each tenant+agent group through the bulk
+  `store_many` path, and acks them together, cutting the database round trips per write from about
+  31 to about 1.3 in a local burst test. Writes with a session, working memory and full mode keep
+  the per-intent path, and a failed batch falls back to per-intent retry. `WriteQueue` gains
+  `claim_many` / `ack_many`. `/health` adds `write_many.*` stage timers. See ops.md "Batch commit".
 - Per-stage write timers on `/health`: `latency_ms` now also reports `write.embed`, `write.episode`,
   `write.memory`, `write.entities` and the stages inside entity writing (`write.entities.extract`,
   `.embed`, `.candidates`, `.match`, `.upsert`, `.edges`, `.relations`, `.relate`), one sample per
