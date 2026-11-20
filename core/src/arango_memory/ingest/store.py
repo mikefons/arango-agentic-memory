@@ -24,7 +24,7 @@ from ..embedding_cache import embed_batch_cached, embed_cached
 from ..generation import Generator, get_generator
 from ..models import idempotency_key, utcnow_iso
 from ..security.redact import redact
-from ..telemetry import metrics, span
+from ..telemetry import StageTimer, metrics, span
 from .entities import GraphMemory, write_entities, write_entities_many
 from .extract import Extractor, get_extractor
 from .prospective import generate_prospective
@@ -371,14 +371,16 @@ def _store_impl(
     first store of a turn so idempotent replays don't double-count (DESIGN.md §8).
     """
     emb = embedder or get_embedder()
+    timer = StageTimer("write")  # where a store's time goes → /health write.<stage>
     # Redact PII before anything is persisted or hashed — the original is never
     # stored (§17). Everything below operates on the redacted content.
     if settings.redact_pii:
-        content = redact(
-            content,
-            mode=mode,
-            generator=(generator or get_generator()) if mode == "full" else None,
-        )
+        with timer.stage("redact"):
+            content = redact(
+                content,
+                mode=mode,
+                generator=(generator or get_generator()) if mode == "full" else None,
+            )
     now = utcnow_iso()
     key = idempotency_key(
         tenant_id=tenant_id,
@@ -387,7 +389,8 @@ def _store_impl(
         content=content,
         turn_index=turn_index,
     )
-    is_new = not db.collection("episodes").has(key)
+    with timer.stage("episode"):
+        is_new = not db.collection("episodes").has(key)
 
     prospective: list[str] = []
     if is_new and mode == "full":
@@ -397,7 +400,8 @@ def _store_impl(
         key, content=content, agent_id=agent_id, tenant_id=tenant_id, session_id=session_id,
         message_type=message_type, source_reliability=source_reliability, now=now,
     )
-    db.collection("episodes").insert(episode, overwrite_mode="ignore", silent=True)
+    with timer.stage("episode"):
+        db.collection("episodes").insert(episode, overwrite_mode="ignore", silent=True)
 
     # Working memory (§5/§14): a session-scoped scratch tier that auto-expires via a
     # TTL index. Episodic memories carry expires_at=null (the TTL index ignores them).
@@ -409,14 +413,16 @@ def _store_impl(
         else None
     )
 
-    turn_vec = embed_cached(emb, content, tenant_id=tenant_id)
+    with timer.stage("embed"):
+        turn_vec = embed_cached(emb, content, tenant_id=tenant_id)
     # GAM semantic boundary (§13): track the session's running topic before writing
     # this turn's memory, so a detected shift flushes the *prior* working buffer.
     if is_new and session_id is not None:
-        _track_session_topic(
-            db, tenant_id=tenant_id, agent_id=agent_id, session_id=session_id,
-            turn_vec=turn_vec, now=now,
-        )
+        with timer.stage("session"):
+            _track_session_topic(
+                db, tenant_id=tenant_id, agent_id=agent_id, session_id=session_id,
+                turn_vec=turn_vec, now=now,
+            )
 
     mem_key = f"{key}-mem"
     memory = _memory_doc(
@@ -424,7 +430,8 @@ def _store_impl(
         expires_at=expires_at, session_id=session_id, agent_id=agent_id, tenant_id=tenant_id,
         emb=emb, prospective=prospective, now=now, event_time=event_time, turn_index=turn_index,
     )
-    db.collection("memories").insert(memory, overwrite_mode="ignore", silent=True)
+    with timer.stage("memory"):
+        db.collection("memories").insert(memory, overwrite_mode="ignore", silent=True)
 
     if is_new and is_working:
         _enforce_working_capacity(db, tenant_id=tenant_id, agent_id=agent_id, session_id=session_id)
@@ -434,16 +441,18 @@ def _store_impl(
     # `extract=False` (BX-3) skips extraction for bulk ingest where per-write entity
     # resolution is the bottleneck.
     if is_new and not is_working and extract:
-        entity_ids = write_entities(
-            db,
-            memory_key=mem_key,
-            episode_key=key,
-            content=content,
-            tenant_id=tenant_id,
-            agent_id=agent_id,
-            extractor=extractor or get_extractor(),
-            embedder=emb,
-            source_reliability=source_reliability,
-        )
+        with timer.stage("entities"):
+            entity_ids = write_entities(
+                db,
+                memory_key=mem_key,
+                episode_key=key,
+                content=content,
+                tenant_id=tenant_id,
+                agent_id=agent_id,
+                extractor=extractor or get_extractor(),
+                embedder=emb,
+                source_reliability=source_reliability,
+            )
 
+    timer.record()
     return StoreResult(episode_id=key, memory_ids=[mem_key], entity_ids=entity_ids)

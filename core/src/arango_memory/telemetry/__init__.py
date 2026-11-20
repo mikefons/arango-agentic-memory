@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import math
 import threading
+import time
 from collections import deque
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
@@ -79,6 +80,31 @@ class LatencyRecorder:
 
 
 latency = LatencyRecorder()
+
+
+class StageTimer:
+    """Wall time per named stage inside one operation, recorded once per operation.
+
+    `with timer.stage("embed"): ...` adds to that stage's total (a stage inside a loop sums
+    across iterations), and `record()` writes each total into `latency` as `<prefix>.<stage>`,
+    so the `/health` percentiles are per-operation (per write), not per call. This is how the
+    write path reports where its time goes (e.g. `write.embed`, `write.entities.upsert`)."""
+
+    def __init__(self, prefix: str) -> None:
+        self._prefix = prefix
+        self._ms: dict[str, float] = {}
+
+    @contextmanager
+    def stage(self, name: str) -> Iterator[None]:
+        started = time.perf_counter()
+        try:
+            yield
+        finally:
+            self._ms[name] = self._ms.get(name, 0.0) + (time.perf_counter() - started) * 1000.0
+
+    def record(self) -> None:
+        for name, ms in self._ms.items():
+            latency.record(f"{self._prefix}.{name}", ms)
 
 
 class _Meters:
