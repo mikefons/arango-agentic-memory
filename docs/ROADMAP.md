@@ -1645,42 +1645,78 @@ not free, and the number has to be measured, not assumed.
    embedding provider's rate limit, and (with a CPU extractor such as spaCy) the GIL. The sync
    experiment above is the warning.
 
-**Step 0 — find where the 2.6 s goes (before writing any code).** `store()` does an episode insert,
-an embedding call, a memory insert, then `write_entities` (extraction plus entity resolution reads,
-upserts and edges). That is roughly 6–12 round trips to ArangoGraph plus 1–2 embedding calls. Time
-each stage on the hosted core for ~30 writes. If the embedding call dominates, batching embeddings
-beats threads. If DB round trips dominate, threads help until the DB pool saturates.
+**Step 0 — where the time goes. DONE (2026-11-20, #289 timers, read from the hosted core's
+`/health` after a live Diligence Room run, n = 33 commits, p50).**
 
-**Design.**
-- **WQ-1a — worker pool.** `WRITE_WORKER_CONCURRENCY` (default 1, so nothing changes until it is
-  set). N threads, each with its own connection, routed by a stable hash of
-  `(tenant_id, agent_id)` so per-agent order holds. `stop()` joins all threads and releases any
-  leased intents (`nack`).
-- **WQ-1b — batch commit (optional, if Step 0 says so).** A worker claims up to K intents for the
-  same agent, embeds them in one call, and commits through the existing batched path
-  (`write_entities_many`, IN-2/IN-6). This helps the single-agent burst that sharding cannot, and it
-  cuts embedding calls K-fold.
-- **Observability.** Gauges for queue depth, oldest-intent age and worker utilisation on `/health`;
-  a per-commit duration histogram (the existing `write` latency already covers part of this). The
-  flush response already returns `pending`; the Diligence Room logs it once #287 merges.
+| stage | p50 | note |
+|---|---|---|
+| `write` (one claim) | 2865 ms | |
+| `write.episode` | 177 ms | 2 DB calls |
+| `write.memory` | 91 ms | 1 DB call |
+| `write.embed` | 224 ms | the claim's embedding |
+| `write.entities` | 2322 ms (81%) | |
+| ↳ `edges` | 716 ms | 2 edge inserts per entity |
+| ↳ `relate` | 555 ms | 1 DB call per entity pair |
+| ↳ `upsert` | 379 ms | 1 DB call per entity |
+| ↳ `embed` | 197 ms | entity-name embeddings |
+| ↳ `candidates` | 185 ms | entity-resolution lookups |
+| ↳ `match`, `extract`, `relations` | 12 / 0 / 0 ms | not a cost |
 
-**Expected effect (estimate, not measured).** At 2.6 s per write, 130 claims take about 340 s on one
-worker. With four agents sharded across four workers that is about 85 s. With eight workers or
-batching, 30–45 s, bounded by the DB and the embedding provider and not by threads. A 30 s flush
-cap then mostly drains.
+A single database call costs about 90 ms (`write.episode` is two calls at 177 ms, `write.memory`
+one at 91 ms). A claim makes about 25 of them one after another, so roughly 2.3 s of the 2.9 s is
+waiting on the network between the Railway core and ArangoGraph, and the embedding calls are the
+other ~15%. Extraction and matching cost nothing (the extractor is cheap and local). The measured
+drain rate agrees: the Diligence Room's flush lines showed 91 and 85 writes still queued after
+30 s, about 0.35–0.4 writes/s.
 
-**Acceptance**
-1. A burst of 200 writes from 4 agents against the hosted topology drains in under 60 s with
-   `WRITE_WORKER_CONCURRENCY=4`, and `/health` stays responsive (under 2 s) while it drains.
-2. Entity, edge and memory counts equal a single-worker run of the same burst; zero dead letters.
-3. Per-agent order holds: a step chain written as A→B→C never has a dangling `prev_step_key`.
-4. Default 1 behaves exactly as today (existing worker tests pass unchanged).
-5. Unit tests: sharded routing is stable; two workers never commit the same intent; shutdown
-   releases leased intents; an injected unique-key conflict retries and converges.
+Consequences for the design: the time is **round trips, not CPU**, so (a) threads overlap well
+until the DB pushes back, and (b) the bulk path that already exists, `store_many` +
+`write_entities_many` (IN-1/IN-2/IN-6: about 2 round trips for the records and a handful for the
+whole graph pass, instead of about 3 + 4E + pairs per turn), attacks the cost directly and also
+helps a single agent's burst, which sharding cannot. **So WQ-1b goes first.**
 
-**Rollout.** Ship with the default at 1. Set it to 4 on the Railway core, run the Diligence Room
-live, and read the flush log lines (`drained` or `N still queued`) and the step timings. Remove the
-demo's flush-cap workarounds only after that run is clean.
+**Design (in order).**
+- **WQ-1b — batch commit (first).** The worker claims up to `WRITE_BATCH_SIZE` intents in one queue
+  round trip (`claim_many`), groups the batchable ones by `(tenant_id, agent_id)`, commits each
+  group with one `store_many(..., extract=True)` call and acks the lot in one round trip. Batchable
+  means a `WriteIntent` in lite mode with no `session_id` and `memory_type == "episodic"`:
+  `store_many` skips full-mode prospective indexing, working-capacity eviction and per-session
+  topic tracking, so anything that needs those stays on the per-intent `store()` path. If a batch
+  fails, its intents fall back to per-intent `process()`, so retry, backoff and dead-lettering still
+  isolate a bad intent. Default `WRITE_BATCH_SIZE=1` = today's behaviour. Documented differences of
+  the bulk graph pass (DESIGN §8 / `write_entities_many`): semantic dedup of two differently named
+  but similar **new** entities inside one batch is left to consolidation, and the edge weight folds
+  once per batch.
+- **WQ-1a — worker pool (second, only if still needed).** `WRITE_WORKER_CONCURRENCY` (default 1).
+  N threads, each with its own connection, routed by a stable hash of `(tenant_id, agent_id)` so
+  per-agent order holds. `stop()` joins all threads and releases any leased intents (`nack`).
+- **Observability.** The `write.*` stage timers (#289). Add gauges for queue depth, oldest-intent
+  age and worker utilisation on `/health`. The flush response already returns `pending`, and the
+  Diligence Room logs it (#287).
 
-**Size.** M for WQ-1a (about 250 lines plus tests), plus S for the Step 0 profiling. WQ-1b is a
-separate M and only if the profile justifies it.
+**Expected effect (estimate, not measured).** With a batch of 16 the ~25 per-claim round trips
+become roughly 8–10 per batch, so about 10–20× fewer round trips per claim. The embedding calls
+batch too. 100 claims should then drain in well under the 30 s flush cap. Batching and a worker
+pool multiply, so WQ-1a may not be needed for the Diligence Room.
+
+**Acceptance (WQ-1b)**
+1. A burst of 100 writes from 4 agents against the hosted topology drains in under 30 s with
+   `WRITE_BATCH_SIZE=16`, and `/health` stays responsive (under 2 s) while it drains.
+2. Memory and episode counts equal a one-by-one run of the same burst, and entity counts match
+   except for the documented intra-batch semantic-dedup difference; zero dead letters.
+3. `WRITE_BATCH_SIZE=1` behaves exactly as today (existing worker and queue tests pass unchanged).
+4. Unit tests: `claim_many` is FIFO and leases once; `ack_many` clears the lease; a batch of
+   same-agent intents commits through one `store_many` call; a failing batch falls back per intent
+   and still commits the good ones; session-bound and non-episodic intents stay on `store()`.
+
+**Acceptance (WQ-1a, if built).** A burst of 200 writes from 4 agents drains in under 60 s with
+`WRITE_WORKER_CONCURRENCY=4`; counts equal a single-worker run; zero dead letters; a step chain
+A→B→C never has a dangling `prev_step_key`; sharded routing is stable; two workers never commit the
+same intent; shutdown releases leased intents; an injected unique-key conflict retries and
+converges.
+
+**Rollout.** Ship with the defaults at 1. Set `WRITE_BATCH_SIZE=16` on the Railway core, run the
+Diligence Room live, and read the flush log lines (`drained` or `N still queued`), the step timings
+and `/health` `write.*`. Remove the demo's flush-cap workarounds only after that run is clean.
+
+**Size.** WQ-1b: M (about 200 lines plus tests). WQ-1a: M, only if the batch result says so.
