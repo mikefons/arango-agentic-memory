@@ -13,6 +13,10 @@ are versioned together and released from this repository.
 
 ### Added
 
+- Per-stage write timers on `/health`: `latency_ms` now also reports `write.embed`, `write.episode`,
+  `write.memory`, `write.entities` and the stages inside entity writing (`write.entities.extract`,
+  `.embed`, `.candidates`, `.match`, `.upsert`, `.edges`, `.relations`, `.relate`), one sample per
+  write, so a slow write can be traced to its stage. No behaviour change.
 - Entity summaries in retrieval: `RETRIEVE_ENTITY_SUMMARIES` / `opts.entity_summaries`
   (default off) appends an `Entity summaries:` section to the `/v1/retrieve` context, made
   from the Dream State summaries of the entities the hits mention. It shares

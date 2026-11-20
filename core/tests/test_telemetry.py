@@ -10,7 +10,7 @@ from arango.database import StandardDatabase
 import arango_memory.retrieve.search as search_mod
 from arango_memory.ingest.store import store
 from arango_memory.retrieve.search import RetrieveResult, retrieve
-from arango_memory.telemetry import LatencyRecorder, MemoryMetrics, latency, metrics
+from arango_memory.telemetry import LatencyRecorder, MemoryMetrics, StageTimer, latency, metrics
 
 
 @pytest.fixture(autouse=True)
@@ -57,6 +57,43 @@ def test_latency_recorder_window_evicts_oldest() -> None:
 def test_latency_snapshot_skips_empty_keys() -> None:
     rec = LatencyRecorder()
     assert rec.snapshot() == {}
+
+
+def test_stage_timer_sums_repeated_stages_and_records_once() -> None:
+    latency.clear()
+    timer = StageTimer("op")
+    for _ in range(3):
+        with timer.stage("loop"):
+            pass
+    with timer.stage("once"):
+        pass
+    assert latency.snapshot() == {}  # nothing recorded until record()
+    timer.record()
+    snap = latency.snapshot()
+    assert set(snap) == {"op.loop", "op.once"}
+    assert snap["op.loop"]["count"] == 1  # one sample per operation, not per iteration
+
+
+def test_stage_timer_records_a_stage_that_raised() -> None:
+    latency.clear()
+    timer = StageTimer("op")
+    with pytest.raises(ValueError), timer.stage("boom"):
+        raise ValueError("x")
+    timer.record()
+    assert "op.boom" in latency.snapshot()
+
+
+def test_store_reports_where_the_write_time_went(db: StandardDatabase) -> None:
+    latency.clear()
+    store(
+        db, content="Ada Lovelace worked with Charles Babbage in London.",
+        tenant_id="t_stage", agent_id="a",
+    )
+    snap = latency.snapshot()
+    for key in ("write", "write.episode", "write.embed", "write.memory", "write.entities"):
+        assert key in snap, key
+    assert "write.entities.extract" in snap
+    assert snap["write.entities"]["p50"] >= snap["write.entities.extract"]["p50"]
 
 
 def test_retrieval_feeds_global_latency_per_mode(

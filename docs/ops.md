@@ -497,6 +497,13 @@ the `store_p50` column should stay roughly flat instead of climbing.
   for checking tail latency against the §23 targets (**core retrieval p99 ≤ 200ms;
   lite end-to-end ≤ 250ms**) without an OTEL exporter. Empty until traffic flows;
   it's a rolling **in-process** window, so it's per-instance.
+  `write` is split into per-stage keys, one sample per write, so you can see where a commit's
+  time goes: `write.redact`, `write.episode`, `write.embed`, `write.session`, `write.memory`,
+  `write.entities`, and inside it `write.entities.extract`, `.embed`, `.candidates` (entity
+  resolution lookups), `.match`, `.upsert`, `.edges`, `.relations` and `.relate`. A stage that did
+  not run for a write (for example `session`, or `entities` for an `extract=false` write) has no
+  sample for it. The stage keys do not sum exactly to `write`: the nested `write.entities.*` keys
+  are part of `write.entities`.
 - **`GET /v1/stats?tenant_id=`** — per-tenant collection counts.
 - **OTEL spans** — emitted around `memory.write` / `memory.retrieve`; **no-op
   unless** an OpenTelemetry provider is configured in the host process.

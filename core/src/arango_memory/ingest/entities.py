@@ -32,7 +32,7 @@ from ..embedding import Embedder
 from ..embedding_cache import embed_batch_cached
 from ..models import utcnow_iso
 from ..schema.collections import ensure_vector_index
-from ..telemetry import metrics
+from ..telemetry import StageTimer, metrics
 from ..telemetry.logging import logger
 from .extract import (
     ExtractedEntity,
@@ -319,8 +319,11 @@ def write_entities(
     `source_reliability` (0..1) weights how much this episode corroborates each
     fact: it accumulates into `reliability_sum` and drives `belief` (§8/§12).
     """
-    extracted = extractor.extract(content)
+    timer = StageTimer("write.entities")  # per-write sums → /health write.entities.<stage>
+    with timer.stage("extract"):
+        extracted = extractor.extract(content)
     if not extracted:
+        timer.record()
         return []
 
     # SC-1b: use the ANN index (top-k nearest) once it is warm and the tenant is large; below
@@ -356,18 +359,23 @@ def write_entities(
 
     # Embed all distinct entity names up front — one provider call for the misses
     # (§16 batch embedding), keeping per-name cache semantics intact.
-    vec_by_name = embed_batch_cached(
-        embedder, [ent.name for ent in extracted], tenant_id=tenant_id
-    )
+    with timer.stage("embed"):
+        vec_by_name = embed_batch_cached(
+            embedder, [ent.name for ent in extracted], tenant_id=tenant_id
+        )
 
     for ent in extracted:
         vec = vec_by_name[ent.name]
-        match, sim = _best_match(vec, _candidates(vec), exclude=(ent.name, ent.label))
+        with timer.stage("candidates"):
+            candidates = _candidates(vec)
+        with timer.stage("match"):
+            match, sim = _best_match(vec, candidates, exclude=(ent.name, ent.label))
 
         if match is not None and sim >= settings.entity_merge_threshold:
             # Semantic duplicate of a differently-named entity → merge into it.
             inc_bind: dict[str, Any] = {"key": match["key"], "now": now, "rel": rel, "base": base}
-            db.aql.execute(_INCREMENT, bind_vars=inc_bind)
+            with timer.stage("upsert"):
+                db.aql.execute(_INCREMENT, bind_vars=inc_bind)
             key = cast(str, match["key"])
         else:
             needs_review = match is not None and sim >= settings.entity_flag_threshold
@@ -385,21 +393,27 @@ def write_entities(
                 "rel": rel,
                 "base": base,
             }
-            cursor = cast(Cursor, db.aql.execute(_UPSERT_ENTITY, bind_vars=up_bind))
-            key = cast(str, next(iter(cursor)))
+            with timer.stage("upsert"):
+                cursor = cast(Cursor, db.aql.execute(_UPSERT_ENTITY, bind_vars=up_bind))
+                key = cast(str, next(iter(cursor)))
 
         key_by_entity[(ent.name, ent.label)] = key
         key_by_name.setdefault(ent.name, key)
-        _edge(db, "mentions", f"{memory_key}__{key}", f"memories/{memory_key}", f"entities/{key}")
-        _edge(
-            db, "produced_by", f"{key}__{episode_key}",
-            f"entities/{key}", f"episodes/{episode_key}",
-        )
+        with timer.stage("edges"):
+            _edge(
+                db, "mentions", f"{memory_key}__{key}", f"memories/{memory_key}", f"entities/{key}"
+            )
+            _edge(
+                db, "produced_by", f"{key}__{episode_key}",
+                f"entities/{key}", f"episodes/{episode_key}",
+            )
 
     # One relation per entity pair (typed relationship wins over co-occurrence),
     # corroborated exactly once per episode so the count tracks independent episodes.
     pairs: dict[tuple[str, str], str] = {}
-    for relation in extractor.extract_relations(content, extracted):
+    with timer.stage("relations"):
+        typed_relations = list(extractor.extract_relations(content, extracted))
+    for relation in typed_relations:
         ka, kb = key_by_name.get(relation.source), key_by_name.get(relation.target)
         if not ka or not kb or ka == kb:
             continue
@@ -414,15 +428,17 @@ def write_entities(
             continue
         lo, hi = sorted((ka, kb))
         pairs.setdefault((lo, hi), "associated_with")  # don't downgrade a typed relation
-    for (lo, hi), relationship in pairs.items():
-        _relate(
-            db, key=f"{lo}__{hi}", from_id=f"entities/{lo}", to_id=f"entities/{hi}",
-            relationship=relationship, rel=rel, base=base, now=now, valid_time=explicit_vt,
-        )
+    with timer.stage("relate"):
+        for (lo, hi), relationship in pairs.items():
+            _relate(
+                db, key=f"{lo}__{hi}", from_id=f"entities/{lo}", to_id=f"entities/{hi}",
+                relationship=relationship, rel=rel, base=base, now=now, valid_time=explicit_vt,
+            )
 
     if detected:
         metrics.emit("conflict", detected=detected)
 
+    timer.record()
     # Preserve extraction order, de-duplicated.
     return list(dict.fromkeys(key_by_entity.values()))
 
