@@ -38,13 +38,19 @@ const SYNTHESIS_TASK =
 // claim caps this is plenty of drain window; the barrier is best-effort anyway (see flushStep).
 const FLUSH_TIMEOUT_MS = Number(process.env.DILIGENCE_FLUSH_MS ?? 30000);
 
-/** Run one specialist with the real extractor + async store (drained at flush:specialists). */
+// Specialist and red-team claims are committed synchronously (concurrently, see specialist.ts):
+// the hosted core drains its async queue on a single worker thread (~2.6s per write), so a burst
+// of ~130 queued claims takes minutes and the flush barrier times out with the queue still full.
+// DILIGENCE_SYNC_WRITES=0 restores the async queue.
+const SYNC_WRITES = process.env.DILIGENCE_SYNC_WRITES !== "0";
+
+/** Run one specialist with the real extractor + store (a no-op flush when writes are sync). */
 export function liveSpecialist(roomId: string, config: SpecialistConfig) {
   const extract = makeExtractor(getModel());
   return runSpecialist(config, {
     extract,
     store: async (agentId, doc, triple) => {
-      await storeClaim(roomId, agentId, claimFromDoc(doc, triple), { sync: false });
+      await storeClaim(roomId, agentId, claimFromDoc(doc, triple), { sync: SYNC_WRITES });
     },
   });
 }
@@ -79,14 +85,18 @@ export async function liveRedTeam(roomId: string) {
         source: "red-team analysis",
         source_reliability: d.confidence,
       };
-      await storeClaim(roomId, "redteam", finding, { sync: false });
+      await storeClaim(roomId, "redteam", finding, { sync: SYNC_WRITES });
     },
   });
 }
 
 /** Prime the team briefing, write the memo, and capture the verdict (MA-4). */
 export async function liveSynthesis(roomId: string): Promise<Memo> {
-  const briefing = await prime(roomId, SYNTHESIS_TASK);
+  // One retry: the briefing read can hit a core that is still busy with the preceding writes.
+  const briefing = await prime(roomId, SYNTHESIS_TASK).catch((err) => {
+    console.warn("[campaign] prime failed, retrying once:", err instanceof Error ? err.message : err);
+    return prime(roomId, SYNTHESIS_TASK);
+  });
   const memo = await runSynthesis(briefing.context, makeMemoWriter(getModel()));
   const verdict: Claim = {
     subject: memo.target,

@@ -14,6 +14,7 @@
 
 import { generateObject, type LanguageModel } from "ai";
 import { z } from "zod";
+import { mapLimit } from "../concurrency";
 import { agentCallOptions } from "../model";
 
 /** The kinds of dispute the red-team can raise (mirror the planted-defect kinds). */
@@ -117,9 +118,8 @@ export async function runRedTeam(deps: {
   record: RecordDisputeFn;
 }): Promise<RedTeamRun> {
   const disputes = await deps.find(deps.claims);
-  for (const d of disputes) {
-    await deps.record(d);
-  }
+  // Findings are independent writes; record them with bounded concurrency (see specialist.ts).
+  await mapLimit(disputes, 4, (d) => deps.record(d));
   return { claimsReviewed: deps.claims.length, disputes };
 }
 
