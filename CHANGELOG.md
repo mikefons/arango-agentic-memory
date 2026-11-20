@@ -94,6 +94,12 @@ are versioned together and released from this repository.
 
 ### Fixed
 
+- The write worker no longer dies on a transient error. A DB error while claiming or acking a batch
+  (or while dead-lettering) used to kill the background thread for good, so every queued write sat
+  undrained until the process restarted, with nothing in `/health` to show it. The worker now logs the
+  error with its traceback, hands the leased writes back, backs off (up to 30 s) and carries on.
+  `/health` gains `write_worker: "running" | "stopped"`.
+
 - JWT auth: a bearer token with an unknown `kid` made the core refetch the issuer's JWKS before
   the token was authenticated, so unauthenticated requests with random `kid`s could keep the IdP
   busy and tie up request threads. Refetches are now limited to one per 30 seconds and a fetch

@@ -517,7 +517,9 @@ the `store_p50` column should stay roughly flat instead of climbing.
 - **`GET /health`** — liveness + DB reachability + vector-arm state + process-global
   latency (`{status, arango, vector, mode, latency_ms}`). `vector` is `trained` /
   `deferred` (corpus below the training threshold → BM25-only) / `unknown` (DB
-  unreachable). `latency_ms` holds p50/p95/p99 (ms) over
+  unreachable). `write_worker` is `running` while the background write worker's thread is alive and
+  `stopped` if it is not (queued writes then pile up undrained until a restart; the response
+  stays `200`). `latency_ms` holds p50/p95/p99 (ms) over
   a rolling window per operation (`retrieval.lite`, `retrieval.full`, `write`),
   for checking tail latency against the §23 targets (**core retrieval p99 ≤ 200ms;
   lite end-to-end ≤ 250ms**) without an OTEL exporter. Empty until traffic flows;

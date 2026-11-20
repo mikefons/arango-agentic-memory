@@ -34,6 +34,7 @@ from .queue import Claim, Intent, StepIntent, WriteIntent, WriteQueue
 from .store import StoreItem, store, store_many
 
 _POLL_INTERVAL = 0.05
+_ERROR_BACKOFF_MAX = 30.0  # longest pause after repeated worker errors (seconds)
 
 
 def commit_intent(
@@ -263,10 +264,42 @@ class WriteWorker:
             self._thread.join(timeout=2.0)
             self._thread = None
 
+    def is_alive(self) -> bool:
+        """True while the background thread is running. `/health` reports it, because a dead
+        worker leaves every queued write undrained and nothing else shows it."""
+        return self._thread is not None and self._thread.is_alive()
+
     def _run(self) -> None:
+        failures = 0
         while not self._stop.is_set():
-            claims = self._claim_batch()
-            if not claims:
-                self._stop.wait(_POLL_INTERVAL)
-                continue
-            self._commit_claims(claims)  # finishes the in-flight round before re-checking stop
+            claims: list[Claim] = []
+            try:
+                claims = self._claim_batch()
+                if not claims:
+                    failures = 0
+                    self._stop.wait(_POLL_INTERVAL)
+                    continue
+                self._commit_claims(claims)  # finishes the in-flight round before re-checking stop
+                failures = 0
+            except Exception as exc:  # noqa: BLE001 — the worker thread must never die
+                # A transient error (a DB blip while claiming or acking, a failure while
+                # dead-lettering) used to kill this thread for good, leaving every queued write
+                # undrained until the process restarted. Release what we hold, back off, go on.
+                failures += 1
+                logger.error(
+                    "write worker iteration failed; will retry",
+                    extra={"error": str(exc), "consecutive_failures": failures},
+                    exc_info=True,
+                )
+                self._release(claims)
+                self._stop.wait(min(_ERROR_BACKOFF_MAX, 0.5 * 2 ** min(failures, 6)))
+
+    def _release(self, claims: list[Claim]) -> None:
+        """Best-effort: hand leased intents back so they are retried (commits are
+        idempotency-keyed, so a re-commit is safe). A durable queue would redeliver them when the
+        lease expires anyway; the in-process queue never would."""
+        for claim in claims:
+            try:
+                self._queue.nack(claim)
+            except Exception:  # noqa: BLE001 — releasing must not raise out of the error path
+                logger.warning("could not release a leased write", extra={"handle": claim.handle})
