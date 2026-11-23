@@ -59,7 +59,7 @@ Status: ✅ shipped · 🔄 built, merge pending · ✖ closed (won't do). Unmar
 | 25 | GX-3 | Fact retrieval arm over typed-relation statements (needs an LLM/GLiREL extractor) | L | GX-2 |
 | 26 | LM-1 | Neighbour expansion: inject the turns next to each hit (`opts.neighbor_turns`) 🔄 — built, off by default; answer accuracy not yet measured | S | — |
 | 27 | FK-1 | Fact-augmented keys: Dream-extracted facts per memory, matched by two extra retrieval arms 🔄 — built, off by default; measured, no accuracy gain | M | — |
-| 28 | WQ-1 | Write queue: more than one worker thread, so a burst of async writes drains in seconds, not minutes | M | — |
+| 28 | WQ-1 | Write queue throughput: batch commit (WQ-1b) ✅ drains a burst in seconds, not minutes; worker pool (WQ-1a) not needed | M | — |
 
 Recommended sequence: **MA-1 → MA-2 → MA-3 → MA-4 → MA-5 → MA-6**, with MA-7/MA-8
 schedulable any time (no dependencies on the others). MA-1…MA-8 are **shipped**. **RQ-1**
@@ -1589,7 +1589,12 @@ multi-session evidence. Our GLiREL/Haiku extractors already produce typed relati
 graph edges. Scope: render them as fact sentences, embed them, and add a fourth arm to the
 fusion. Only active when an LLM or GLiREL extractor is configured, so the keyless default is unchanged.
 
-### WQ-1 — Multi-worker write queue
+### WQ-1 — Write queue throughput  ✅ (WQ-1b shipped; WQ-1a not needed)
+
+> **Status (2026-11-20):** WQ-1b (batch commit, #291) shipped and measured on the hosted core;
+> both Diligence Room flush barriers now drain. See **Results** at the end of this section. WQ-1a
+> (a worker pool) is not needed for the demo and stays unbuilt unless a workload shows the batched
+> single worker as the limit.
 
 **Problem.** The durable write worker (`ingest/worker.py`) is one daemon thread that commits one
 intent at a time. On the hosted core (Railway + ArangoGraph) a commit takes about 2.6 s at p50
@@ -1729,3 +1734,41 @@ Diligence Room live, and read the flush log lines (`drained` or `N still queued`
 and `/health` `write.*`. Remove the demo's flush-cap workarounds only after that run is clean.
 
 **Size.** WQ-1b: M (about 200 lines plus tests). WQ-1a: M, only if the batch result says so.
+
+**Results (2026-11-20, hosted core: Railway + ArangoGraph; one live Diligence Room run each, so
+read the numbers as one sample, not a benchmark).**
+
+| | single `store()` per write | batch commit (#291) | batch commit, larger batches |
+|---|---|---|---|
+| Commit cost per claim | ~2.9 s (p50) | ~0.3 s | ~0.18 s |
+| flush:specialists | 30 s cap, 86–91 writes still queued | 30 s cap, 1 queued | **14.8 s, drained** |
+| flush:redteam | 30 s cap, 72–85 queued | 4.8 s, drained | 4.2 s, drained |
+| Run, specialists to memo | ~110 s | ~73 s | **~58 s** |
+
+(The first run of the original >5-minute baseline, with sequential specialists, is the starting
+point; the table starts after the specialists were parallelised in #284.) The red-team and
+synthesis now read a fully written room. I did not record the exact `WRITE_BATCH_SIZE` of the third
+run; it produced 8 batches for about 105 claims, against 15 for the second.
+
+Where one batch's time goes (p50 over 8 batches, ~2.4 s total): entity pass 1556 ms (66%) =
+`pool` 521 + `upsert` 291 + `embed` 216 + `edges` 182 + `relate` 157 + `increment` 92 (2 of 8
+batches) + `match` 2 + `extract` 0.2; then `insert` 437, claim `embed` 273, `existing` 93.
+
+**Acceptance (WQ-1b), checked**
+1. A burst of ~100 writes from 4 agents drained within the first flush (14.8 s) on the hosted core;
+   `/health` kept answering normally while it drained. Met (setting not recorded, see above).
+2. Counts versus a one-by-one run: verified locally (equal records; entities merge across the
+   batch), not on the hosted core. Zero dead letters were observed in the flush logs.
+3. Default `WRITE_BATCH_SIZE=1` unchanged: existing worker/queue tests pass. Met.
+4. Unit tests for `claim_many`/`ack_many`, routing, fallback and session/working intents. Met.
+
+**What is left, and why it is small now.** The write path is no longer the limit: of the ~58 s run,
+about 36 s is the three LLM calls (specialists 3.8 s, red-team 12.6 s, synthesis 20.0 s) and about
+19 s is the two flush waits. Remaining candidates, in order of value:
+1. **Entity-resolution candidate fetch (`write_many.entities.pool`, ~0.5 s a batch).** From the
+   code it checks the vector index and counts the tenant's entities, and with an untrained index
+   then pulls every existing entity row with its embedding. It grows with every run in the same
+   room. Split the timer (index check / count / fetch), cache the index-state check, and look at
+   fetching without embeddings. Worth maybe 0.3–0.4 s a batch and a few seconds off the first flush.
+2. **The LLM stages** (synthesis 20 s, red-team 12.6 s) are now most of the run.
+3. **WQ-1a (worker pool)**: only if a workload outgrows the single batched worker.
