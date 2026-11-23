@@ -39,9 +39,17 @@ def step_key(tenant_id: str, agent_id: str, tool_name: str, outcome: str) -> str
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
-def _edge(db: StandardDatabase, collection: str, key: str, from_id: str, to_id: str) -> None:
+def _edge(
+    db: StandardDatabase, collection: str, key: str, from_id: str, to_id: str, tenant_id: str
+) -> None:
     db.collection(collection).insert(
-        {"_key": key, "_from": from_id, "_to": to_id, "ingestion_time": utcnow_iso()},
+        {
+            "_key": key,
+            "_from": from_id,
+            "_to": to_id,
+            "tenant_id": tenant_id,
+            "ingestion_time": utcnow_iso(),
+        },
         overwrite_mode="ignore",
         silent=True,
     )
@@ -88,10 +96,10 @@ def record_step(
 
     if source_memory_key:
         _edge(db, "TOUCHED", f"{key}__{source_memory_key}",
-              f"steps/{key}", f"memories/{source_memory_key}")
+              f"steps/{key}", f"memories/{source_memory_key}", tenant_id)
     if prev_step_key and prev_step_key != key:
         _edge(db, "TRANSITION", f"{prev_step_key}__{key}",
-              f"steps/{prev_step_key}", f"steps/{key}")
+              f"steps/{prev_step_key}", f"steps/{key}", tenant_id)
     return key
 
 

@@ -165,7 +165,7 @@ def run_dream_state(
     now = utcnow_iso()
     entities = db.collection("entities")
     for new_key, old_key in supersessions:
-        supersede(db, new_key=new_key, old_key=old_key)
+        supersede(db, tenant_id=tenant_id, new_key=new_key, old_key=old_key)
         entities.update({"_key": new_key, "needs_review": False})
     for key in clears:
         entities.update({"_key": key, "needs_review": False})
