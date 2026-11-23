@@ -244,11 +244,14 @@ def _resolution_pool(
     return list(cast(Cursor, db.aql.execute(_FETCH_EXISTING, bind_vars={"tenant_id": tenant_id})))
 
 
-def _edge_doc(key: str, from_id: str, to_id: str, now: str, **extra: Any) -> dict[str, Any]:
+def _edge_doc(
+    key: str, from_id: str, to_id: str, now: str, tenant_id: str, **extra: Any
+) -> dict[str, Any]:
     return {
         "_key": key,
         "_from": from_id,
         "_to": to_id,
+        "tenant_id": tenant_id,
         "ingestion_time": now,
         "valid_time": now,          # defaults to ingestion_time (§4; explicit parse → 3e)
         "valid_time_explicit": False,
@@ -259,9 +262,15 @@ def _edge_doc(key: str, from_id: str, to_id: str, now: str, **extra: Any) -> dic
 
 
 def _edge(
-    db: StandardDatabase, collection: str, key: str, from_id: str, to_id: str, **extra: Any
+    db: StandardDatabase,
+    collection: str,
+    key: str,
+    from_id: str,
+    to_id: str,
+    tenant_id: str,
+    **extra: Any,
 ) -> None:
-    doc = _edge_doc(key, from_id, to_id, utcnow_iso(), **extra)
+    doc = _edge_doc(key, from_id, to_id, utcnow_iso(), tenant_id, **extra)
     db.collection(collection).insert(doc, overwrite_mode="ignore", silent=True)
 
 
@@ -271,6 +280,7 @@ def _relate(
     key: str,
     from_id: str,
     to_id: str,
+    tenant_id: str,
     relationship: str,
     rel: float,
     base: float,
@@ -282,6 +292,7 @@ def _relate(
         "_key": key,
         "_from": from_id,
         "_to": to_id,
+        "tenant_id": tenant_id,
         "relationship": relationship,
         "corroboration": 1,
         "reliability_sum": rel,
@@ -401,11 +412,12 @@ def write_entities(
         key_by_name.setdefault(ent.name, key)
         with timer.stage("edges"):
             _edge(
-                db, "mentions", f"{memory_key}__{key}", f"memories/{memory_key}", f"entities/{key}"
+                db, "mentions", f"{memory_key}__{key}", f"memories/{memory_key}",
+                f"entities/{key}", tenant_id,
             )
             _edge(
                 db, "produced_by", f"{key}__{episode_key}",
-                f"entities/{key}", f"episodes/{episode_key}",
+                f"entities/{key}", f"episodes/{episode_key}", tenant_id,
             )
 
     # One relation per entity pair (typed relationship wins over co-occurrence),
@@ -432,7 +444,8 @@ def write_entities(
         for (lo, hi), relationship in pairs.items():
             _relate(
                 db, key=f"{lo}__{hi}", from_id=f"entities/{lo}", to_id=f"entities/{hi}",
-                relationship=relationship, rel=rel, base=base, now=now, valid_time=explicit_vt,
+                tenant_id=tenant_id, relationship=relationship, rel=rel, base=base, now=now,
+                valid_time=explicit_vt,
             )
 
     if detected:
@@ -696,9 +709,9 @@ def write_entities_many(
         key = key_by_nl[nl]
         for mkey, ekey in a.mem_refs:
             mention_edges.append(_edge_doc(
-                f"{mkey}__{key}", f"memories/{mkey}", f"entities/{key}", now))
+                f"{mkey}__{key}", f"memories/{mkey}", f"entities/{key}", now, tenant_id))
             produced_edges.append(_edge_doc(
-                f"{key}__{ekey}", f"entities/{key}", f"episodes/{ekey}", now))
+                f"{key}__{ekey}", f"entities/{key}", f"episodes/{ekey}", now, tenant_id))
             result[mkey].append(key)
     with timer.stage("edges"):
         if mention_edges:
@@ -738,7 +751,8 @@ def write_entities_many(
             vt = pa["vt"]
             doc = {
                 "_key": f"{lo}__{hi}", "_from": f"entities/{lo}", "_to": f"entities/{hi}",
-                "relationship": pa["relationship"], "corroboration": pa["corr"],
+                "tenant_id": tenant_id, "relationship": pa["relationship"],
+                "corroboration": pa["corr"],
                 "reliability_sum": pa["rel_sum"], "belief": 1 - (1 - base) ** pa["rel_sum"],
                 "ingestion_time": now, "valid_time": vt or now,
                 "valid_time_explicit": vt is not None, "invalid_at": None,

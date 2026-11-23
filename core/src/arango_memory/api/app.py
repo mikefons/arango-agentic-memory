@@ -30,7 +30,7 @@ from ..ingest.procedural import get_steps
 from ..ingest.queue import ArangoQueue, InProcessQueue, StepIntent, WriteIntent, WriteQueue
 from ..ingest.worker import WriteWorker, commit_intent
 from ..lifecycle.community import compute_communities
-from ..lifecycle.conflict import supersede
+from ..lifecycle.conflict import CrossTenantSupersede, supersede
 from ..lifecycle.dream import run_dream_state
 from ..lifecycle.ontology import (
     approve_proposal,
@@ -615,7 +615,12 @@ async def supersede_endpoint(
 ) -> SupersedeResponse:
     """Record `new` superseding `old` (Supersedes edge + soft-deprecate old, §12)."""
     _authorize(request, tenant_id=req.ctx.tenant_id, access_level=req.ctx.access_level, write=True)
-    supersede(client.db, new_key=req.new_key, old_key=req.old_key)
+    try:
+        supersede(
+            client.db, tenant_id=req.ctx.tenant_id, new_key=req.new_key, old_key=req.old_key
+        )
+    except CrossTenantSupersede as exc:
+        raise HTTPException(status_code=404, detail="entity not found") from exc
     return SupersedeResponse()
 
 

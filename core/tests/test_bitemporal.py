@@ -42,8 +42,8 @@ def test_supersede_writes_edge_and_soft_deprecates(db: StandardDatabase) -> None
     keys = _entities_by_name(db, "t_sup")
     new_key, old_key = keys["Acme Corp"], keys["Globex Inc"]
 
-    supersede(db, new_key=new_key, old_key=old_key)
-    supersede(db, new_key=new_key, old_key=old_key)  # idempotent
+    supersede(db, tenant_id="t_sup", new_key=new_key, old_key=old_key)
+    supersede(db, tenant_id="t_sup", new_key=new_key, old_key=old_key)  # idempotent
 
     assert db.collection("Supersedes").count() == 1
     edge = db.collection("Supersedes").get(f"{new_key}__{old_key}")
@@ -68,7 +68,7 @@ def test_graph_traversal_excludes_superseded_entity(
 
     # Soft-deprecate Acme → it must no longer bridge the graph.
     keys = _entities_by_name(db, "t_gx")
-    supersede(db, new_key=keys["Alice"], old_key=keys["Acme"])
+    supersede(db, tenant_id="t_gx", new_key=keys["Alice"], old_key=keys["Acme"])
 
     after = retrieve(db, query="Alice", k=10, **ctx)
     assert not any("widgets" in h.text for h in after.hits)

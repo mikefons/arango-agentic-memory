@@ -30,8 +30,38 @@ class Migration:
     apply: Callable[[StandardDatabase], None]
 
 
-# Ordered registry. Empty at v1 (baseline = idempotent ensure_schema).
-MIGRATIONS: list[Migration] = []
+_EDGE_COLLECTIONS = (
+    "mentions", "relates_to", "produced_by", "TOUCHED", "TRANSITION", "Supersedes",
+)
+_BACKFILL_BATCH = 5000
+
+# Every edge's `_from` vertex (entity / memory / step) carries the tenant. Rows whose endpoint
+# is gone or untagged are skipped (filtered before LIMIT), so each pass strictly shrinks the set.
+_BACKFILL_EDGE_TENANT = """
+FOR e IN @@coll
+  FILTER e.tenant_id == null
+  LET t = DOCUMENT(e._from).tenant_id
+  FILTER t != null
+  LIMIT @batch
+  UPDATE e WITH { tenant_id: t } IN @@coll
+  RETURN 1
+"""
+
+
+def _backfill_edge_tenant_id(db: StandardDatabase) -> None:
+    """Stamp `tenant_id` on edges written before edges carried it. Idempotent, batched."""
+    for coll in _EDGE_COLLECTIONS:
+        while True:
+            bind: dict[str, Any] = {"@coll": coll, "batch": _BACKFILL_BATCH}
+            cursor = db.aql.execute(_BACKFILL_EDGE_TENANT, bind_vars=bind)
+            if len(list(cast(Any, cursor))) < _BACKFILL_BATCH:
+                break
+
+
+# Ordered registry (baseline = idempotent ensure_schema; deltas below).
+MIGRATIONS: list[Migration] = [
+    Migration(1, "edge_tenant_id", _backfill_edge_tenant_id),
+]
 
 
 def _applied_version(db: StandardDatabase) -> int:

@@ -44,7 +44,7 @@ def test_list_entities_filters_and_hides_soft_deleted(db: StandardDatabase) -> N
     assert list_entities(db, tenant_id="ent3", label="Person") == []  # fake → all "Concept"
 
     alice, bob = _entity_id(db, "ent3", "Alice"), _entity_id(db, "ent3", "Bob")
-    supersede(db, new_key=bob, old_key=alice)  # Alice soft-deleted
+    supersede(db, tenant_id="ent3", new_key=bob, old_key=alice)  # Alice soft-deleted
     assert "Alice" not in {r["name"] for r in list_entities(db, tenant_id="ent3")}
 
 

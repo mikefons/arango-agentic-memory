@@ -147,6 +147,8 @@ def _ensure_scope_indexes(db: StandardDatabase) -> None:
         # core memory by `memory_key`; scans filter by tenant/agent (+ scope prefix).
         ("crewai_records", "idx_crewai_scope", ["tenant_id", "agent_id", "scope"]),
         ("crewai_records", "idx_crewai_memory", ["tenant_id", "agent_id", "memory_key"]),
+        # Every edge carries its tenant_id, like the vertices (migration 1 backfills old rows).
+        *((name, "idx_edge_tenant", ["tenant_id"]) for name in EDGE_COLLECTIONS),
     ):
         db.collection(collection).add_index(
             {"type": "persistent", "fields": fields, "name": name}
