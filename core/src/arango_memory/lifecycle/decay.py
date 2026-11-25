@@ -72,6 +72,8 @@ def reset_access(db: StandardDatabase, memory_keys: list[str]) -> None:
           FILTER doc != null
           UPDATE doc WITH { accessed_at: @now, access_count: (doc.access_count || 1) + 1 }
             IN memories
+          // Concurrent reads of one memory race here; losing an access bump is fine.
+          OPTIONS { ignoreErrors: true }
         """,
         bind_vars=bind_vars,
     )

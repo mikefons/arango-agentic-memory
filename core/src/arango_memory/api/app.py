@@ -14,6 +14,8 @@ from contextlib import asynccontextmanager
 from enum import Enum
 from typing import Any, Literal
 
+import anyio
+from arango.database import StandardDatabase
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, field_validator
@@ -25,7 +27,7 @@ from ..embedding import Embedder, get_embedder
 from ..entity_api import get_entity, list_entities, seed
 from ..generation import Generator, get_generator
 from ..graph_api import tenant_graph
-from ..ingest.extract import Extractor, get_extractor
+from ..ingest.extract import Extractor, get_extractor, serialize_if_cpu_bound
 from ..ingest.procedural import get_steps
 from ..ingest.queue import ArangoQueue, InProcessQueue, StepIntent, WriteIntent, WriteQueue
 from ..ingest.worker import WriteWorker, commit_intent
@@ -54,6 +56,29 @@ from .limits import RequestSizeLimitMiddleware, rate_limit
 def get_client(request: Request) -> ArangoMemoryClient:
     """Resolve the request-scoped Arango client from app state."""
     return request.app.state.client  # type: ignore[no-any-return]
+
+
+@asynccontextmanager
+async def _leased(app: FastAPI) -> AsyncIterator[StandardDatabase]:
+    """A pooled database handle. The wait for one happens on the event loop, so queued
+    requests hold no thread (which also rules out threads and handles deadlocking)."""
+    async with app.state.db_slots:
+        with app.state.db_pool.lease() as db:
+            yield db
+
+
+async def get_db(request: Request) -> AsyncIterator[StandardDatabase]:
+    """This request's own database handle."""
+    async with _leased(request.app) as db:
+        yield db
+
+
+async def one_at_a_time(request: Request) -> AsyncIterator[None]:
+    """Run maintenance and bulk-mutation routes one at a time per process: each rewrites
+    much of a tenant's graph and isn't written to race another. Declare before `get_db`,
+    so a waiting request holds no handle."""
+    async with request.app.state.maintenance_lock:
+        yield
 
 
 def get_embedder_dep(request: Request) -> Embedder:
@@ -118,6 +143,7 @@ def _authorize(
     `access_level` governs writes, exactly as before — agent binding does not apply.
     """
     tenant_var.set(tenant_id)  # correlation: tag this request's logs with the tenant
+    request.state.tenant = tenant_id  # …and the access line (see RequestLogMiddleware)
     principal = getattr(request.state, "principal", None)
     if principal is None:  # open mode — body-asserted ABAC (unchanged)
         if write and access_level != "write":
@@ -381,9 +407,19 @@ def _require_ontology() -> None:
 
 
 # ── Route handlers ────────────────────────────────────────
+# A handler that touches the database, embedder, generator or extractor is a plain `def`,
+# so FastAPI runs it in its threadpool and one slow call doesn't stall every other request.
+# The few `async` ones push their blocking calls to a thread themselves.
 async def health(
     request: Request, client: ArangoMemoryClient = Depends(get_client)
 ) -> dict[str, object]:
+    # Probes get their own handle and thread slot, so they never queue behind requests.
+    return await anyio.to_thread.run_sync(
+        _health, request, client, limiter=request.app.state.probe_limiter
+    )
+
+
+def _health(request: Request, client: ArangoMemoryClient) -> dict[str, object]:
     # **Liveness** — is the process up? Always 200 when serving; *not* gated on the DB
     # (so a DB blip can't trigger a liveness-probe restart loop — that's /ready's job).
     # `arango` is informational; `latency` is process-global p50/p95/p99 (§18/§23),
@@ -410,25 +446,27 @@ async def health(
     }
 
 
-async def ready(client: ArangoMemoryClient = Depends(get_client)) -> JSONResponse:
+async def ready(
+    request: Request, client: ArangoMemoryClient = Depends(get_client)
+) -> JSONResponse:
     # **Readiness** — can the service actually serve (DB reachable)? `503` when not,
     # so an orchestrator stops routing traffic without restarting the pod. Wire k8s
     # readinessProbe here.
-    ok = client.ping()
+    ok = await anyio.to_thread.run_sync(client.ping, limiter=request.app.state.probe_limiter)
     return JSONResponse(
         {"status": "ready" if ok else "unavailable", "arango": ok},
         status_code=200 if ok else 503,
     )
 
 
-def _sync_commit(request: Request, intent: Any, *, tenant_id: str, sync_view: bool) -> None:
+def _sync_commit(
+    state: Any, db: StandardDatabase, intent: Any, *, tenant_id: str, sync_view: bool
+) -> None:
     """Commit an intent inline on the request thread (MA-1 sync path), then force the
     search view to reflect it. Bypasses the queue — so no dead-letter; a commit failure
     surfaces to the caller as 503 (they asked to block on the result). Idempotency-keyed,
     so it can't duplicate a concurrent async commit of the same intent.
     """
-    state = request.app.state
-    db = state.client.db
     try:
         commit_intent(
             db, intent,
@@ -441,6 +479,15 @@ def _sync_commit(request: Request, intent: Any, *, tenant_id: str, sync_view: bo
         force_view_sync(db, tenant_id)
 
 
+async def _commit_now(app: FastAPI, intent: Any, *, tenant_id: str, sync_view: bool) -> None:
+    """`_sync_commit` in a thread. Inline commits go one at a time: two writing the same
+    entity would conflict, and a retried half-commit skips entity extraction."""
+    async with app.state.sync_write_lock, _leased(app) as db:
+        await anyio.to_thread.run_sync(
+            lambda: _sync_commit(app.state, db, intent, tenant_id=tenant_id, sync_view=sync_view)
+        )
+
+
 async def flush_endpoint(
     request: Request,
     req: FlushRequest,
@@ -451,13 +498,14 @@ async def flush_endpoint(
     queue hasn't drained by `timeout_ms`."""
     _authorize(request, tenant_id=req.ctx.tenant_id, access_level=req.ctx.access_level)
     deadline = time.monotonic() + req.timeout_ms / 1000.0
-    pending = queue.pending_count(req.ctx.tenant_id)
+    pending = await anyio.to_thread.run_sync(queue.pending_count, req.ctx.tenant_id)
     while pending > 0 and time.monotonic() < deadline:
         await asyncio.sleep(0.05)
-        pending = queue.pending_count(req.ctx.tenant_id)
+        pending = await anyio.to_thread.run_sync(queue.pending_count, req.ctx.tenant_id)
     if pending > 0:
         return FlushResponse(status="timeout", pending=pending)
-    force_view_sync(request.app.state.client.db, req.ctx.tenant_id)
+    async with _leased(request.app) as db:
+        await anyio.to_thread.run_sync(force_view_sync, db, req.ctx.tenant_id)
     return FlushResponse(status="flushed")
 
 
@@ -486,10 +534,10 @@ async def store_endpoint(
         memory_type=req.memory_type,
     )
     if req.sync:
-        _sync_commit(request, intent, tenant_id=req.ctx.tenant_id, sync_view=True)
+        await _commit_now(request.app, intent, tenant_id=req.ctx.tenant_id, sync_view=True)
         return StoreResponse(status="committed", episode_id=intent.key,
                              memory_ids=[f"{intent.key}-mem"])
-    queue.enqueue(intent)
+    await anyio.to_thread.run_sync(queue.enqueue, intent)
     return StoreResponse(episode_id=intent.key, memory_ids=[f"{intent.key}-mem"])
 
 
@@ -517,89 +565,91 @@ async def step_endpoint(
     )
     if req.sync:
         # Steps land in the `steps` collection (immediately consistent), so no view sync.
-        _sync_commit(request, intent, tenant_id=req.ctx.tenant_id, sync_view=False)
+        await _commit_now(request.app, intent, tenant_id=req.ctx.tenant_id, sync_view=False)
         return StepResponse(status="committed", step_id=intent.key)
-    queue.enqueue(intent)
+    await anyio.to_thread.run_sync(queue.enqueue, intent)
     return StepResponse(step_id=intent.key)
 
 
-async def steps_endpoint(
+def steps_endpoint(
     request: Request,
     tenant_id: str,
     agent_id: str,
     tool_name: str | None = None,
     limit: int = 20,
-    client: ArangoMemoryClient = Depends(get_client),
+    db: StandardDatabase = Depends(get_db),
 ) -> StepsResponse:
     _authorize(request, tenant_id=tenant_id)
     steps = get_steps(
-        client.db, tenant_id=tenant_id, agent_id=agent_id, tool_name=tool_name, limit=limit
+        db, tenant_id=tenant_id, agent_id=agent_id, tool_name=tool_name, limit=limit
     )
     return StepsResponse(steps=steps)
 
 
-async def forget_endpoint(
+def forget_endpoint(
     request: Request,
     req: ForgetRequest,
-    client: ArangoMemoryClient = Depends(get_client),
+    _turn: None = Depends(one_at_a_time),
+    db: StandardDatabase = Depends(get_db),
 ) -> ForgetResponse:
     # Right to be forgotten (§17) — destructive, so requires write access. `hard` hard-deletes
     # (purge) instead of soft-deleting, so a subsequent re-store of the same content isn't
     # skipped by idempotency (the keys are gone, not just flagged).
     _authorize(request, tenant_id=req.tenant_id, access_level=req.access_level, write=True)
     if req.hard:
-        counts = purge(client.db, tenant_id=req.tenant_id, agent_id=req.agent_id)
+        counts = purge(db, tenant_id=req.tenant_id, agent_id=req.agent_id)
         return ForgetResponse(status="purged", counts=counts)
-    counts = forget(client.db, tenant_id=req.tenant_id, agent_id=req.agent_id)
+    counts = forget(db, tenant_id=req.tenant_id, agent_id=req.agent_id)
     return ForgetResponse(status="forgotten", counts=counts)
 
 
-async def stats_endpoint(
+def stats_endpoint(
     request: Request,
     tenant_id: str,
-    client: ArangoMemoryClient = Depends(get_client),
+    db: StandardDatabase = Depends(get_db),
 ) -> StatsResponse:
     _authorize(request, tenant_id=tenant_id)
-    return StatsResponse(counts=stats(client.db, tenant_id=tenant_id))
+    return StatsResponse(counts=stats(db, tenant_id=tenant_id))
 
 
-async def entity_endpoint(
+def entity_endpoint(
     request: Request,
     entity_id: str,
     tenant_id: str,
-    client: ArangoMemoryClient = Depends(get_client),
+    db: StandardDatabase = Depends(get_db),
 ) -> EntityResponse:
     _authorize(request, tenant_id=tenant_id)
-    found = get_entity(client.db, entity_id=entity_id, tenant_id=tenant_id)
+    found = get_entity(db, entity_id=entity_id, tenant_id=tenant_id)
     if found is None:
         raise HTTPException(status_code=404, detail="entity not found")
     return EntityResponse(entity=found["entity"], related=found["related"])
 
 
-async def entities_endpoint(
+def entities_endpoint(
     request: Request,
     tenant_id: str,
     agent_id: str | None = None,
     label: str | None = None,
     limit: int = 50,
-    client: ArangoMemoryClient = Depends(get_client),
+    db: StandardDatabase = Depends(get_db),
 ) -> EntitiesResponse:
     _authorize(request, tenant_id=tenant_id)
     rows = list_entities(
-        client.db, tenant_id=tenant_id, agent_id=agent_id, label=label, limit=limit
+        db, tenant_id=tenant_id, agent_id=agent_id, label=label, limit=limit
     )
     return EntitiesResponse(entities=rows)
 
 
-async def seed_endpoint(
+def seed_endpoint(
     request: Request,
     req: SeedRequest,
-    client: ArangoMemoryClient = Depends(get_client),
+    _turn: None = Depends(one_at_a_time),
+    db: StandardDatabase = Depends(get_db),
     embedder: Embedder = Depends(get_embedder_dep),
 ) -> SeedResponse:
     _authorize(request, tenant_id=req.ctx.tenant_id, access_level=req.ctx.access_level, write=True)
     ids = seed(
-        client.db,
+        db,
         profile=req.profile,
         tenant_id=req.ctx.tenant_id,
         agent_id=req.ctx.agent_id,
@@ -608,42 +658,44 @@ async def seed_endpoint(
     return SeedResponse(entity_ids=ids)
 
 
-async def supersede_endpoint(
+def supersede_endpoint(
     request: Request,
     req: SupersedeRequest,
-    client: ArangoMemoryClient = Depends(get_client),
+    _turn: None = Depends(one_at_a_time),
+    db: StandardDatabase = Depends(get_db),
 ) -> SupersedeResponse:
     """Record `new` superseding `old` (Supersedes edge + soft-deprecate old, §12)."""
     _authorize(request, tenant_id=req.ctx.tenant_id, access_level=req.ctx.access_level, write=True)
     try:
         supersede(
-            client.db, tenant_id=req.ctx.tenant_id, new_key=req.new_key, old_key=req.old_key
+            db, tenant_id=req.ctx.tenant_id, new_key=req.new_key, old_key=req.old_key
         )
     except CrossTenantSupersede as exc:
         raise HTTPException(status_code=404, detail="entity not found") from exc
     return SupersedeResponse()
 
 
-async def graph_endpoint(
+def graph_endpoint(
     request: Request,
     tenant_id: str,
-    client: ArangoMemoryClient = Depends(get_client),
+    db: StandardDatabase = Depends(get_db),
 ) -> GraphResponse:
     """The tenant's full semantic graph (entities + relates_to/Supersedes), §11."""
     _authorize(request, tenant_id=tenant_id)
-    g = tenant_graph(client.db, tenant_id=tenant_id)
+    g = tenant_graph(db, tenant_id=tenant_id)
     return GraphResponse(nodes=g["nodes"], edges=g["edges"])
 
 
-async def dream_endpoint(
+def dream_endpoint(
     request: Request,
     req: DreamRequest,
-    client: ArangoMemoryClient = Depends(get_client),
+    _turn: None = Depends(one_at_a_time),
+    db: StandardDatabase = Depends(get_db),
     generator: Generator = Depends(get_generator_dep),
 ) -> DreamResponse:
     """Run Dream State consolidation for the tenant (§13) — mutating, write-only."""
     _authorize(request, tenant_id=req.ctx.tenant_id, access_level=req.ctx.access_level, write=True)
-    r = run_dream_state(client.db, tenant_id=req.ctx.tenant_id, generator=generator)
+    r = run_dream_state(db, tenant_id=req.ctx.tenant_id, generator=generator)
     return DreamResponse(
         reviewed=r.reviewed,
         superseded=r.superseded,
@@ -654,86 +706,91 @@ async def dream_endpoint(
     )
 
 
-async def salience_endpoint(
+def salience_endpoint(
     request: Request,
     req: SalienceRequest,
-    client: ArangoMemoryClient = Depends(get_client),
+    _turn: None = Depends(one_at_a_time),
+    db: StandardDatabase = Depends(get_db),
 ) -> SalienceResponse:
     """Recompute PageRank centrality for the tenant's entities (§9/§13) — write-only."""
     _authorize(request, tenant_id=req.ctx.tenant_id, access_level=req.ctx.access_level, write=True)
-    result = compute_centrality(client.db, tenant_id=req.ctx.tenant_id)
+    result = compute_centrality(db, tenant_id=req.ctx.tenant_id)
     return SalienceResponse(entities=result.get("entities", 0))
 
 
-async def community_endpoint(
+def community_endpoint(
     request: Request,
     req: CommunityRequest,
-    client: ArangoMemoryClient = Depends(get_client),
+    _turn: None = Depends(one_at_a_time),
+    db: StandardDatabase = Depends(get_db),
 ) -> CommunityResponse:
     """Recompute LPA community labels for the tenant's entities (§9/§13) — write-only."""
     _authorize(request, tenant_id=req.ctx.tenant_id, access_level=req.ctx.access_level, write=True)
-    result = compute_communities(client.db, tenant_id=req.ctx.tenant_id)
+    result = compute_communities(db, tenant_id=req.ctx.tenant_id)
     return CommunityResponse(
         entities=result.get("entities", 0), communities=result.get("communities", 0)
     )
 
 
-async def ontology_scan_endpoint(
+def ontology_scan_endpoint(
     request: Request,
     req: OntologyScanRequest,
-    client: ArangoMemoryClient = Depends(get_client),
+    _turn: None = Depends(one_at_a_time),
+    db: StandardDatabase = Depends(get_db),
     generator: Generator = Depends(get_generator_dep),
 ) -> OntologyScanResponse:
     """Propose typed relationships from co-occurrence clusters (§13) — write-only, flag-gated."""
     _require_ontology()
     _authorize(request, tenant_id=req.ctx.tenant_id, access_level=req.ctx.access_level, write=True)
     result = propose_relationship_types(
-        client.db, tenant_id=req.ctx.tenant_id, generator=generator
+        db, tenant_id=req.ctx.tenant_id, generator=generator
     )
     return OntologyScanResponse(
         clusters=result.get("clusters", 0), proposed=result.get("proposed", 0)
     )
 
 
-async def ontology_proposals_endpoint(
+def ontology_proposals_endpoint(
     request: Request,
     tenant_id: str,
     status: str | None = None,
     access_level: Literal["read", "write"] = "read",
-    client: ArangoMemoryClient = Depends(get_client),
+    db: StandardDatabase = Depends(get_db),
 ) -> list[dict[str, Any]]:
     """List relationship proposals for human review (§13) — flag-gated."""
     _require_ontology()
     _authorize(request, tenant_id=tenant_id)
-    return list_proposals(client.db, tenant_id=tenant_id, status=status)
+    return list_proposals(db, tenant_id=tenant_id, status=status)
 
 
-async def ontology_approve_endpoint(
+def ontology_approve_endpoint(
     request: Request,
     req: OntologyDecisionRequest,
-    client: ArangoMemoryClient = Depends(get_client),
+    _turn: None = Depends(one_at_a_time),
+    db: StandardDatabase = Depends(get_db),
 ) -> dict[str, Any]:
     """Approve a proposal → relabel the tenant's matching co-occurrence edges — write-only."""
     _require_ontology()
     _authorize(request, tenant_id=req.ctx.tenant_id, access_level=req.ctx.access_level, write=True)
-    return approve_proposal(client.db, tenant_id=req.ctx.tenant_id, key=req.key)
+    return approve_proposal(db, tenant_id=req.ctx.tenant_id, key=req.key)
 
 
-async def ontology_reject_endpoint(
+def ontology_reject_endpoint(
     request: Request,
     req: OntologyDecisionRequest,
-    client: ArangoMemoryClient = Depends(get_client),
+    _turn: None = Depends(one_at_a_time),
+    db: StandardDatabase = Depends(get_db),
 ) -> dict[str, Any]:
     """Reject a proposal (no graph change) — write-only."""
     _require_ontology()
     _authorize(request, tenant_id=req.ctx.tenant_id, access_level=req.ctx.access_level, write=True)
-    return reject_proposal(client.db, tenant_id=req.ctx.tenant_id, key=req.key)
+    return reject_proposal(db, tenant_id=req.ctx.tenant_id, key=req.key)
 
 
-async def retrieve_endpoint(
+def retrieve_endpoint(
     request: Request,
     req: RetrieveRequest,
-    client: ArangoMemoryClient = Depends(get_client),
+    db: StandardDatabase = Depends(get_db),
     embedder: Embedder = Depends(get_embedder_dep),
     generator: Generator = Depends(get_generator_dep),
     cache: QueryCache = Depends(get_cache_dep),
@@ -745,7 +802,7 @@ async def retrieve_endpoint(
         read_agent_ids=req.ctx.read_agent_ids,
     )
     result = retrieve(
-        client.db,
+        db,
         query=req.query,
         tenant_id=req.ctx.tenant_id,
         agent_id=req.ctx.agent_id,
@@ -774,10 +831,10 @@ async def retrieve_endpoint(
     )
 
 
-async def prime_endpoint(
+def prime_endpoint(
     request: Request,
     req: PrimeRequest,
-    client: ArangoMemoryClient = Depends(get_client),
+    db: StandardDatabase = Depends(get_db),
     embedder: Embedder = Depends(get_embedder_dep),
     generator: Generator = Depends(get_generator_dep),
     cache: QueryCache = Depends(get_cache_dep),
@@ -791,7 +848,7 @@ async def prime_endpoint(
         read_agent_ids=req.ctx.read_agent_ids,
     )
     result = prime(
-        client.db,
+        db,
         task=req.task,
         tenant_id=req.ctx.tenant_id,
         agent_id=req.ctx.agent_id,
@@ -860,18 +917,25 @@ def create_app(client: ArangoMemoryClient | None = None) -> FastAPI:
     worker_client = ArangoMemoryClient(mem_client.config)  # own connection for the worker thread
     embedder = get_embedder()
     generator = get_generator()
-    extractor = get_extractor()
+    # Sync commits (request threads) and the worker share one CPU-bound extractor.
+    extractor = serialize_if_cpu_bound(get_extractor())
     cache = QueryCache()
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         ensure_schema(mem_client.connect())
+        pool_size = mem_client.config.arango_pool_size
+        app.state.db_pool = mem_client.pool(pool_size)
+        app.state.db_slots = anyio.Semaphore(pool_size)
+        app.state.probe_limiter = anyio.CapacityLimiter(1)  # one probe handle: `client.db`
+        app.state.sync_write_lock = anyio.Lock()
+        app.state.maintenance_lock = anyio.Lock()
         # Build the queue after the schema exists (the durable backend needs its
         # collection). "arango" survives restarts; "memory" is the dev/CI default.
         queue: WriteQueue
         if settings.write_queue_backend == "arango":
             queue = ArangoQueue(
-                ArangoMemoryClient(mem_client.config).connect(),
+                mem_client.pool(mem_client.config.arango_pool_size),
                 lease_seconds=settings.write_lease_seconds,
             )
         else:

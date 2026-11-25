@@ -48,6 +48,9 @@ class Settings(BaseSettings):
     # may be a CA-bundle path. Ignored for plain-http local connections.
     arango_tls_verify: bool = True
     arango_request_timeout: int = 60
+    # Database connections the API leases to concurrent requests (the durable write queue
+    # keeps a second pool of the same size). A request past the limit waits for one.
+    arango_pool_size: int = Field(default=16, ge=1, le=128)
 
     # Embeddings
     openai_api_key: str | None = None

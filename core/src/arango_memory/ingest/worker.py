@@ -16,9 +16,9 @@ from __future__ import annotations
 import dataclasses
 import threading
 import time
-from collections.abc import Callable, Sequence
+from collections.abc import Callable
 from concurrent.futures import Future, ThreadPoolExecutor
-from typing import Any, cast
+from typing import cast
 
 from arango.cursor import Cursor
 from arango.database import StandardDatabase
@@ -30,7 +30,11 @@ from ..models import utcnow_iso
 from ..schema.collections import DEAD_LETTER_COLLECTION
 from ..telemetry import metrics
 from ..telemetry.logging import logger, request_id_var, tenant_var
-from .extract import ExtractedEntity, ExtractedRelation, Extractor, get_extractor, is_io_bound
+from .extract import (
+    Extractor,
+    get_extractor,
+    serialize_if_cpu_bound,
+)
 from .procedural import record_step
 from .queue import Claim, Intent, StepIntent, WriteIntent, WriteQueue
 from .store import StoreItem, store, store_many
@@ -45,31 +49,6 @@ _CONFLICT_RETRIES = 3
 
 def _is_conflict(exc: BaseException) -> bool:
     return getattr(exc, "error_code", None) in _CONFLICT_CODES
-
-
-class _SerializedExtractor:
-    """Lets agent groups share a CPU-bound extractor: calls take a lock, so the models run one
-    at a time (they contend under the GIL anyway) while the DB round trips overlap."""
-
-    io_bound = False
-
-    def __init__(self, inner: Extractor) -> None:
-        self._inner = inner
-        self._lock = threading.Lock()
-        self.name = inner.name
-
-    def extract(self, text: str) -> list[ExtractedEntity]:
-        with self._lock:
-            return self._inner.extract(text)
-
-    def extract_relations(
-        self, text: str, entities: Sequence[ExtractedEntity]
-    ) -> list[ExtractedRelation]:
-        with self._lock:
-            return self._inner.extract_relations(text, entities)
-
-    def __getattr__(self, attr: str) -> Any:
-        return getattr(self._inner, attr)
 
 
 def commit_intent(
@@ -142,8 +121,8 @@ class WriteWorker:
         self._concurrency = (
             concurrency if concurrency is not None else settings.write_worker_concurrency
         )
-        if self._concurrency > 1 and not is_io_bound(self._extractor):
-            self._extractor = _SerializedExtractor(self._extractor)
+        if self._concurrency > 1:
+            self._extractor = serialize_if_cpu_bound(self._extractor)
         # Each pool thread opens its own connection (a shared one is not safe to drive from
         # several threads); without a factory the pool shares `db`.
         self._db_factory = db_factory
