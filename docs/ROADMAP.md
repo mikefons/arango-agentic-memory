@@ -60,6 +60,7 @@ Status: ✅ shipped · 🔄 built, merge pending · ✖ closed (won't do). Unmar
 | 26 | LM-1 | Neighbour expansion: inject the turns next to each hit (`opts.neighbor_turns`) 🔄 — built, off by default; answer accuracy not yet measured | S | — |
 | 27 | FK-1 | Fact-augmented keys: Dream-extracted facts per memory, matched by two extra retrieval arms 🔄 — built, off by default; measured, no accuracy gain | M | — |
 | 28 | WQ-1 | Write queue: more than one worker thread, so a burst of async writes drains in seconds, not minutes | M | — |
+| 29 | PF-1 | Request latency: handlers off the event loop, no embeddings in arm results, cached vector-index state, batch writes on, fewer round trips (PF-1a–h) | L | WQ-1 |
 
 Recommended sequence: **MA-1 → MA-2 → MA-3 → MA-4 → MA-5 → MA-6**, with MA-7/MA-8
 schedulable any time (no dependencies on the others). MA-1…MA-8 are **shipped**. **RQ-1**
@@ -1729,3 +1730,235 @@ Diligence Room live, and read the flush log lines (`drained` or `N still queued`
 and `/health` `write.*`. Remove the demo's flush-cap workarounds only after that run is clean.
 
 **Size.** WQ-1b: M (about 200 lines plus tests). WQ-1a: M, only if the batch result says so.
+
+---
+
+## PF-1 — Request latency: concurrency, payload and round trips
+
+**Why.** Measured 2026-11-25 on `bench_fresh` (a 565-memory tenant, 1536-dim vectors) through a
+TCP proxy that adds the ~90 ms per database call that WQ-1 measured between Railway and
+ArangoGraph. Python's own CPU is about 5% of a request: 51 ms of a 1.1 s retrieve, and 26 ms of
+spaCy in a 1.5 s write. The rest is waiting on the database and the embedding API, one call after
+another. That is also why a rewrite in another language is out of scope (see the end).
+
+| Finding | Measured |
+|---|---|
+| Every route handler is `async def` but calls python-arango and the embedding API synchronously, and the image runs one uvicorn process. The core serves one request at a time. | 8 concurrent retrieves: 7.1 s (1.3 s with the handlers in the threadpool). `/health` during them: 7.0 s (0.2 s). |
+| Every retrieval arm returns each row's embedding. Nothing reads them at the default `mmr_lambda=1.0`. | 5.6 MB per retrieve with them, 0.18 MB without |
+| `vector_check` asks the database whether the vector index exists on every retrieve. On ArangoGraph, where vector indexes are not allowed, that is up to 4 calls, including a failed `add_index` once there are 2,560 memories. Entity resolution does the same on `entities` for every write. | 96 ms p50 |
+| The access write (`reset_access`) runs before the response is sent. | 101 ms p50 |
+| A one-by-one write makes ~25 database calls and 2 embedding calls. The batch path exists but is off (`WRITE_BATCH_SIZE=1`). | 1.5 s per write. 24 writes: 42.6 s one by one, 3.9 s in batches of 12. |
+
+Retrieve stage p50s: vector 343, bm25 187, graph 139, access 101, vector_check 96 ms. Embed: 0 ms
+when cached, up to ~700 ms on a miss.
+
+**On the hosted core** the vector arm is off, so a retrieve today runs these steps in a row:
+1. Embed the query. The vector is unused, because the vector arm is off.
+2. bm25 (1 call).
+3. vector_check (1–4 calls).
+4. graph (1 call).
+5. access (1 call).
+
+PF-1a, c, d and e leave only bm25 → graph.
+
+### PF-1a — Move the handlers off the event loop (PR 1)  🔄 built
+
+- **Handlers.** Route handlers that touch the database, embedder, generator or extractor become plain
+  `def`. FastAPI then runs them in its threadpool (anyio, 40 threads). `/v1/flush` stays `async`,
+  because it sleeps between polls, and runs `pending_count` and `force_view_sync` through
+  `anyio.to_thread.run_sync`.
+- **Database handles.** python-arango's docs say its `requests.Session` "may not always be
+  thread-safe", and this codebase already gives each thread its own connection (the write worker,
+  `test_concurrency`). Request threads therefore get handles from a small pool of leased handles,
+  each with its own `ArangoClient`.
+  - Built as `DatabasePool.lease()` (`ArangoMemoryClient.pool()`) in `client.py` and passed to
+    handlers by a `get_db` dependency. This replaces about 20 `client.db` uses in `api/app.py`.
+  - Why a pool rather than `threading.local`: anyio retires a thread after 10 s idle, so
+    per-thread clients would reconnect (TCP + TLS to ArangoGraph) after every quiet spell.
+  - Size: new setting `ARANGO_POOL_SIZE`, default 16. When every handle is out, a request waits
+    for one.
+  - `/health` and `/ready` keep a handle of their own, so they never wait behind load.
+- **Write queue.** `ArangoQueue` drives one shared connection under a `threading.Lock`. Once
+  handlers run in parallel, every `enqueue` (~90 ms) would queue behind the others and behind the
+  worker's claims. Each queue call should lease a handle instead, and the lock goes. Claims stay
+  atomic in the database (`OPTIONS {exclusive}`).
+- **Shared state the event loop used to serialise.** Audit each piece and lock it where needed:
+  - `embedding_cache`: an `OrderedDict` LRU with no lock. Concurrent `move_to_end` / `popitem`
+    can raise.
+  - The extractor on the `sync` write path: spaCy would run in request threads and the worker at
+    once. Wrap it in the existing `_SerializedExtractor` unless it is I/O-bound.
+  - `QueryCache`: only its hit counters can race, which is harmless.
+  - `LatencyRecorder` and the rate limiter already lock.
+- **Measurement script.** Commit the analysis's delay proxy and load test as
+  `core/scripts/latency_bench.py`: proxy, concurrent retrieves, `/health` probe, and stage p50s
+  from `/health`. Every PF PR then reports the same numbers.
+- **Tests.**
+  - A structural test: no route endpoint is a coroutine, except an allowlist (`/health`,
+    `/ready`, `/v1/flush`, `/v1/store`, `/v1/step`).
+  - A behaviour test with a patched `retrieve` that blocks: two concurrent retrieves must overlap
+    on different handles, and `/health` answers while they run.
+  - The existing API, sync/flush and concurrency tests pass unchanged.
+- **Acceptance.** On the 90 ms proxy: 8 concurrent retrieves in ≤ 1.5 s wall, and `/health` p95
+  under that load < 300 ms. Single-request latency unchanged within 10%.
+- **Size.** M: ~150 lines plus tests, most of it the mechanical handle change.
+- **Result (2026-11-25, 90 ms proxy, `latency_bench.py`).** 8 concurrent retrieves: 1.19 s wall
+  (median of 5 rounds, max 1.37 s). `/health` under load: p95 231 ms (idle 198 ms). A single
+  retrieve: 804 ms p50.
+- **Built beyond the scope above.** `/v1/store` and `/v1/step` stay `async` and push their calls to
+  a thread, so a queued write holds no database slot. The wait for a connection happens on the event
+  loop, so it holds no thread. Inline commits run one at a time, and so do the maintenance routes
+  (they were never written to race each other). `reset_access` ignores write conflicts.
+
+### PF-1b — Turn on batch writes on Railway (config, no PR)
+
+- Set `WRITE_BATCH_SIZE=16` and `WRITE_WORKER_CONCURRENCY=4` (one per Diligence Room specialist)
+  on the Railway core. Both are built and tested (WQ-1b #291, WQ-1a #301) and off by default. With
+  spaCy, the worker already serialises extraction across groups.
+- **Who.** The owner, in the Railway dashboard (no Railway CLI on the dev machine). This can happen
+  before PF-1a.
+- **Verify.** Run the Diligence Room live and check:
+  - `flush:specialists` (14.8 s on 2026-11-20) drops to a few seconds;
+  - `/health` shows the `write_many.*` timers;
+  - there are zero dead letters.
+
+  Then follow WQ-1's rollout note: remove the demo's flush-cap workarounds only after a clean run.
+- Whether to make 16 / 4 the defaults in `config.py` is a separate decision.
+
+### PF-1c — Stop returning embeddings from the retrieval arms (PR 2)
+
+- Remove `embedding: doc.embedding` from `_BM25_QUERY`, `_FACT_BM25_QUERY`, `_FACT_VECTOR_QUERY`,
+  `_VECTOR_QUERY`, `_GRAPH_QUERY` and `_SUCCESSORS` in `retrieve/search.py`.
+- `_mmr` is the only reader. When `lambda < 1.0`, load the fused candidates' embeddings by key in
+  one query before MMR. At 1.0, fetch nothing.
+- **Tests.**
+  - Arm rows carry no `embedding`.
+  - At λ=1.0, results for a fixed query set (keys and order) are identical to before.
+  - `test_mmr` passes, and a λ=0.5 retrieve still diversifies.
+- **Acceptance.**
+  - ≤ 0.3 MB per retrieve on bench_fresh (was 5.6 MB).
+  - Lower bm25 and vector p50s. Through the proxy: bm25 154 → ~122 ms and vector 194 → ~156 ms.
+    The proxy adds no bandwidth limit, so a real WAN saves more.
+- **Optional, measure first.** `orjson` as python-arango's `deserializer`. After this item, read
+  payloads are small, so it only matters on the write path (PF-1h).
+- **Size.** S.
+
+### PF-1d — Cache the vector-index state, and skip the query embedding when it is unused (PR 2)
+
+- **Cache** (`schema/collections.py`):
+  - Cache `has_vector_index` per (database, collection) for 60 s.
+  - Cache a below-threshold "deferred" answer for the same 60 s, which also drops the `count()`
+    call.
+  - After a failed `add_index` (`IndexCreateError`), wait 10 minutes before trying again, and log
+    the failure once.
+  - `drop_vector_index` and a successful `add_index` clear the entry.
+  - Guard the cache with a lock.
+- **Readers.** The cache serves retrieval's `vector_check`, entity resolution's `_use_ann` on every
+  write, and `/health`.
+- **Skip the embedding.** In `_retrieve_impl`, read the cached state before embedding the query.
+  If the vector arm is off and fact keys are off, don't embed (lite mode only; HyDE and multihop
+  are unchanged). On ArangoGraph this removes an embedding API call (~300–700 ms) from every
+  uncached query.
+- **Tests.**
+  - Two retrieves make one index lookup.
+  - A patched `add_index` that raises is attempted once per backoff window.
+  - After a drop, the next retrieve sees no index (the existing `test_vector` cases).
+  - A perf invariant: no embed call when the vector arm is off.
+- **Acceptance.** `vector_check` p50 < 1 ms once the cache is warm.
+- **Size.** S.
+
+### PF-1e — Fewer round trips per request (PR 3)
+
+1. **Write access after the response.** The API passes an `access_sink` to `retrieve` / `prime`,
+   and the handler runs `reset_access` as a FastAPI background task on its own leased handle.
+   Library callers (eval, LangChain, CrewAI) keep today's synchronous write. This saves one round
+   trip per retrieve. The trade-off: an access update can land a few ms after the response, or be
+   lost if the process dies first. That is acceptable for a decay signal.
+2. **One embedding call per one-by-one write.** `store()` embeds the turn, then `write_entities`
+   embeds the entity names in a second call. Instead, run extraction first and embed
+   `[content, *names]` in a single `embed_batch_cached` call. Keep today's failure behaviour: if
+   extraction fails, the memory is still stored. This saves one embedding round trip (~250 ms) on
+   `sync` writes and when `WRITE_BATCH_SIZE=1`. `store_many` already batches.
+3. **Run BM25 and vector in parallel.** When the vector arm is on, run the BM25, vector and fact arms
+   at the same time, each on its own leased handle. Graph still waits for their seeds. This only
+   helps self-hosted deployments, because ArangoGraph has no vector arm today. Library callers
+   without a pool keep the sequential path.
+
+- **Tests.**
+  - Perf invariant: one embed call per write (`embed_calls == 0`, `batch_calls == 1`).
+  - With the vector arm on and a patched delay, a retrieve's arm time is about the max of the
+    arms, not their sum.
+  - `access_count` still increments (the test waits for the background task).
+- **Acceptance.** On the proxy: retrieve p50 ≤ ~0.5 s with the vector arm on (from 1.1 s), and
+  one-by-one write p50 down by ~250 ms.
+- **Considered and deferred.** Merging BM25 and graph into one AQL query would save one more round
+  trip on ArangoGraph, but it loses per-arm failure isolation and per-arm stage timings. Revisit
+  once the hosted numbers are in.
+- **Size.** M.
+
+### PF-1f — Put the core next to the database (ops, the owner)
+
+- **Measure the round trip from inside the Railway container.** Run
+  `python -m arango_memory.check` from Railway's shell. It writes and then deletes one probe memory
+  under an isolated tenant.
+- **Compare regions.** Check the Railway service region against the ArangoGraph deployment's cloud
+  region. If they differ, move one to match. A write makes ~25 calls and a retrieve 2–6, so the
+  distance multiplies everything else.
+- **Check two settings in the ArangoGraph console:**
+  - the deployment model: OneShard runs each AQL query on one DB server, while sharded adds
+    coordinator ↔ DB-server hops;
+  - whether its ArangoDB version now allows vector indexes. The hosted vector arm has been off
+    since June.
+- No code.
+
+### PF-1g — More processes (later, only if PF-1a–e are not enough) (PR 4)
+
+- **When.** Python CPU per retrieve is ~51 ms, so one process tops out around 20 retrieves/s on
+  the GIL. Add processes only if hosted load approaches that.
+- **How.** Set `WEB_CONCURRENCY=N` (uvicorn reads it, so the Dockerfile doesn't change), or add
+  Railway replicas.
+- **Prerequisites, in the same PR:**
+  - `WRITE_QUEUE_BACKEND=arango` (already set on Railway). With the in-memory queue, each process
+    has its own queue, so `/v1/flush` on one process can't see writes queued on another. Startup
+    refuses `WEB_CONCURRENCY > 1` with the memory backend.
+  - A migration lock. When two processes start together, both run migration 1, and one fails
+    startup with a 409 lock timeout (seen 2026-11-25). `run_migrations` should take a lease on the
+    version document, and the other process wait until the version is current.
+  - Rate limits are per process unless `REDIS_URL` is set. The query cache is per process, which
+    is fine.
+- **Docs.** The `ops.md` scaling section.
+- **Size.** S–M.
+
+### PF-1h — Entity resolution fetches the tenant's entity vectors on every write (found while scoping; measure first)
+
+- **What happens.** Without the entity ANN index, `write_entities` / `write_entities_many` resolve
+  against `_FETCH_EXISTING`, which returns every entity in the tenant with its embedding, once per
+  write (or per batch). On ArangoGraph there is never an ANN index, so this always happens. The
+  payload grows with the tenant: 2,000 entities at the default 256 dims is about 10 MB per write.
+- **Not measured yet.** The 2026-11-25 ingest test used a fresh database.
+- **Measure first.** Read `write.entities.candidates` on `/health` for the Diligence Room tenant,
+  and that tenant's entity count.
+- **Fix, if the cost is large.** Score in AQL instead: `COSINE_SIMILARITY` against each new name's
+  vector, top-k per name. Return keys, names, labels and scores only, and have `_best_match` take
+  the score instead of recomputing it.
+- **Size.** M.
+
+**Order.**
+- PF-1b now (config only).
+- In code, PF-1a first.
+- PF-1c and PF-1d next, together in one PR. They don't depend on PF-1a, but they are measured on
+  top of it.
+- PF-1e after PF-1a, since it needs the leased handles.
+- PF-1f any time.
+- PF-1g and PF-1h only if their measurements call for them.
+
+**Expected end state (estimate, not measured).**
+- Hosted retrieve: two round trips (bm25 and graph), no query embedding, no index check, and the
+  access write after the response. Roughly 0.3–0.4 s at 90 ms per call, down from ~0.5–1.5 s.
+  Concurrent requests no longer queue behind each other.
+- Hosted writes: set mostly by the batch size (PF-1b) and the region (PF-1f).
+
+**Out of scope.**
+- **A Rust rewrite.** CPU is ~5% of request time, and a rewrite would mean leaving spaCy,
+  sentence-transformers and the model SDKs behind.
+- **The cross-encoder reranker's 3.3 s on CPU** for 50 candidates. It is off by default and not in
+  the image, so it is a separate decision if production turns it on.

@@ -130,6 +130,10 @@ class RequestLogMiddleware:
         try:
             await self._app(scope, receive, send_wrapper)
         finally:
+            # Handlers run in worker threads, whose context changes don't come back here;
+            # `_authorize` leaves the tenant on the request state instead.
+            if tenant := scope.get("state", {}).get("tenant"):
+                tenant_var.set(tenant)
             if scope.get("path") != "/health":
                 logger.info(
                     "request",

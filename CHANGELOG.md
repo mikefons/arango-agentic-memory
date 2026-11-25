@@ -76,6 +76,15 @@ are versioned together and released from this repository.
 
 ### Changed
 
+- The core now serves requests in parallel (PF-1a). Handlers that call the database or a model ran
+  on the event loop, so one request at a time was served; they now run in a threadpool, each on its
+  own leased database connection (`ARANGO_POOL_SIZE`, default 16; the durable queue keeps a second
+  pool). `/health` and `/ready` have their own connection and no longer wait behind requests.
+  Measured through a 90 ms database round trip: 8 concurrent retrieves went from 7.1 s to 1.2 s,
+  and `/health` during them from 7.0 s to about 0.2 s. Inline (`sync`) writes, and the maintenance
+  routes (Dream, salience, community, ontology, forget, seed, supersede), still run one at a time
+  per process. Concurrent access-count updates on one memory are now ignored rather than raising a
+  write conflict. `core/scripts/latency_bench.py` reproduces the measurement.
 - Retrieval no longer spends time on MMR diversity it doesn't use. With the default
   `MMR_LAMBDA=1.0` the diversity weight is zero, but `_mmr` still computed every pairwise cosine in
   pure Python over full embeddings. At `1.0` it now sorts by relevance only (same selection order,

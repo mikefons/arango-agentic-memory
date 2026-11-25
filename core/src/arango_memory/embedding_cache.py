@@ -16,6 +16,7 @@ from __future__ import annotations
 import contextlib
 import hashlib
 import json
+import threading
 from collections import OrderedDict
 from collections.abc import Sequence
 from typing import Any
@@ -38,6 +39,9 @@ class EmbeddingCache:
         self._max_size = max_size
         self._hits = 0
         self._lookups = 0
+        # Guards the LRU (request threads and the write worker share it), never the
+        # provider call.
+        self._lock = threading.Lock()
 
     @property
     def hit_rate(self) -> float:
@@ -51,27 +55,31 @@ class EmbeddingCache:
         )
         return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
+    def _lookup(self, key: str) -> list[float] | None:
+        with self._lock:
+            self._lookups += 1
+            cached = self._store.get(key)
+            if cached is not None:
+                self._hits += 1
+                self._store.move_to_end(key)  # LRU bump
+        if cached is not None:
+            metrics.emit("embedding_cache", hit=True, hit_rate=self.hit_rate)
+        return cached
+
     def embed(self, embedder: Embedder, text: str, *, tenant_id: str) -> list[float]:
         key = self._key(embedder, text, tenant_id)
-        self._lookups += 1
-        cached = self._store.get(key)
+        cached = self._lookup(key)
         if cached is not None:
-            self._hits += 1
-            self._store.move_to_end(key)  # LRU bump
-            metrics.emit("embedding_cache", hit=True, hit_rate=self.hit_rate)
             return cached
-
         vec = embedder.embed(text)
-        self._store[key] = vec
-        if len(self._store) > self._max_size:
-            self._store.popitem(last=False)  # evict least-recently-used
-        metrics.emit("embedding_cache", hit=False, hit_rate=self.hit_rate)
+        self._store_miss(key, vec)
         return vec
 
     def _store_miss(self, key: str, vec: list[float]) -> None:
-        self._store[key] = vec
-        if len(self._store) > self._max_size:
-            self._store.popitem(last=False)  # evict least-recently-used
+        with self._lock:
+            self._store[key] = vec
+            if len(self._store) > self._max_size:
+                self._store.popitem(last=False)  # evict least-recently-used
         metrics.emit("embedding_cache", hit=False, hit_rate=self.hit_rate)
 
     def embed_many(
@@ -83,13 +91,8 @@ class EmbeddingCache:
         result: dict[str, list[float]] = {}
         misses: list[str] = []
         for text in dict.fromkeys(texts):  # dedupe, preserve order
-            key = self._key(embedder, text, tenant_id)
-            self._lookups += 1
-            cached = self._store.get(key)
+            cached = self._lookup(self._key(embedder, text, tenant_id))
             if cached is not None:
-                self._hits += 1
-                self._store.move_to_end(key)  # LRU bump
-                metrics.emit("embedding_cache", hit=True, hit_rate=self.hit_rate)
                 result[text] = cached
             else:
                 misses.append(text)
@@ -100,9 +103,10 @@ class EmbeddingCache:
         return result
 
     def clear(self) -> None:
-        self._store.clear()
-        self._hits = 0
-        self._lookups = 0
+        with self._lock:
+            self._store.clear()
+            self._hits = 0
+            self._lookups = 0
 
 
 class RedisEmbeddingCache:

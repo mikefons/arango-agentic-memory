@@ -324,6 +324,41 @@ def is_io_bound(extractor: Extractor) -> bool:
     return bool(getattr(extractor, "io_bound", True))
 
 
+class SerializedExtractor:
+    """Lets threads share a CPU-bound extractor: calls take a lock, so the models run one at
+    a time (they contend under the GIL anyway) while the DB round trips overlap."""
+
+    io_bound = False
+
+    def __init__(self, inner: Extractor) -> None:
+        self._inner = inner
+        self._lock = threading.Lock()
+        self.name = inner.name
+
+    def extract(self, text: str) -> list[ExtractedEntity]:
+        with self._lock:
+            return self._inner.extract(text)
+
+    def extract_relations(
+        self, text: str, entities: Sequence[ExtractedEntity]
+    ) -> list[ExtractedRelation]:
+        with self._lock:
+            return self._inner.extract_relations(text, entities)
+
+    def __getattr__(self, attr: str) -> Any:
+        return getattr(self._inner, attr)
+
+
+def serialize_if_cpu_bound(extractor: Extractor) -> Extractor:
+    """`extractor` behind one lock if it is CPU-bound; I/O-bound and already wrapped ones
+    pass through."""
+    if is_io_bound(extractor):
+        return extractor
+    if isinstance(extractor, SerializedExtractor):
+        return extractor
+    return SerializedExtractor(extractor)
+
+
 def _parse_json_object(raw: str) -> dict[str, Any]:
     """Best-effort parse of a JSON object from an LLM response (tolerates fences)."""
     if not raw:

@@ -26,6 +26,7 @@ from typing import Any, Protocol, cast
 from arango.cursor import Cursor
 from arango.database import StandardDatabase
 
+from ..client import DatabasePool
 from ..models import idempotency_key, utcnow_iso
 from ..schema.collections import WRITE_QUEUE_COLLECTION
 
@@ -219,14 +220,15 @@ class ArangoQueue:
 
     Survives restarts: `enqueue` persists, `claim` leases (so a crash between claim
     and ack lets the lease expire and the intent redeliver), `ack` deletes, `nack`
-    releases. A lock serialises access since the request threads (enqueue) and the
-    worker thread (claim/ack) share one connection.
+    releases. Every call leases a handle, so request threads (enqueue) and the worker
+    thread (claim/ack) never drive one connection at once. Given a `DatabasePool` they
+    run in parallel; given a single handle they take turns. Claims are atomic in the
+    database either way.
     """
 
-    def __init__(self, db: StandardDatabase, *, lease_seconds: int) -> None:
-        self._db = db
+    def __init__(self, db: StandardDatabase | DatabasePool, *, lease_seconds: int) -> None:
+        self._pool = db if isinstance(db, DatabasePool) else DatabasePool(lambda: db, 1)
         self._lease_seconds = lease_seconds
-        self._lock = threading.Lock()
 
     def enqueue(self, intent: Intent) -> None:
         doc = {
@@ -236,8 +238,8 @@ class ArangoQueue:
             "enqueued_at": utcnow_iso(),
             "leased_until": None,
         }
-        with self._lock:
-            self._db.collection(WRITE_QUEUE_COLLECTION).insert(doc, silent=True)
+        with self._pool.lease() as db:
+            db.collection(WRITE_QUEUE_COLLECTION).insert(doc, silent=True)
 
     def claim(self) -> Claim | None:
         now = utcnow_iso()
@@ -247,8 +249,8 @@ class ArangoQueue:
         bind: dict[str, Any] = {
             "@coll": WRITE_QUEUE_COLLECTION, "now": now, "lease_until": lease_until
         }
-        with self._lock:
-            rows = list(cast(Cursor, self._db.aql.execute(_CLAIM, bind_vars=bind)))
+        with self._pool.lease() as db:
+            rows = list(cast(Cursor, db.aql.execute(_CLAIM, bind_vars=bind)))
         if not rows:
             return None
         doc = rows[0]
@@ -263,13 +265,13 @@ class ArangoQueue:
             "@coll": WRITE_QUEUE_COLLECTION, "now": now, "lease_until": lease_until,
             "limit": limit,
         }
-        with self._lock:
-            rows = list(cast(Cursor, self._db.aql.execute(_CLAIM_MANY, bind_vars=bind)))
+        with self._pool.lease() as db:
+            rows = list(cast(Cursor, db.aql.execute(_CLAIM_MANY, bind_vars=bind)))
         return [Claim(intent=_to_intent(d["kind"], d["intent"]), handle=d["_key"]) for d in rows]
 
     def ack(self, claim: Claim) -> None:
-        with self._lock:
-            self._db.collection(WRITE_QUEUE_COLLECTION).delete(claim.handle, ignore_missing=True)
+        with self._pool.lease() as db:
+            db.collection(WRITE_QUEUE_COLLECTION).delete(claim.handle, ignore_missing=True)
 
     def ack_many(self, claims: Sequence[Claim]) -> None:
         if not claims:
@@ -277,23 +279,23 @@ class ArangoQueue:
         bind: dict[str, Any] = {
             "@coll": WRITE_QUEUE_COLLECTION, "keys": [c.handle for c in claims],
         }
-        with self._lock:
-            self._db.aql.execute(_ACK_MANY, bind_vars=bind)
+        with self._pool.lease() as db:
+            db.aql.execute(_ACK_MANY, bind_vars=bind)
 
     def nack(self, claim: Claim) -> None:
-        with self._lock:
-            self._db.collection(WRITE_QUEUE_COLLECTION).update(
+        with self._pool.lease() as db:
+            db.collection(WRITE_QUEUE_COLLECTION).update(
                 {"_key": claim.handle, "leased_until": None}, silent=True
             )
 
     def __len__(self) -> int:
         bind: dict[str, Any] = {"@coll": WRITE_QUEUE_COLLECTION, "now": utcnow_iso()}
-        with self._lock:
-            rows = cast(Cursor, self._db.aql.execute(_PENDING, bind_vars=bind))
+        with self._pool.lease() as db:
+            rows = cast(Cursor, db.aql.execute(_PENDING, bind_vars=bind))
             return int(next(iter(rows)))
 
     def pending_count(self, tenant_id: str) -> int:
         bind: dict[str, Any] = {"@coll": WRITE_QUEUE_COLLECTION, "tenant": tenant_id}
-        with self._lock:
-            rows = cast(Cursor, self._db.aql.execute(_PENDING_TENANT, bind_vars=bind))
+        with self._pool.lease() as db:
+            rows = cast(Cursor, db.aql.execute(_PENDING_TENANT, bind_vars=bind))
             return int(next(iter(rows)))

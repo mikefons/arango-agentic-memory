@@ -149,7 +149,9 @@ share an entity or a number with the new memory),
 `ENTITY_FLAG_THRESHOLD` (0.6); durable writes: `WRITE_MAX_RETRIES` (5),
 `WRITE_BACKOFF_BASE` (0.5), `WRITE_QUEUE_BACKEND` (`memory`; set `arango` in prod),
 `WRITE_LEASE_SECONDS` (60), `WRITE_BATCH_SIZE` (1; see Batch commit below),
-`WRITE_WORKER_CONCURRENCY` (1; see Parallel agent groups below); security: `REDACT_PII` (`true`), `API_KEYS` (unset = auth
+`WRITE_WORKER_CONCURRENCY` (1; see Parallel agent groups below); connections:
+`ARANGO_POOL_SIZE` (16; database connections leased to concurrent requests, and the same again
+for the `arango` write queue; further requests wait for one); security: `REDACT_PII` (`true`), `API_KEYS` (unset = auth
 open), `OIDC_ISSUER` (unset = JWT off; see Authentication below), `MAX_REQUEST_BYTES`
 (1 MiB), `RATE_LIMIT_PER_MINUTE` (0 = off); scaling: `REDIS_URL` (unset = per-instance
 limiter + cache; see Optional shared layer).

@@ -7,10 +7,43 @@ token (ArangoGraph) to basic auth (local).
 
 from __future__ import annotations
 
+import threading
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
+
 from arango import ArangoClient  # type: ignore[attr-defined]
 from arango.database import StandardDatabase
 
 from .config import Settings, settings
+
+
+class DatabasePool:
+    """Up to `size` database handles, each leased to one thread at a time.
+
+    python-arango's HTTP session isn't guaranteed thread-safe, so concurrent callers each
+    need their own handle. Handles are built on first use and reused (newest first), which
+    keeps their connections warm however long the calling threads live.
+    """
+
+    def __init__(self, factory: Callable[[], StandardDatabase], size: int) -> None:
+        self._factory = factory
+        self._free = threading.BoundedSemaphore(size)
+        self._idle: list[StandardDatabase] = []
+        self._lock = threading.Lock()
+
+    @contextmanager
+    def lease(self) -> Iterator[StandardDatabase]:
+        """A handle for the duration of the block; waits when all `size` are out."""
+        with self._free:
+            with self._lock:
+                db = self._idle.pop() if self._idle else None
+            if db is None:
+                db = self._factory()
+            try:
+                yield db
+            finally:
+                with self._lock:
+                    self._idle.append(db)
 
 
 class ArangoMemoryClient:
@@ -52,6 +85,11 @@ class ArangoMemoryClient:
         if cfg.arango_bearer_token:
             return self._client.db(name, user_token=cfg.arango_bearer_token)
         return self._client.db(name, username=cfg.arango_username, password=cfg.arango_password)
+
+    def pool(self, size: int) -> DatabasePool:
+        """A pool of handles on the memory database, each with its own connection."""
+        cfg = self._config
+        return DatabasePool(lambda: ArangoMemoryClient(cfg).database(cfg.arango_db), size)
 
     def _sys_db(self) -> StandardDatabase:
         return self.database("_system")
