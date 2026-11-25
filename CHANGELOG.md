@@ -76,6 +76,13 @@ are versioned together and released from this repository.
 
 ### Changed
 
+- Retrieval reads far less: the arms no longer return stored embeddings (6.7 MB → 0.31 MB per
+  retrieve, median, at 1536 dimensions). They are fetched only for MMR when `MMR_LAMBDA` is below
+  1.0.
+- The vector-index state is cached for 60 s on request paths, and a rejected index build (as on
+  ArangoGraph) is retried and logged once per 10 minutes instead of on every request. An index
+  built by *another* process can take up to 60 s to be picked up.
+- With the vector index unavailable and fact keys off, lite retrieval no longer embeds the query.
 - The core now serves requests in parallel (PF-1a). Handlers that call the database or a model ran
   on the event loop, so one request at a time was served; they now run in a threadpool, each on its
   own leased database connection (`ARANGO_POOL_SIZE`, default 16; the durable queue keeps a second

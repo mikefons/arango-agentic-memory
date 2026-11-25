@@ -92,8 +92,10 @@ def test_resolution_uses_ann_index_once_warm_and_still_merges(
     # ANN index. Lower the training threshold so it builds after a few entities; the merge
     # decision must be unchanged (top-k covers the whole small tenant → exact).
     from arango_memory.config import settings as s
+    from arango_memory.schema import collections
     from arango_memory.schema.collections import has_vector_index
 
+    monkeypatch.setattr(collections, "VECTOR_STATE_TTL_SECONDS", 0.0)  # re-check each write
     monkeypatch.setattr(s, "entity_vector_n_lists", 2)
     monkeypatch.setattr(s, "entity_vector_train_factor", 2)  # index builds at 4 entities
     monkeypatch.setattr(s, "entity_resolution_scan_max", 0)  # tiny tenant → still take ANN

@@ -330,6 +330,12 @@ factor exists because IVF trains one centroid per list — building at exactly `
 docs gives ~one point per centroid, which returns garbage (the `n_lists ≪ corpus` rule).
 Keep `VECTOR_N_LISTS` well below your expected corpus.
 
+Request paths cache the index state per process for 60 s, so crossing the threshold, or a
+rebuild run from another process (`ops vector-rebuild`), can take that long to be noticed. A
+build the database rejects is logged as `vector index build rejected` and retried after 10
+minutes. While the index is unavailable, lite retrieval skips the query embedding unless fact
+keys are on.
+
 ```bash
 python -m arango_memory.ops vector-rebuild        # drop + recreate the index
 python -m arango_memory.ops embeddings-migrate     # re-embed stale docs, then rebuild

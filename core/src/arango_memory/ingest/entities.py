@@ -31,7 +31,7 @@ from ..config import settings
 from ..embedding import Embedder
 from ..embedding_cache import embed_batch_cached
 from ..models import utcnow_iso
-from ..schema.collections import ensure_vector_index
+from ..schema.collections import forget_vector_state, vector_index_ready
 from ..telemetry import StageTimer, metrics
 from ..telemetry.logging import logger
 from .extract import (
@@ -210,7 +210,7 @@ def _use_ann(db: StandardDatabase, tenant_id: str, *, dimensions: int) -> bool:
     scales with the other tenants sharing the collection; the exact tenant scan costs only the
     tenant's own count. Gating on the collection's count alone (the index lifecycle's concern)
     is what OOM-killed a many-tenant eval database (DESIGN §7, SC-1b)."""
-    if not ensure_vector_index(
+    if not vector_index_ready(
         db, dimensions=dimensions, n_lists=settings.entity_vector_n_lists,
         train_factor=settings.entity_vector_train_factor, collection="entities",
     ):
@@ -239,6 +239,7 @@ def _resolution_pool(
             rows = db.aql.execute(_FETCH_BY_KEYS, bind_vars={"keys": list(keys)})
             return list(cast(Cursor, rows))
         except Exception as exc:  # noqa: BLE001 — ANN fault → scan, never break ingest
+            forget_vector_state(db, "entities")  # the index may have been dropped
             logger.warning("entity ANN resolution failed; scanning",
                            extra={"reason": type(exc).__name__, "detail": str(exc)})
     return list(cast(Cursor, db.aql.execute(_FETCH_EXISTING, bind_vars={"tenant_id": tenant_id})))

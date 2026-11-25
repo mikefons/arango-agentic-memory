@@ -22,6 +22,7 @@ from typing import Any, cast
 import tiktoken
 from arango.cursor import Cursor
 from arango.database import StandardDatabase
+from arango.exceptions import AQLQueryExecuteError
 
 from ..config import settings
 from ..embedding import Embedder, get_embedder
@@ -31,8 +32,9 @@ from ..lifecycle.decay import effective_strength, reset_access
 from ..models import utcnow_iso
 from ..schema.collections import (
     SEARCH_VIEW,
-    ensure_vector_index,
+    forget_vector_state,
     has_vector_index,
+    vector_index_ready,
     vector_index_state,
     vector_training_threshold,
 )
@@ -60,7 +62,7 @@ FOR doc IN {SEARCH_VIEW}
   SORT BM25(doc) * ({_DECAY}) DESC
   LIMIT @pool
   RETURN {{ key: doc._key, text: doc.text, score: BM25(doc), agent_id: doc.agent_id,
-            embedding: doc.embedding, type: doc.type, event_time: doc.event_time,
+            type: doc.type, event_time: doc.event_time,
             strength: doc.strength, accessed_at: doc.accessed_at, created_at: doc.created_at }}
 """
 
@@ -74,7 +76,7 @@ FOR doc IN {SEARCH_VIEW}
   SORT BM25(doc) DESC
   LIMIT @pool
   RETURN {{ key: doc._key, text: doc.text, score: BM25(doc), agent_id: doc.agent_id,
-            embedding: doc.embedding, type: doc.type, event_time: doc.event_time,
+            type: doc.type, event_time: doc.event_time,
             strength: doc.strength, accessed_at: doc.accessed_at, created_at: doc.created_at }}
 """
 
@@ -88,7 +90,7 @@ FOR doc IN memories
   SORT score DESC
   LIMIT @pool
   RETURN { key: doc._key, text: doc.text, score: score, agent_id: doc.agent_id,
-           embedding: doc.embedding, type: doc.type, event_time: doc.event_time,
+           type: doc.type, event_time: doc.event_time,
            strength: doc.strength, accessed_at: doc.accessed_at, created_at: doc.created_at }
 """
 _TENANT_SIZE = """
@@ -127,7 +129,7 @@ FOR doc IN memories
   SORT score DESC
   LIMIT @pool
   RETURN { key: doc._key, text: doc.text, score: score, agent_id: doc.agent_id,
-           embedding: doc.embedding, type: doc.type, event_time: doc.event_time,
+           type: doc.type, event_time: doc.event_time,
            strength: doc.strength, accessed_at: doc.accessed_at, created_at: doc.created_at }
 """
 
@@ -163,8 +165,8 @@ FOR start IN @seed_ids
         LET path_w = LENGTH(p.edges) == 0 ? 0 : AVERAGE(p.edges[*].weight)
         // Aggregate only the scalar ranking fields — NOT the memory doc. All rows for a
         // given key are the same `mem`, so MAX() of its scalars returns that constant;
-        // this avoids buffering the 1536-dim embedding of every path row through the
-        // COLLECT (which blew the AQL memory limit on a real-embedding corpus, MA-8).
+        // buffering the whole doc (embedding included) of every path row through the
+        // COLLECT blew the AQL memory limit on a real-embedding corpus (MA-8).
         COLLECT key = mem._key AGGREGATE hops = MIN(LENGTH(p.edges)),
                                           belief = MAX(related.belief),
                                           centrality = MAX(related.centrality),
@@ -181,11 +183,11 @@ FOR start IN @seed_ids
         LET score = (1.0 / (1.0 + hops)) * (0.5 + 0.5 * salience) * decay
         SORT score DESC
         LIMIT @pool
-        // Fetch the heavy fields (text/embedding) only for the surviving pool — a point
-        // lookup per row, so embeddings never enter the traversal's memory footprint.
+        // Fetch the text only for the surviving pool — a point lookup per row, so it never
+        // enters the traversal's memory footprint.
         LET doc = DOCUMENT("memories", key)
         RETURN { key: key, score: score, agent_id: doc.agent_id,
-                 text: doc.text, embedding: doc.embedding, type: doc.type,
+                 text: doc.text, type: doc.type,
                  event_time: doc.event_time, created_at: doc.created_at,
                  strength: strength, accessed_at: accessed_at }
 """
@@ -212,7 +214,7 @@ FOR key IN @keys
   LET doc = DOCUMENT("memories", key)
   FILTER doc != null AND doc.tenant_id == @tenant_id AND doc.agent_id IN @agent_ids
      AND doc.invalid_at == null
-  RETURN { key: doc._key, text: doc.text, agent_id: doc.agent_id, embedding: doc.embedding,
+  RETURN { key: doc._key, text: doc.text, agent_id: doc.agent_id,
            type: doc.type, event_time: doc.event_time, created_at: doc.created_at,
            strength: doc.strength, accessed_at: doc.accessed_at,
            superseded_by: doc.superseded_by, valid_to: doc.valid_to }
@@ -254,6 +256,14 @@ FOR key IN @keys
     RETURN MERGE(n, { anchor: key })
 """
 
+# The arms don't return embeddings (they are most of a read's bytes); only MMR's diversity
+# term reads them, so they are fetched for it alone.
+_EMBEDDINGS = """
+FOR doc IN memories
+  FILTER doc._key IN @keys
+  RETURN { key: doc._key, embedding: doc.embedding }
+"""
+
 _ENCODER = tiktoken.get_encoding("cl100k_base")
 
 _RRF_K = 60
@@ -288,7 +298,7 @@ class RetrieveResult:
 class _Candidate:
     key: str
     text: str
-    embedding: list[float]
+    embedding: list[float]  # empty unless MMR's diversity term needs it
     type: str
     signals: set[str] = field(default_factory=set)
     fused_score: float = 0.0
@@ -488,6 +498,14 @@ def _mmr(
     return selected
 
 
+def _load_embeddings(db: StandardDatabase, candidates: list[_Candidate]) -> None:
+    """Fill the candidates' embeddings in one query, for MMR with `lambda_ < 1`."""
+    rows = _run(db, _EMBEDDINGS, {"keys": [c.key for c in candidates]})
+    by_key = {row["key"]: row["embedding"] for row in rows}
+    for cand in candidates:
+        cand.embedding = by_key.get(cand.key) or []
+
+
 def _neighbors(
     db: StandardDatabase,
     selected: list[_Candidate],
@@ -667,6 +685,29 @@ def retrieve(
     return result
 
 
+def _vector_ready(db: StandardDatabase, *, dimensions: int, n_lists: int | None) -> bool:
+    return vector_index_ready(
+        db,
+        dimensions=dimensions,
+        n_lists=n_lists or settings.vector_n_lists,
+        train_factor=settings.vector_train_factor,
+    )
+
+
+def _vector_arm(
+    db: StandardDatabase, bind_vars: dict[str, Any]
+) -> list[dict[str, Any]] | None:
+    """The vector arm's rows, or None if the index turns out to be gone: another process can
+    drop it while this one still has it cached as ready. Any other failure propagates."""
+    try:
+        return _run(db, _VECTOR_QUERY, bind_vars)
+    except AQLQueryExecuteError:
+        forget_vector_state(db)
+        if has_vector_index(db):
+            raise
+        return None
+
+
 def _gather_fused(
     db: StandardDatabase,
     *,
@@ -681,6 +722,7 @@ def _gather_fused(
     decay_binds: dict[str, Any],
     now: str,
     fact_keys: bool = False,
+    vector_ready: bool | None = None,
     timer: StageTimer | None = None,
 ) -> list[_Candidate]:
     """One query's arms (BM25 + vector + graph) → RRF fusion → recency boost.
@@ -698,20 +740,18 @@ def _gather_fused(
     # Self-healing cold start (§7): once the corpus is warm, the first retrieval
     # builds the index lazily; until then we run BM25-only. The one-time build
     # cost moves to the durable write path in Step 3.
-    with t.stage("vector_check"):
-        vector_ready = has_vector_index(db) or ensure_vector_index(
-            db,
-            dimensions=dimensions,
-            n_lists=n_lists or settings.vector_n_lists,
-            train_factor=settings.vector_train_factor,
-        )
-    if vector_ready and query_vec:  # query_vec empty → embedder degraded, BM25-only (§15)
+    if vector_ready is None:
+        with t.stage("vector_check"):
+            vector_ready = _vector_ready(db, dimensions=dimensions, n_lists=n_lists)
+    # query_vec empty → embedder degraded (or the arm was off when asked), BM25-only (§15)
+    if vector_ready and query_vec:
         with t.stage("vector"):
-            vector_rows = _run(
-                db, _VECTOR_QUERY, {"qvec": query_vec, "nprobe": settings.n_probe, **scope}
+            vector_rows = _vector_arm(
+                db, {"qvec": query_vec, "nprobe": settings.n_probe, **scope}
             )
-        ranked_lists.append(vector_rows)
-        names.append("vector")
+        if vector_rows is not None:
+            ranked_lists.append(vector_rows)
+            names.append("vector")
 
     # FK-1: match the query against the facts stored on each memory.
     if fact_keys:
@@ -1050,7 +1090,7 @@ def _retrieve_impl(
 
     use_fact_keys = settings.retrieve_fact_keys if fact_keys is None else fact_keys
 
-    def gather(q: str, vec: list[float]) -> list[_Candidate]:
+    def gather(q: str, vec: list[float], ready: bool | None = None) -> list[_Candidate]:
         """Run the per-query arm gather with this call's shared scope bound."""
         return _gather_fused(
             db,
@@ -1065,6 +1105,7 @@ def _retrieve_impl(
             decay_binds=decay_binds,
             now=now,
             fact_keys=use_fact_keys,
+            vector_ready=ready,
             timer=t,
         )
 
@@ -1086,6 +1127,7 @@ def _retrieve_impl(
     else:
         # Full-mode enrichment (§9 stages 1–2). The query vector is computed once
         # here and reused for both vector search and MMR relevance.
+        ready: bool | None = None
         if mode == "full":
             gen = generator or get_generator()
             if should_skip_retrieval(query, generator=gen, cache=cache):
@@ -1099,9 +1141,15 @@ def _retrieve_impl(
                 )
                 query_vec = _embed_query(emb, query, tenant_id=tenant_id)
         else:
-            with t.stage("embed"):
-                query_vec = _embed_query(emb, query, tenant_id=tenant_id)
-        fused = gather(query, query_vec)
+            # Check the vector arm first: with it off (and no fact keys) nothing reads the
+            # query embedding, so don't pay for the provider call.
+            with t.stage("vector_check"):
+                ready = _vector_ready(db, dimensions=emb.dimensions, n_lists=n_lists)
+            query_vec = []
+            if ready or use_fact_keys:
+                with t.stage("embed"):
+                    query_vec = _embed_query(emb, query, tenant_id=tenant_id)
+        fused = gather(query, query_vec, ready)
 
     as_of_key = _event_sort_key(as_of) if as_of else None
     if as_of_key is not None:
@@ -1124,6 +1172,9 @@ def _retrieve_impl(
                              else rerank_time_weight),
             )
 
+    if settings.mmr_lambda < 1.0:
+        with t.stage("mmr_embeddings"):
+            _load_embeddings(db, fused)
     with t.stage("mmr"):
         selected = _mmr(fused, k)
         selected.sort(key=lambda c: -c.fused_score)
@@ -1231,6 +1282,7 @@ def diagnose_vector(
     n_lists = settings.vector_n_lists
     factor = settings.vector_train_factor
     corpus = cast(int, db.collection("memories").count())
+    forget_vector_state(db)  # probe the live index, not a cached answer
     report: dict[str, Any] = {
         "corpus": corpus,
         "n_lists": n_lists,

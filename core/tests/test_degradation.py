@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Sequence
 
+import pytest
 from arango.database import StandardDatabase
 
 from arango_memory.embedding import FakeEmbedder
@@ -18,6 +19,7 @@ from arango_memory.generation import FakeGenerator
 from arango_memory.ingest.queue import InProcessQueue, WriteIntent
 from arango_memory.ingest.store import store
 from arango_memory.ingest.worker import WriteWorker
+from arango_memory.retrieve import search
 from arango_memory.retrieve.search import RetrieveResult, retrieve
 from arango_memory.schema.collections import ensure_schema
 from arango_memory.telemetry import metrics
@@ -41,12 +43,16 @@ def _degraded_events() -> list[dict[str, object]]:
 
 # ── embedder outage → BM25-only (§15) ─────────────────────
 def test_embedder_outage_degrades_to_bm25_lite(
-    db: StandardDatabase, wait_for_searchable: Callable[..., RetrieveResult]
+    db: StandardDatabase,
+    wait_for_searchable: Callable[..., RetrieveResult],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     ctx = {"tenant_id": "deg_lite", "agent_id": "a"}
     store(db, content="crimson lantern relic on the shelf", **ctx)
     wait_for_searchable(db, query="crimson", **ctx)
 
+    # The query is embedded only when the vector arm is on.
+    monkeypatch.setattr(search, "vector_index_ready", lambda *_, **__: True)
     embedding_cache.clear()  # force the query embed (no warm hit to mask the failure)
     events = _degraded_events()
     result = retrieve(db, query="crimson lantern", embedder=_BoomEmbedder(), **ctx)
