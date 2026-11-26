@@ -1809,11 +1809,12 @@ PF-1a, c, d and e leave only bm25 → graph.
   loop, so it holds no thread. Inline commits run one at a time, and so do the maintenance routes
   (they were never written to race each other). `reset_access` ignores write conflicts.
 
-### PF-1b — Turn on batch writes on Railway (config, no PR)  🔄 faster at 64, dead letters unchecked
+### PF-1b — Turn on batch writes on Railway (config, no PR)  ✅ on at 64
 
 - **Status.** The owner set both variables on the Railway core (reported 2026-11-26). At batch 16
   the flush did not get faster; at 64, the same day, it took 8.3 s, and 7.8 s after #311
-  (results below).
+  (results below). Closed on 2026-11-26 with no dead letters; the flush is faster than the 14.8 s
+  baseline but short of the "few seconds" first expected.
 - Set `WRITE_BATCH_SIZE=16` (now 64, see below) and `WRITE_WORKER_CONCURRENCY=4` (one per
   Diligence Room specialist) on the Railway core. Both are built and tested (WQ-1b #291, WQ-1a #301) and off by default. With
   spaCy, the worker already serialises extraction across groups.
@@ -1924,19 +1925,24 @@ edges in the room's graph. One run, against the earlier run at 64.
 
 `/health`: 67 checks over 150 s, no errors, p95 345 ms, max 426 ms. Excluding the embedding
 calls, the stage p50s add to about 0.3 s less per batch. The flush difference is too small to
-show from one run each. Dead letters and write conflicts were not checked (Railway logs).
+show from one run each. Dead letters and write conflicts: see the log check below.
 
 The largest cost left in a batch is the entity step (about 1.5 s). The candidate fetch within it
 downloads the tenant's entity embeddings on every batch (PF-1h).
 
-**Open before this item closes.**
-- Read the Railway logs for dead letters. They also show whether concurrency 4 is in effect;
-  `/health` doesn't.
+**Dead letters (2026-11-26): none.** The Railway deploy logs of the day's nine deployments
+(12:10–19:51 UTC, all three live runs, 341 `/v1/store` requests, all 200) have no
+`write dead-lettered`, `batch commit failed`, `batch hit a write conflict`,
+`graph write still conflicting` or `write worker iteration failed` line, and no other warning or
+error from the core. So no run lost entity links to the conflict bug fixed in #310. The logs
+don't show whether concurrency 4 is in effect.
+
+**Follow-ups (not part of this item).**
+- Remove the demo's flush-cap workarounds, which waited for a clean run.
 - The hosted core appears to run the `fake` extractor: extraction took 0.2 ms and every entity is
   a `Concept`, including words such as "No" and "Dec". `EXTRACTION_PROVIDER` is not set on Railway
   (owner, 2026-11-26), and the image installs no extraction extra, so `spacy` needs an image change
   first.
-- Keep the demo's flush-cap workarounds until then.
 
 ### PF-1c — Stop returning embeddings from the retrieval arms (PR 2)  ✅ #304
 
