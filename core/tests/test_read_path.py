@@ -86,20 +86,22 @@ def test_arm_rows_carry_no_embedding(
 ) -> None:
     _seed(db, wait_for_searchable, 40)
     _build_index(db)
-    rows: list[dict[str, Any]] = []
+    returned: dict[str, list[dict[str, Any]]] = {}  # rows by query text
     real = search._run
 
     def recording(*args: Any) -> list[dict[str, Any]]:
         out = real(*args)
-        rows.extend(out)
+        returned.setdefault(args[1], []).extend(out)
         return out
 
     monkeypatch.setattr(search, "_run", recording)
-    result = retrieve(db, query="Alice subject 7", **_CTX)
+    assert retrieve(db, query="Alice subject 7", **_CTX).hits
 
-    assert any("vector" in h.source for h in result.hits)
-    assert any("graph" in h.source for h in result.hits)
-    assert rows and not any("embedding" in row for row in rows)
+    # Assert on what each arm returned: graph rows rank low (a small RRF weight), so none
+    # need reach the final hits.
+    for query in (search._BM25_QUERY, search._VECTOR_QUERY, search._GRAPH_QUERY):
+        assert returned[query]
+    assert not any("embedding" in row for rows in returned.values() for row in rows)
 
 
 def test_mmr_loads_embeddings_only_below_lambda_one(
