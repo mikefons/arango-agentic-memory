@@ -1809,10 +1809,11 @@ PF-1a, c, d and e leave only bm25 → graph.
   loop, so it holds no thread. Inline commits run one at a time, and so do the maintenance routes
   (they were never written to race each other). `reset_access` ignores write conflicts.
 
-### PF-1b — Turn on batch writes on Railway (config, no PR)  🔄 set, not verified
+### PF-1b — Turn on batch writes on Railway (config, no PR)  🔄 run, flush target missed
 
-- **Status.** The owner set both variables on the Railway core (reported 2026-11-26). The
-  verification run below is still to do.
+- **Status.** The owner set both variables on the Railway core (reported 2026-11-26), and the
+  verification run was done the same day (result below). Batching is on; the flush did not get
+  faster.
 - Set `WRITE_BATCH_SIZE=16` and `WRITE_WORKER_CONCURRENCY=4` (one per Diligence Room specialist)
   on the Railway core. Both are built and tested (WQ-1b #291, WQ-1a #301) and off by default. With
   spaCy, the worker already serialises extraction across groups.
@@ -1825,6 +1826,45 @@ PF-1a, c, d and e leave only bm25 → graph.
 
   Then follow WQ-1's rollout note: remove the demo's flush-cap workarounds only after a clean run.
 - Whether to make 16 / 4 the defaults in `config.py` is a separate decision.
+
+**Result (2026-11-26, one live run on a hard-reset room).** Verdict "pass", 10 contradictions,
+about 100 claims.
+
+| step | 2026-11-20 | 2026-11-26 |
+|---|---|---|
+| specialists (slowest of 4) | 3.8 s | 4.5 s |
+| `flush:specialists` | 14.8 s | 16.6 s, drained |
+| consolidate | 0.6 s | 0.7 s |
+| red-team | 12.6 s | 7.6 s |
+| `flush:redteam` | 4.2 s | 4.6 s, drained |
+| synthesis | 20.0 s | 12.3 s |
+
+| check | result |
+|---|---|
+| `write_many.*` timers on `/health` | yes: 11 batched commits, about 9 claims each |
+| `flush:specialists` drops to a few seconds | no |
+| `/health` responsive | 184 checks over 7 minutes, no errors, p95 345 ms, max 1.3 s |
+| zero dead letters | not checked (no access to the Railway logs) |
+
+The red-team and synthesis changes can't be credited to this work: model response times are part
+of both.
+
+Likely reasons for the unchanged flush (inferred, not confirmed):
+- The 14.8 s baseline probably already had batching on: at the one-by-one rate WQ-1 measured
+  (about 0.4 writes/s), 104 claims could not have drained that fast. So "a few seconds" assumed
+  too much.
+- Parallel commits seem to help little. A batch takes about 2.2 s (sum of the `write_many` stage
+  p50s) and batches finished at nearly that pace. A round claims in arrival order, so it may hold
+  only one or two agents. `/health` doesn't show whether concurrency 4 is in effect.
+
+**Open before this item closes.**
+- Read the Railway logs for dead letters.
+- Measure how many agents each claim round holds, and confirm the concurrency setting.
+- The hosted core appears to run the `fake` extractor: extraction took 0.2 ms and every entity is
+  a `Concept`, including words such as "No" and "Dec". `EXTRACTION_PROVIDER` is not set on Railway
+  (owner, 2026-11-26), and the image installs no extraction extra, so `spacy` needs an image change
+  first.
+- Keep the demo's flush-cap workarounds until then.
 
 ### PF-1c — Stop returning embeddings from the retrieval arms (PR 2)  ✅ #304
 
