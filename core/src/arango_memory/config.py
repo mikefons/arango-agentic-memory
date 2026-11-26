@@ -257,6 +257,9 @@ class Settings(BaseSettings):
     # tenant, so its cost grows with *other* tenants' entities; the scan's cost is the tenant's
     # own (1536-dim: ~0.5s at 1.5k, ~1.9s at 5k). 0 = always ANN once the index is warm.
     entity_resolution_scan_max: int = Field(default=5000, ge=0)
+    # PF-1h: memory for entity embeddings the batched write keeps between scans, so a scan
+    # downloads only the new ones (about 12 KB per entity at 1536 dims). 0 = off.
+    entity_vector_cache_mb: int = Field(default=64, ge=0)
     # Graph expansion (DESIGN.md §9 stage 4): relates_to hops from seed entities (3 max).
     graph_hops: int = Field(default=2, ge=0, le=3)
     # SC-1c: cap on the `relates_to` neighbours the graph arm expands, so a hub in a dense

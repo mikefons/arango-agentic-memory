@@ -45,6 +45,7 @@ from .extract import (
     is_io_bound,
 )
 from .temporal import parse_explicit_time
+from .vector_cache import Entry, entity_vectors
 
 # A corroborating mention bumps mention_count, accumulates the source's
 # reliability, and recomputes belief = confidence_prior × (1 − (1−base)^Σreliability) (§8/§12).
@@ -66,6 +67,18 @@ FOR e IN entities
   FILTER e.tenant_id == @tenant_id
   RETURN { key: e._key, name: e.name, label: e.label, embedding: e.embedding }
 """
+
+# `_FETCH_EXISTING` for a caller that holds some embeddings already (`vector_cache`): @known maps
+# a stamp to the keys cached under it, and only the others' embeddings come back.
+_FETCH_UNCACHED = """
+FOR e IN entities
+  FILTER e.tenant_id == @tenant_id
+  LET stamp = CONCAT_SEPARATOR("|", e.embedding_model, e.embedding_version, e.reembedded_at)
+  LET cached = HAS(NOT_NULL(@known[stamp], {}), e._key)
+  RETURN { key: e._key, name: e.name, label: e.label, stamp: stamp, cached: cached,
+           embedding: cached ? null : e.embedding }
+"""
+_SCAN_BATCH_SIZE = 10_000  # rows per cursor page: cached rows are small, so fewer round trips
 
 # SC-1b: top-k nearest existing entities to a query vector, via the Faiss IVF index —
 # O(k) candidate generation instead of the O(N) full tenant scan above. Same shape as
@@ -189,7 +202,9 @@ def _best_match_many(
 
     dim = len(qvecs[0])
     q = _unit(np.asarray(qvecs, dtype=np.float64))
-    p = _unit(np.asarray([row.get("embedding") or [0.0] * dim for row in pool], dtype=np.float64))
+    vectors = (row.get("embedding") for row in pool)  # a list, or an array from the cache
+    p = _unit(np.asarray(
+        [[0.0] * dim if v is None or len(v) == 0 else v for v in vectors], dtype=np.float64))
     sims = q @ p.T  # (N, M) cosine
 
     # Exclude a query's own (name, label). Map tuples → dense ids for exact (collision-free)
@@ -245,7 +260,37 @@ def _resolution_pool(
             forget_vector_state(db, "entities")  # the index may have been dropped
             logger.warning("entity ANN resolution failed; scanning",
                            extra={"reason": type(exc).__name__, "detail": str(exc)})
-    return list(cast(Cursor, db.aql.execute(_FETCH_EXISTING, bind_vars={"tenant_id": tenant_id})))
+    return _scan_pool(db, tenant_id)
+
+
+def _scan_pool(db: StandardDatabase, tenant_id: str) -> list[dict[str, Any]]:
+    """Every entity of the tenant with its embedding, reusing the cached ones (PF-1h)."""
+    max_bytes = settings.entity_vector_cache_mb * 1024 * 1024
+    if max_bytes <= 0:
+        cur = db.aql.execute(_FETCH_EXISTING, bind_vars={"tenant_id": tenant_id})
+        return list(cast(Cursor, cur))
+    import numpy as np
+
+    scope = (db.name, tenant_id)
+    held = entity_vectors.get(scope)
+    known: dict[str, dict[str, int]] = {}
+    for key, (stamp, _) in held.items():
+        known.setdefault(stamp, {})[key] = 1
+    bind: dict[str, Any] = {"tenant_id": tenant_id, "known": known}
+    rows = list(cast(Cursor, db.aql.execute(
+        _FETCH_UNCACHED, bind_vars=bind, batch_size=_SCAN_BATCH_SIZE,
+    )))
+    entry: Entry = {}
+    for row in rows:
+        if row["cached"]:
+            row["embedding"] = held[row["key"]][1]
+        elif row["embedding"]:
+            row["embedding"] = np.asarray(row["embedding"], dtype=np.float64)
+        else:
+            continue  # nothing to cache; it scores as a zero vector
+        entry[row["key"]] = (row["stamp"], row["embedding"])
+    entity_vectors.put(scope, entry, max_bytes)
+    return rows
 
 
 def _edge_doc(

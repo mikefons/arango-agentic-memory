@@ -2088,19 +2088,39 @@ retrieve clears the cache and answers without the vector arm.
 - **Docs.** The `ops.md` scaling section.
 - **Size.** S–M.
 
-### PF-1h — Entity resolution fetches the tenant's entity vectors on every write (found while scoping; measure first)
+### PF-1h — Entity resolution fetches the tenant's entity vectors on every write  🔄 built
 
 - **What happens.** Without the entity ANN index, `write_entities` / `write_entities_many` resolve
   against `_FETCH_EXISTING`, which returns every entity in the tenant with its embedding, once per
   write (or per batch). On ArangoGraph there is never an ANN index, so this always happens. The
-  payload grows with the tenant: 2,000 entities at the default 256 dims is about 10 MB per write.
-- **Not measured yet.** The 2026-11-25 ingest test used a fresh database.
-- **Measure first.** Read `write.entities.candidates` on `/health` for the Diligence Room tenant,
-  and that tenant's entity count.
-- **Fix, if the cost is large.** Score in AQL instead: `COSINE_SIMILARITY` against each new name's
-  vector, top-k per name. Return keys, names, labels and scores only, and have `_best_match` take
-  the score instead of recomputing it.
-- **Size.** M.
+  payload grows with the tenant.
+- **Measured (2026-11-26, 90 ms proxy, 1536 dimensions, 30 new names, match included).** Scoring
+  in AQL (`COSINE_SIMILARITY`, the fix first proposed) was compared with keeping the vectors in
+  the core:
+
+  | entities in the tenant | fetch all | score in AQL | cache in the core (prototype) |
+  |---|---|---|---|
+  | 75 | 157 ms, 2.5 MB | 169 ms | 103 ms |
+  | 500 | 330 ms, 16 MB | 208 ms | 111 ms |
+  | 2,000 | 1128 ms, 65 MB | 387 ms | 230 ms |
+  | 5,000 | 2913 ms, 163 MB | 770 ms | 555 ms |
+
+  The proxy limits no bandwidth, so a real network makes "fetch all" worse.
+- **Built: the cache** (`ingest/vector_cache.py`, `ENTITY_VECTOR_CACHE_MB`, default 64). The scan
+  returns an embedding only when the core doesn't hold one with the same stamp (model, version,
+  re-embed time). Matching is unchanged and exact. Chosen over AQL scoring for speed at every
+  size and no added database load; the cost is core memory and a first scan after a restart that
+  still downloads everything.
+
+  | entities | cache off | first scan | later scans | held |
+  |---|---|---|---|---|
+  | 75 | 158 ms, 2.5 MB | 159 ms | 105 ms, 0.01 MB | 0.9 MB |
+  | 500 | 323 ms, 16 MB | 342 ms | 113 ms, 0.05 MB | 6.2 MB |
+  | 2,000 | 1139 ms, 65 MB | 1014 ms | 150 ms, 0.19 MB | 25 MB |
+  | 5,000 | 2909 ms, 163 MB | 3442 ms | 169 ms, 0.47 MB | 62 MB |
+
+- **Scope.** Batched writes only. The one-by-one write path still fetches everything.
+- Not measured on the hosted core.
 
 **Order.**
 - PF-1b now (config only).
