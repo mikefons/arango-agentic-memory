@@ -1809,13 +1809,12 @@ PF-1a, c, d and e leave only bm25 → graph.
   loop, so it holds no thread. Inline commits run one at a time, and so do the maintenance routes
   (they were never written to race each other). `reset_access` ignores write conflicts.
 
-### PF-1b — Turn on batch writes on Railway (config, no PR)  🔄 run, flush target missed
+### PF-1b — Turn on batch writes on Railway (config, no PR)  🔄 faster at 64, dead letters unchecked
 
-- **Status.** The owner set both variables on the Railway core (reported 2026-11-26), and the
-  verification run was done the same day (result below). Batching is on; the flush did not get
-  faster.
-- Set `WRITE_BATCH_SIZE=16` and `WRITE_WORKER_CONCURRENCY=4` (one per Diligence Room specialist)
-  on the Railway core. Both are built and tested (WQ-1b #291, WQ-1a #301) and off by default. With
+- **Status.** The owner set both variables on the Railway core (reported 2026-11-26). At batch 16
+  the flush did not get faster; at 64, the same day, it took 8.3 s (results below).
+- Set `WRITE_BATCH_SIZE=16` (now 64, see below) and `WRITE_WORKER_CONCURRENCY=4` (one per
+  Diligence Room specialist) on the Railway core. Both are built and tested (WQ-1b #291, WQ-1a #301) and off by default. With
   spaCy, the worker already serialises extraction across groups.
 - **Who.** The owner, in the Railway dashboard (no Railway CLI on the dev machine). This can happen
   before PF-1a.
@@ -1849,17 +1848,55 @@ about 100 claims.
 The red-team and synthesis changes can't be credited to this work: model response times are part
 of both.
 
-Likely reasons for the unchanged flush (inferred, not confirmed):
-- The 14.8 s baseline probably already had batching on: at the one-by-one rate WQ-1 measured
-  (about 0.4 writes/s), 104 claims could not have drained that fast. So "a few seconds" assumed
-  too much.
-- Parallel commits seem to help little. A batch takes about 2.2 s (sum of the `write_many` stage
-  p50s) and batches finished at nearly that pace. A round claims in arrival order, so it may hold
-  only one or two agents. `/health` doesn't show whether concurrency 4 is in effect.
+Why the live flush was no faster than the 14.8 s baseline (inferred): that baseline probably
+already had batching on, since at the one-by-one rate WQ-1 measured (about 0.4 writes/s) 104
+claims could not have drained that fast. So "a few seconds" assumed too much.
+
+**Local replay (2026-11-26).** About 100 claims from four agents arriving over 4.5 s, as in the
+live run, into the `arango` queue and write worker through the 90 ms delay proxy: OpenAI
+embeddings, `fake` extractor, scratch database. Drain time runs from the first write to an empty
+queue, two runs per setting. The harness was a one-off script and is not in the repository.
+
+| `WRITE_BATCH_SIZE` | `WRITE_WORKER_CONCURRENCY` | drain |
+|---|---|---|
+| 16 | 1 | 30.0–31.1 s |
+| 16 (hosted setting) | 4 | 16.4–16.8 s |
+| 32 | 4 | 11.1–11.7 s |
+| 64 | 4 | 7.5–7.7 s |
+| 128 | 4 | 7.4–7.7 s |
+
+- **The batch size is the limit.** A batched commit took about 1.4 s whether it held 2 claims or
+  11. A round claims at most `WRITE_BATCH_SIZE` and splits them by agent, so 16 means many rounds
+  of small commits: 8 rounds at 16, 3 at 64.
+- **Concurrency works.** 4 roughly halved the drain, and each round held two to four agents. This
+  corrects the first reading of the live run, that parallel commits helped little.
+- **The first claim goes alone.** An idle worker takes the first write by itself and commits it
+  one by one, about 2.4 s before the next round can start. A short wait before claiming could
+  fix this (code, not built).
+- No dead letters; some runs had one or two failed batch calls that succeeded on retry.
+- Hosted batches are slower (about 2.2 s against 1.4 s), so expect a longer drain there.
+
+**Hosted run at 64 (2026-11-26, hard-reset room, concurrency 4).** The owner set
+`WRITE_BATCH_SIZE=64`. Verdict "pass", 11 contradictions, 104 claims.
+
+| step | batch 16 | batch 64 |
+|---|---|---|
+| specialists (slowest of 4) | 4.5 s | 3.5 s |
+| `flush:specialists` | 16.6 s | 8.3 s, drained |
+| consolidate | 0.7 s | 0.6 s |
+| red-team | 7.6 s | 7.9 s |
+| `flush:redteam` | 4.6 s | 4.6 s, drained |
+| synthesis | 12.3 s | 10.4 s |
+| batched commits | 11 | 7 |
+
+`/health`: 67 checks over 150 s, no errors, p95 329 ms, max 448 ms. One run at each setting.
+The flush is now below the 14.8 s baseline but not yet "a few seconds". A batched commit on
+the hosted core takes seconds (the `write_many` stage p50s sum to about 2.8 s), so the next
+gain would come from fewer database calls per commit.
 
 **Open before this item closes.**
-- Read the Railway logs for dead letters.
-- Measure how many agents each claim round holds, and confirm the concurrency setting.
+- Read the Railway logs for dead letters. They also show whether concurrency 4 is in effect;
+  `/health` doesn't.
 - The hosted core appears to run the `fake` extractor: extraction took 0.2 ms and every entity is
   a `Concept`, including words such as "No" and "Dec". `EXTRACTION_PROVIDER` is not set on Railway
   (owner, 2026-11-26), and the image installs no extraction extra, so `spacy` needs an image change
