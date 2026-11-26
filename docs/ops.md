@@ -255,8 +255,12 @@ parallel instead, each on its own database connection. It only helps with `WRITE
 - **Order.** One agent's writes always run in order on one thread; the round is acked after every
   group has finished.
 - **Conflicts.** Groups that touch the same entity or edge at the same moment can hit an ArangoDB
-  write-write conflict or unique-key violation. The batch retries up to three times (log line
-  `batch hit a write conflict; retrying`), then falls back to per-intent commits as usual.
+  write-write conflict or unique-key violation. A graph write (entities and their edges) is retried
+  where it conflicts, with backoff, up to 8 attempts; if all fail, the log says
+  `graph write still conflicting` and that write's entity links may be missing. A conflict elsewhere
+  retries the whole batch up to three times (`batch hit a write conflict; retrying`), then falls
+  back to per-intent commits. Replaying a write whose turn is already stored never rebuilds its
+  graph.
 - **Failure handling.** If a group raises (for example the database dropped while dead-lettering),
   the other groups finish first, then the round is released and committed again.
 - **Extractors.** A CPU-bound extractor (spaCy, GLiNER, the fake one) is serialised by a lock;

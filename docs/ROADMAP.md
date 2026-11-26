@@ -1873,7 +1873,9 @@ queue, two runs per setting. The harness was a one-off script and is not in the 
 - **The first claim goes alone.** An idle worker takes the first write by itself and commits it
   one by one, about 2.4 s before the next round can start. A short wait before claiming could
   fix this (code, not built).
-- No dead letters; some runs had one or two failed batch calls that succeeded on retry.
+- No dead letters. Some runs had one or two batch calls fail with a write conflict (error 1200)
+  and "succeed" on retry. That retry skipped the entity step, so those batches lost their entity
+  links: a bug, since fixed (graph writes now retry in place).
 - Hosted batches are slower (about 2.2 s against 1.4 s), so expect a longer drain there.
 
 **Hosted run at 64 (2026-11-26, hard-reset room, concurrency 4).** The owner set
