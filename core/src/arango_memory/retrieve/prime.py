@@ -17,10 +17,11 @@ import tiktoken
 from arango.cursor import Cursor
 from arango.database import StandardDatabase
 
+from ..client import ArmRunner
 from ..embedding import Embedder
 from ..generation import Generator
 from .enrich import QueryCache
-from .search import MemoryHit, retrieve
+from .search import AccessSink, MemoryHit, retrieve
 
 _ENCODER = tiktoken.get_encoding("cl100k_base")
 
@@ -158,6 +159,8 @@ def prime(
     embedder: Embedder | None = None,
     generator: Generator | None = None,
     cache: QueryCache | None = None,
+    access_sink: AccessSink | None = None,
+    arm_runner: ArmRunner | None = None,
 ) -> PrimeResult:
     """Assemble a task briefing (history + entities + tool runs) under one budget."""
     inc = include or Include()
@@ -172,6 +175,7 @@ def prime(
             db, query=task, tenant_id=tenant_id, agent_id=agent_id,
             read_agent_ids=read_agent_ids, k=k, max_memory_tokens=max_memory_tokens,
             embedder=embedder, mode=mode, generator=generator, cache=cache,
+            access_sink=access_sink, arm_runner=arm_runner,
         )
         hits = result.hits
         if inc.semantic:

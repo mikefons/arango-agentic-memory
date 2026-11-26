@@ -7,9 +7,12 @@ token (ArangoGraph) to basic auth (local).
 
 from __future__ import annotations
 
+import contextvars
 import threading
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Sequence
+from concurrent.futures import ThreadPoolExecutor, wait
 from contextlib import contextmanager
+from typing import Any
 
 from arango import ArangoClient  # type: ignore[attr-defined]
 from arango.database import StandardDatabase
@@ -44,6 +47,43 @@ class DatabasePool:
             finally:
                 with self._lock:
                     self._idle.append(db)
+
+
+ArmTask = Callable[[StandardDatabase], Any]
+# Runs independent queries and returns their results in order; the first may use `db`.
+ArmRunner = Callable[[StandardDatabase, Sequence[ArmTask]], list[Any]]
+
+
+class ParallelArms:
+    """An `ArmRunner` that runs every task after the first on its own handle and thread.
+
+    The helper pool is separate from the callers' pool, and a task holds one handle and
+    waits for nothing else, so callers that all want helpers queue instead of deadlocking.
+    """
+
+    def __init__(self, factory: Callable[[], StandardDatabase], size: int) -> None:
+        self._pool = DatabasePool(factory, size)
+        self._threads = ThreadPoolExecutor(max_workers=size, thread_name_prefix="arm")
+
+    def _on_own_handle(self, task: ArmTask) -> Any:
+        with self._pool.lease() as db:
+            return task(db)
+
+    def __call__(self, db: StandardDatabase, tasks: Sequence[ArmTask]) -> list[Any]:
+        first, *rest = tasks
+        futures = [
+            # A copy of the caller's context keeps request ids and trace spans in the thread.
+            self._threads.submit(contextvars.copy_context().run, self._on_own_handle, task)
+            for task in rest
+        ]
+        try:
+            head = first(db)
+        finally:
+            wait(futures)  # never leave a query running past its request
+        return [head, *(future.result() for future in futures)]
+
+    def close(self) -> None:
+        self._threads.shutdown()
 
 
 class ArangoMemoryClient:
@@ -88,8 +128,15 @@ class ArangoMemoryClient:
 
     def pool(self, size: int) -> DatabasePool:
         """A pool of handles on the memory database, each with its own connection."""
+        return DatabasePool(self._new_handle, size)
+
+    def parallel_arms(self, size: int) -> ParallelArms:
+        """A runner for concurrent queries, with up to `size` connections of its own."""
+        return ParallelArms(self._new_handle, size)
+
+    def _new_handle(self) -> StandardDatabase:
         cfg = self._config
-        return DatabasePool(lambda: ArangoMemoryClient(cfg).database(cfg.arango_db), size)
+        return ArangoMemoryClient(cfg).database(cfg.arango_db)
 
     def _sys_db(self) -> StandardDatabase:
         return self.database("_system")

@@ -20,13 +20,13 @@ from arango.database import StandardDatabase
 
 from ..config import settings
 from ..embedding import Embedder, get_embedder
-from ..embedding_cache import embed_batch_cached, embed_cached
+from ..embedding_cache import embed_batch_cached
 from ..generation import Generator, get_generator
 from ..models import idempotency_key, utcnow_iso
 from ..security.redact import redact
 from ..telemetry import StageTimer, metrics, span
-from .entities import GraphMemory, write_entities, write_entities_many
-from .extract import Extractor, get_extractor
+from .entities import GraphMemory, extract_entities, write_entities, write_entities_many
+from .extract import ExtractedEntity, Extractor, get_extractor
 from .prospective import generate_prospective
 
 
@@ -419,8 +419,28 @@ def _store_impl(
         else None
     )
 
+    # Working memory is ephemeral scratch — it never mints durable semantic entities;
+    # `extract=False` (BX-3) skips extraction for bulk ingest where per-write entity
+    # resolution is the bottleneck. Extraction runs before embedding so the turn and its
+    # entity names share one provider call; if it fails, the memory is still stored and the
+    # error is raised afterwards.
+    wants_graph = is_new and not is_working and extract
+    extracted: list[ExtractedEntity] = []
+    extract_error: Exception | None = None
+    if wants_graph:
+        extractor = extractor or get_extractor()
+        graph_timer = StageTimer("write.entities")
+        try:
+            extracted = extract_entities(extractor, content, graph_timer)
+        except Exception as exc:  # noqa: BLE001 — re-raised once the memory is written
+            extract_error = exc
+        graph_timer.record()
+
     with timer.stage("embed"):
-        turn_vec = embed_cached(emb, content, tenant_id=tenant_id)
+        vectors = embed_batch_cached(
+            emb, [content, *(ent.name for ent in extracted)], tenant_id=tenant_id
+        )
+    turn_vec = vectors[content]
     # GAM semantic boundary (§13): track the session's running topic before writing
     # this turn's memory, so a detected shift flushes the *prior* working buffer.
     if is_new and session_id is not None:
@@ -442,11 +462,10 @@ def _store_impl(
     if is_new and is_working:
         _enforce_working_capacity(db, tenant_id=tenant_id, agent_id=agent_id, session_id=session_id)
 
+    if extract_error is not None:
+        raise extract_error
     entity_ids: list[str] = []
-    # Working memory is ephemeral scratch — it never mints durable semantic entities;
-    # `extract=False` (BX-3) skips extraction for bulk ingest where per-write entity
-    # resolution is the bottleneck.
-    if is_new and not is_working and extract:
+    if extractor is not None and extracted:
         with timer.stage("entities"):
             entity_ids = write_entities(
                 db,
@@ -455,9 +474,11 @@ def _store_impl(
                 content=content,
                 tenant_id=tenant_id,
                 agent_id=agent_id,
-                extractor=extractor or get_extractor(),
+                extractor=extractor,
                 embedder=emb,
                 source_reliability=source_reliability,
+                extracted=extracted,
+                vectors=vectors,
             )
 
     timer.record()

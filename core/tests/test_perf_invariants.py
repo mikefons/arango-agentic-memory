@@ -40,16 +40,16 @@ def test_write_embeds_entities_in_one_batch(db: StandardDatabase) -> None:
     embedding_cache.clear()
     emb = _CountingEmbedder()
 
-    # Two writes, the second with strictly more entities. Per write the entity
-    # names must cost exactly one embed_batch call (not one embed() per name) and
-    # the content costs exactly one embed() — independent of entity count.
+    # Two writes, the second with strictly more entities. Each costs exactly one
+    # embed_batch call covering the content and its entity names, and no embed() —
+    # independent of entity count.
     store(db, content="Alice met Bob in Paris", tenant_id="perf_w", agent_id="a",
           turn_index=0, embedder=emb)
-    assert (emb.embed_calls, emb.batch_calls) == (1, 1)
+    assert (emb.embed_calls, emb.batch_calls) == (0, 1)
 
     store(db, content="Cara saw Dan and Eve and Finn in Rome", tenant_id="perf_w", agent_id="a",
           turn_index=1, embedder=emb)
-    assert (emb.embed_calls, emb.batch_calls) == (2, 2)  # +1 each — no per-entity scaling
+    assert (emb.embed_calls, emb.batch_calls) == (0, 2)  # +1 each — no per-entity scaling
 
 
 def test_retrieve_aql_fan_out_does_not_grow_with_corpus(
