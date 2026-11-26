@@ -1809,8 +1809,10 @@ PF-1a, c, d and e leave only bm25 → graph.
   loop, so it holds no thread. Inline commits run one at a time, and so do the maintenance routes
   (they were never written to race each other). `reset_access` ignores write conflicts.
 
-### PF-1b — Turn on batch writes on Railway (config, no PR)
+### PF-1b — Turn on batch writes on Railway (config, no PR)  🔄 set, not verified
 
+- **Status.** The owner set both variables on the Railway core (reported 2026-11-26). The
+  verification run below is still to do.
 - Set `WRITE_BATCH_SIZE=16` and `WRITE_WORKER_CONCURRENCY=4` (one per Diligence Room specialist)
   on the Railway core. Both are built and tested (WQ-1b #291, WQ-1a #301) and off by default. With
   spaCy, the worker already serialises extraction across groups.
@@ -1891,7 +1893,7 @@ As built: `ensure_vector_index` stays uncached (ops and tests); request paths ca
 `vector_index_ready`. If a cached "ready" is wrong because another process dropped the index, that
 retrieve clears the cache and answers without the vector arm.
 
-### PF-1e — Fewer round trips per request (PR 3)  🔄 built
+### PF-1e — Fewer round trips per request (PR 3)  ✅ #305
 
 1. **Write access after the response.** The API passes an `access_sink` to `retrieve` / `prime`,
    and the handler runs `reset_access` as a FastAPI background task on its own leased handle.
