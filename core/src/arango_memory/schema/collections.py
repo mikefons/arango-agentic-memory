@@ -8,11 +8,14 @@ edge collections, and the migration runner are added in later steps.
 
 from __future__ import annotations
 
+import threading
+import time
 from typing import Any, cast
 
 from arango.database import StandardDatabase
 from arango.exceptions import IndexCreateError
 
+from ..telemetry.logging import logger
 from .migrations import run_migrations
 
 DOCUMENT_COLLECTIONS: tuple[str, ...] = (
@@ -33,6 +36,11 @@ WRITE_QUEUE_COLLECTION = "write_intents"
 SEARCH_VIEW = "memory_search_view"
 VECTOR_FIELD = "embedding"
 VECTOR_INDEX_NAME = "idx_vector"
+
+# How long the request paths trust a looked-up index state, and how long they wait after the
+# database rejects an index build before asking again (ArangoGraph rejects it every time).
+VECTOR_STATE_TTL_SECONDS = 60.0
+VECTOR_BUILD_BACKOFF_SECONDS = 600.0
 
 GRAPH_NAME = "memory_graph"
 _EDGE_DEFINITIONS = [
@@ -164,21 +172,53 @@ def has_vector_index(db: StandardDatabase, collection: str = "memories") -> bool
     return any(idx.get("type") == "vector" for idx in indexes)
 
 
+# (database, collection) → (index ready, when that answer expires on the monotonic clock).
+_vector_state: dict[tuple[str, str], tuple[bool, float]] = {}
+_vector_state_lock = threading.Lock()
+_vector_refresh_locks: dict[tuple[str, str], threading.Lock] = {}
+
+
+def _cached_vector_state(key: tuple[str, str]) -> bool | None:
+    with _vector_state_lock:
+        entry = _vector_state.get(key)
+    return entry[0] if entry and time.monotonic() < entry[1] else None
+
+
+def _remember_vector_state(key: tuple[str, str], ready: bool, seconds: float) -> None:
+    with _vector_state_lock:
+        _vector_state[key] = (ready, time.monotonic() + seconds)
+
+
+def forget_vector_state(db: StandardDatabase, collection: str = "memories") -> None:
+    """Drop the cached index state, so the next request-path check asks the database."""
+    with _vector_state_lock:
+        _vector_state.pop((db.name, collection), None)
+
+
 def vector_index_state(db: StandardDatabase) -> str:
     """The vector arm's state for /health (MA-8): 'trained' if the Faiss index exists,
-    else 'deferred' (corpus below the training threshold → BM25-only for now). A cheap
-    index-metadata check, safe to call on a liveness probe."""
-    return "trained" if has_vector_index(db) else "deferred"
+    else 'deferred' (corpus below the training threshold → BM25-only for now). Served from
+    the cache when it has an answer, and never waits on an index build."""
+    key = (db.name, "memories")
+    ready = _cached_vector_state(key)
+    if ready is None:
+        ready = has_vector_index(db)
+        if ready:  # a cached "no" here would delay the first build attempt
+            _remember_vector_state(key, True, VECTOR_STATE_TTL_SECONDS)
+    return "trained" if ready else "deferred"
 
 
 def drop_vector_index(db: StandardDatabase) -> bool:
     """Drop the Faiss IVF index if present (retrieval self-heals). Returns True if dropped."""
     memories = db.collection("memories")
+    dropped = False
     for idx in cast("list[dict[str, Any]]", memories.indexes()):
         if idx.get("type") == "vector":
             memories.delete_index(idx["id"])
-            return True
-    return False
+            dropped = True
+            break
+    forget_vector_state(db)
+    return dropped
 
 
 def vector_training_threshold(n_lists: int, train_factor: int) -> int:
@@ -202,7 +242,61 @@ def ensure_vector_index(
     documents, so the IVF centroids train on enough points (DESIGN.md §7, MA-8). Returns
     True if the index exists (or was just created), False if creation was deferred — in
     which case the caller falls back (retrieval → BM25; entity resolution → full scan, SC-1b).
+
+    This always asks the database; request paths use the cached `vector_index_ready`.
     """
+    try:
+        ready = _build_if_warm(
+            db, dimensions=dimensions, n_lists=n_lists, train_factor=train_factor,
+            collection=collection,
+        )
+    except IndexCreateError:
+        return False
+    if ready:
+        _remember_vector_state((db.name, collection), True, VECTOR_STATE_TTL_SECONDS)
+    return ready
+
+
+def vector_index_ready(
+    db: StandardDatabase, *, dimensions: int, n_lists: int, train_factor: int = 1,
+    collection: str = "memories",
+) -> bool:
+    """`ensure_vector_index` for request paths: the answer is cached for
+    `VECTOR_STATE_TTL_SECONDS`, and a rejected build isn't retried (or logged) again for
+    `VECTOR_BUILD_BACKOFF_SECONDS`. One caller per collection refreshes; the rest wait."""
+    key = (db.name, collection)
+    ready = _cached_vector_state(key)
+    if ready is not None:
+        return ready
+    with _vector_state_lock:
+        refresh = _vector_refresh_locks.setdefault(key, threading.Lock())
+    with refresh:
+        ready = _cached_vector_state(key)
+        if ready is not None:
+            return ready
+        try:
+            ready = _build_if_warm(
+                db, dimensions=dimensions, n_lists=n_lists, train_factor=train_factor,
+                collection=collection,
+            )
+        except IndexCreateError as exc:
+            logger.warning(
+                "vector index build rejected",
+                extra={"collection": collection, "detail": str(exc),
+                       "retry_in_seconds": VECTOR_BUILD_BACKOFF_SECONDS},
+            )
+            _remember_vector_state(key, False, VECTOR_BUILD_BACKOFF_SECONDS)
+            return False
+        _remember_vector_state(key, ready, VECTOR_STATE_TTL_SECONDS)
+        return ready
+
+
+def _build_if_warm(
+    db: StandardDatabase, *, dimensions: int, n_lists: int, train_factor: int,
+    collection: str,
+) -> bool:
+    """True if the index exists or was just built, False below the training threshold.
+    Raises `IndexCreateError` if the database rejects the build."""
     if has_vector_index(db, collection):
         return True
     # Only attempt creation once warm enough to train; below the threshold the build is
@@ -211,18 +305,15 @@ def ensure_vector_index(
     corpus = cast(int, db.collection(collection).count())
     if corpus < vector_training_threshold(n_lists, train_factor):
         return False
-    try:
-        db.collection(collection).add_index(
-            {
-                "type": "vector",
-                "name": VECTOR_INDEX_NAME,
-                "fields": [VECTOR_FIELD],
-                "params": {"metric": "cosine", "dimension": dimensions, "nLists": n_lists},
-            }
-        )
-        return True
-    except IndexCreateError:
-        return False
+    db.collection(collection).add_index(
+        {
+            "type": "vector",
+            "name": VECTOR_INDEX_NAME,
+            "fields": [VECTOR_FIELD],
+            "params": {"metric": "cosine", "dimension": dimensions, "nLists": n_lists},
+        }
+    )
+    return True
 
 
 _VIEW_FIELDS: dict[str, Any] = {

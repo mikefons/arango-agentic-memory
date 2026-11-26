@@ -1761,7 +1761,7 @@ when cached, up to ~700 ms on a miss.
 
 PF-1a, c, d and e leave only bm25 → graph.
 
-### PF-1a — Move the handlers off the event loop (PR 1)  🔄 built
+### PF-1a — Move the handlers off the event loop (PR 1)  ✅ #303
 
 - **Handlers.** Route handlers that touch the database, embedder, generator or extractor become plain
   `def`. FastAPI then runs them in its threadpool (anyio, 40 threads). `/v1/flush` stays `async`,
@@ -1824,7 +1824,7 @@ PF-1a, c, d and e leave only bm25 → graph.
   Then follow WQ-1's rollout note: remove the demo's flush-cap workarounds only after a clean run.
 - Whether to make 16 / 4 the defaults in `config.py` is a separate decision.
 
-### PF-1c — Stop returning embeddings from the retrieval arms (PR 2)
+### PF-1c — Stop returning embeddings from the retrieval arms (PR 2)  🔄 built
 
 - Remove `embedding: doc.embedding` from `_BM25_QUERY`, `_FACT_BM25_QUERY`, `_FACT_VECTOR_QUERY`,
   `_VECTOR_QUERY`, `_GRAPH_QUERY` and `_SUCCESSORS` in `retrieve/search.py`.
@@ -1842,7 +1842,7 @@ PF-1a, c, d and e leave only bm25 → graph.
   payloads are small, so it only matters on the write path (PF-1h).
 - **Size.** S.
 
-### PF-1d — Cache the vector-index state, and skip the query embedding when it is unused (PR 2)
+### PF-1d — Cache the vector-index state, and skip the query embedding when it is unused (PR 2)  🔄 built
 
 - **Cache** (`schema/collections.py`):
   - Cache `has_vector_index` per (database, collection) for 60 s.
@@ -1865,6 +1865,31 @@ PF-1a, c, d and e leave only bm25 → graph.
   - A perf invariant: no embed call when the vector arm is off.
 - **Acceptance.** `vector_check` p50 < 1 ms once the cache is warm.
 - **Size.** S.
+
+### PF-1c + PF-1d result (2026-11-25, `bench_fresh`)
+
+Against `main` (with PF-1a), same session, 90 ms proxy for the timings:
+
+| | `main` | PF-1c+d | Target |
+|---|---|---|---|
+| Database bytes per retrieve (median of 100) | 6.66 MB | 0.31 MB | ≤ 0.3 MB |
+| `bm25` p50 | 238 ms | 121 ms | ~122 ms (from 154) |
+| `vector` p50 | 329 ms | 263 ms | ~156 ms (from 194) |
+| `vector_check` p50 | 97 ms | 0.0 ms | < 1 ms |
+| Single retrieve p50 | 794 ms | 578 ms | |
+| 8 concurrent retrieves, wall p50 | 1099 ms | 811 ms | |
+| `/health` p95 under that load | 235 ms | 114 ms | |
+
+The byte target was missed by 0.01 MB (max 0.44 MB). The stage p50s are taken under concurrent
+load, so compare the two columns with each other, not with the scoped numbers; `vector` did not
+reach its scoped value. Top-k results over 100 queries differ between `main` and this change in 5–6
+queries, and between two runs of the same code in 6–11; every query that differed across versions
+also varied between runs of one version. The query-embedding skip is covered by tests, not by these
+timings (the index is trained and the queries cached).
+
+As built: `ensure_vector_index` stays uncached (ops and tests); request paths call
+`vector_index_ready`. If a cached "ready" is wrong because another process dropped the index, that
+retrieve clears the cache and answers without the vector arm.
 
 ### PF-1e — Fewer round trips per request (PR 3)
 

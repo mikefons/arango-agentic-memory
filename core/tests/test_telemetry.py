@@ -123,11 +123,14 @@ def test_retrieve_reports_where_a_read_went(
     result = retrieve(db, query="Lovelace Babbage", **ctx)
     assert result.hits
     snap = latency.snapshot()
-    stages = ("embed", "bm25", "vector_check", "fuse", "mmr", "neighbors", "assemble", "access")
+    stages = ("bm25", "vector_check", "fuse", "mmr", "neighbors", "assemble", "access")
     for stage in stages:
         assert f"retrieve.{stage}" in snap, stage
     assert all(snap[k]["count"] == 1 for k in snap if k.startswith("retrieve."))  # per read
-    # a stage that did not run for this read has no sample (no reranker, no entity summaries)
+    # a stage that did not run for this read has no sample (no vector index so no query
+    # embedding, MMR at lambda=1.0, no reranker, no entity summaries)
+    assert "retrieve.embed" not in snap
+    assert "retrieve.mmr_embeddings" not in snap
     assert "retrieve.rerank" not in snap
     assert "retrieve.entities" not in snap
 
