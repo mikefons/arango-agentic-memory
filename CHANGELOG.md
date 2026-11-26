@@ -76,6 +76,11 @@ are versioned together and released from this repository.
 
 ### Changed
 
+- A batched write makes about half the database requests (4 instead of 8 for a batch with no
+  semantic merges): episodes and memories are recorded in one statement, and the three kinds of
+  graph edge in another. Both are all-or-nothing, so a failed edge write is now an error rather
+  than silently skipped. On `/health`, `write_many.existing` and `write_many.entities.relate` are
+  gone; `.insert` and `.entities.edges` cover them.
 - `/v1/retrieve` and `/v1/prime` record memory access after sending the response, one database
   round trip less per request. An access update can be lost if the process dies in between. Library
   callers still write it inline. Requires `fastapi>=0.118.0`.

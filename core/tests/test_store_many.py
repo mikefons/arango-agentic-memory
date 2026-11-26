@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
+from typing import Any
+
 from arango.database import StandardDatabase
 
 from arango_memory.embedding import FakeEmbedder
@@ -10,24 +13,18 @@ from arango_memory.retrieve.search import force_view_sync, retrieve
 
 
 # ── round-trip proof (no DB — a recording double) ─────────
-class _RecordingCollection:
+class _RecordingAQL:
     def __init__(self) -> None:
-        self.insert_many_sizes: list[int] = []
-        self.insert_calls = 0
+        self.calls: list[dict[str, Any]] = []
 
-    def insert_many(self, docs: list[dict], **_: object) -> None:
-        self.insert_many_sizes.append(len(docs))
-
-    def insert(self, doc: dict, **_: object) -> None:
-        self.insert_calls += 1
+    def execute(self, query: str, *, bind_vars: dict[str, Any]) -> Iterator[list[str]]:
+        self.calls.append(bind_vars)
+        return iter([[d["_key"] for d in bind_vars["episodes"]]])
 
 
 class _RecordingDB:
     def __init__(self) -> None:
-        self.cols: dict[str, _RecordingCollection] = {}
-
-    def collection(self, name: str) -> _RecordingCollection:
-        return self.cols.setdefault(name, _RecordingCollection())
+        self.aql = _RecordingAQL()
 
 
 def test_store_many_is_o1_round_trips() -> None:
@@ -35,11 +32,8 @@ def test_store_many_is_o1_round_trips() -> None:
     items = [StoreItem(content=f"turn number {i}", turn_index=i) for i in range(50)]
     results = store_many(db, items, tenant_id="t", agent_id="a", embedder=FakeEmbedder())  # type: ignore[arg-type]
     assert len(results) == 50
-    # exactly ONE bulk insert per collection, for all 50 items — not 50 per-item inserts.
-    assert db.cols["episodes"].insert_many_sizes == [50]
-    assert db.cols["memories"].insert_many_sizes == [50]
-    assert db.cols["episodes"].insert_calls == 0
-    assert db.cols["memories"].insert_calls == 0
+    # exactly ONE statement records both collections for all 50 items — not 50 inserts.
+    assert [(len(c["episodes"]), len(c["memories"])) for c in db.aql.calls] == [(50, 50)]
 
 
 def test_store_many_empty_is_noop() -> None:
@@ -79,3 +73,23 @@ def test_store_many_is_idempotent(db: StandardDatabase) -> None:
     before = db.collection("memories").count()
     store_many(db, items, tenant_id="tI", agent_id="a")  # replay
     assert db.collection("memories").count() == before  # same keys → no duplicates
+
+
+def _mention_counts(db: StandardDatabase, tenant: str) -> dict[str, int]:
+    rows = db.aql.execute(
+        "FOR e IN entities FILTER e.tenant_id == @t RETURN [e.name, e.mention_count]",
+        bind_vars={"t": tenant},
+    )
+    return {name: count for name, count in rows}  # type: ignore[union-attr]
+
+
+def test_only_new_turns_feed_the_graph_once_each(db: StandardDatabase) -> None:
+    old = StoreItem(content="Alice left.", turn_index=0)
+    new = StoreItem(content="Alice met Bob.", turn_index=1)
+    store_many(db, [old], tenant_id="tG", agent_id="a", extract=True)
+    # a replayed turn, a new one, and the new one again in the same batch
+    results = store_many(db, [old, new, new], tenant_id="tG", agent_id="a", extract=True)
+    assert _mention_counts(db, "tG") == {"Alice": 2, "Bob": 1}
+    assert results[0].entity_ids == []
+    assert results[1].entity_ids == results[2].entity_ids != []
+

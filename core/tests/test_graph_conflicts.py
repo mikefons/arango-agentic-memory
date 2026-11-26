@@ -13,12 +13,14 @@ from typing import Any
 import pytest
 from arango.aql import AQL
 from arango.database import StandardDatabase
+from arango.exceptions import AQLQueryExecuteError
 
 from arango_memory.client import ArangoMemoryClient
 from arango_memory.ingest import conflicts, entities
 from arango_memory.ingest.queue import InProcessQueue, WriteIntent
 from arango_memory.ingest.store import StoreItem, store_many
 from arango_memory.ingest.worker import WriteWorker
+from arango_memory.models import idempotency_key
 
 _TURNS = ["Alice met Bob at Acme.", "Carol joined Acme with Alice."]
 
@@ -78,10 +80,10 @@ def _normalised(graph: dict[str, Any]) -> dict[str, Any]:
 
 @pytest.mark.parametrize("batch_size,statement", [
     (8, entities._BULK_UPSERT_ENTITY),
-    (8, entities._BULK_RELATE),
+    (8, entities._BULK_EDGES),
     (1, entities._UPSERT_ENTITY),
     (1, entities._RELATE),
-], ids=["batch-upsert", "batch-relate", "single-upsert", "single-relate"])
+], ids=["batch-upsert", "batch-edges", "single-upsert", "single-relate"])
 def test_conflicting_graph_write_loses_and_doubles_nothing(
     db: StandardDatabase, monkeypatch: pytest.MonkeyPatch, batch_size: int, statement: str
 ) -> None:
@@ -155,3 +157,28 @@ def test_parallel_groups_sharing_entities_keep_exact_counts(
     assert graph["entities"] == [f"{n}:{total}" for n in ("Acme", "Alice", "Bob", "Carol")]
     assert all(r.endswith(f":{total}") for r in graph["relations"])
     assert graph["mentions"] == graph["produced_by"] == total * 4
+
+
+@pytest.mark.parametrize("held", ["memories", "episodes"])
+def test_a_conflicting_batch_record_leaves_nothing_behind(
+    db: StandardDatabase, monkeypatch: pytest.MonkeyPatch, held: str
+) -> None:
+    """Episodes and memories go in one statement: half a record would count as a replay, and
+    the graph pass would skip it."""
+    monkeypatch.setattr(conflicts, "_ATTEMPTS", 2)
+    items = [StoreItem(content="Alice met Bob.", turn_index=0)]
+    key = idempotency_key(tenant_id="atom", agent_id="a", session_id=None,
+                          content=items[0].content, turn_index=0)
+    held_key = key if held == "episodes" else f"{key}-mem"
+    other = db.begin_transaction(write=[held])  # another writer, not yet committed
+    other.collection(held).insert({"_key": held_key, "idempotency_key": held_key})
+    try:
+        with pytest.raises(AQLQueryExecuteError) as raised:
+            store_many(db, items, tenant_id="atom", agent_id="a", extract=True)
+        assert conflicts.is_conflict(raised.value)
+    finally:
+        other.abort_transaction()
+    assert db.collection("episodes").count() == db.collection("memories").count() == 0
+
+    store_many(db, items, tenant_id="atom", agent_id="a", extract=True)
+    assert _graph(db, "atom")["mentions"] == 2
