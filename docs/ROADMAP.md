@@ -1813,8 +1813,8 @@ PF-1a, c, d and e leave only bm25 → graph.
 
 - **Status.** The owner set both variables on the Railway core (reported 2026-11-26). At batch 16
   the flush did not get faster; at 64, the same day, it took 8.3 s (results below).
-- Set `WRITE_BATCH_SIZE=16` (now 64, see below) and `WRITE_WORKER_CONCURRENCY=4` (one per Diligence Room specialist)
-  on the Railway core. Both are built and tested (WQ-1b #291, WQ-1a #301) and off by default. With
+- Set `WRITE_BATCH_SIZE=16` (now 64, see below) and `WRITE_WORKER_CONCURRENCY=4` (one per
+  Diligence Room specialist) on the Railway core. Both are built and tested (WQ-1b #291, WQ-1a #301) and off by default. With
   spaCy, the worker already serialises extraction across groups.
 - **Who.** The owner, in the Railway dashboard (no Railway CLI on the dev machine). This can happen
   before PF-1a.
