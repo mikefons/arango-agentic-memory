@@ -23,6 +23,7 @@ import math
 from collections.abc import Mapping
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
+from functools import partial
 from typing import Any, cast
 
 from arango.cursor import Cursor
@@ -35,6 +36,7 @@ from ..models import utcnow_iso
 from ..schema.collections import forget_vector_state, vector_index_ready
 from ..telemetry import StageTimer, metrics
 from ..telemetry.logging import logger
+from .conflicts import retry_on_conflict
 from .extract import (
     ExtractedEntity,
     ExtractedRelation,
@@ -273,7 +275,8 @@ def _edge(
     **extra: Any,
 ) -> None:
     doc = _edge_doc(key, from_id, to_id, utcnow_iso(), tenant_id, **extra)
-    db.collection(collection).insert(doc, overwrite_mode="ignore", silent=True)
+    retry_on_conflict(
+        lambda: db.collection(collection).insert(doc, overwrite_mode="ignore", silent=True))
 
 
 def _relate(
@@ -312,7 +315,7 @@ def _relate(
         "w_alpha": settings.weight_ewa_alpha,
         "w_neg_lam": -settings.weight_lambda,
     }
-    db.aql.execute(_RELATE, bind_vars=bind)
+    retry_on_conflict(lambda: db.aql.execute(_RELATE, bind_vars=bind))
 
 
 def extract_entities(
@@ -402,7 +405,7 @@ def write_entities(
             # Semantic duplicate of a differently-named entity → merge into it.
             inc_bind: dict[str, Any] = {"key": match["key"], "now": now, "rel": rel, "base": base}
             with timer.stage("upsert"):
-                db.aql.execute(_INCREMENT, bind_vars=inc_bind)
+                retry_on_conflict(partial(db.aql.execute, _INCREMENT, bind_vars=inc_bind))
             key = cast(str, match["key"])
         else:
             needs_review = match is not None and sim >= settings.entity_flag_threshold
@@ -421,7 +424,8 @@ def write_entities(
                 "base": base,
             }
             with timer.stage("upsert"):
-                cursor = cast(Cursor, db.aql.execute(_UPSERT_ENTITY, bind_vars=up_bind))
+                cursor = cast(Cursor, retry_on_conflict(
+                    partial(db.aql.execute, _UPSERT_ENTITY, bind_vars=up_bind)))
                 key = cast(str, next(iter(cursor)))
 
         key_by_entity[(ent.name, ent.label)] = key
@@ -696,7 +700,7 @@ def write_entities_many(
         inc_rows = [{"key": k, "count": c, "rel_sum": r} for k, (c, r) in increments.items()]
         inc_bind: dict[str, Any] = {"rows": inc_rows, "now": now, "base": base}
         with timer.stage("increment"):
-            db.aql.execute(_BULK_INCREMENT, bind_vars=inc_bind)
+            retry_on_conflict(lambda: db.aql.execute(_BULK_INCREMENT, bind_vars=inc_bind))
 
     # 5. bulk upsert own entities → resolved keys.
     if own:
@@ -710,7 +714,8 @@ def write_entities_many(
         up_bind: dict[str, Any] = {
             "rows": up_rows, "tenant_id": tenant_id, "now": now, "base": base}
         with timer.stage("upsert"):
-            cur = cast(Cursor, db.aql.execute(_BULK_UPSERT_ENTITY, bind_vars=up_bind))
+            cur = cast(Cursor, retry_on_conflict(
+                lambda: db.aql.execute(_BULK_UPSERT_ENTITY, bind_vars=up_bind)))
             for row in cur:
                 key_by_nl[(row["name"], row["label"])] = row["key"]
 
@@ -780,7 +785,7 @@ def write_entities_many(
             "rows": rel_rows, "base": base, "now": now,
             "w_alpha": settings.weight_ewa_alpha, "w_neg_lam": -settings.weight_lambda}
         with timer.stage("relate"):
-            db.aql.execute(_BULK_RELATE, bind_vars=rel_bind)
+            retry_on_conflict(lambda: db.aql.execute(_BULK_RELATE, bind_vars=rel_bind))
 
     if detected:
         metrics.emit("conflict", detected=detected)

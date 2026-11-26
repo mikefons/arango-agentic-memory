@@ -133,6 +133,11 @@ are versioned together and released from this repository.
 
 ### Fixed
 
+- A write conflict while writing entities no longer drops them. The batch was rerun, found its
+  turns already stored and skipped the graph, so the memories were saved with no entity links and
+  nothing reported it (the one-by-one retry did the same). Each graph write is now retried where it
+  conflicts. Links already lost this way are not restored.
+
 - The write worker no longer dies on a transient error. A DB error while claiming or acking a batch
   (or while dead-lettering) used to kill the background thread for good, so every queued write sat
   undrained until the process restarted, with nothing in `/health` to show it. The worker now logs the

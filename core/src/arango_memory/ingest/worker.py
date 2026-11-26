@@ -30,6 +30,7 @@ from ..models import utcnow_iso
 from ..schema.collections import DEAD_LETTER_COLLECTION
 from ..telemetry import metrics
 from ..telemetry.logging import logger, request_id_var, tenant_var
+from .conflicts import is_conflict
 from .extract import (
     Extractor,
     get_extractor,
@@ -41,14 +42,9 @@ from .store import StoreItem, store, store_many
 
 _POLL_INTERVAL = 0.05
 _ERROR_BACKOFF_MAX = 30.0  # longest pause after repeated worker errors (seconds)
-# ArangoDB errors that mean "another writer got there first": write-write conflict and unique
-# constraint violation. Concurrent agent groups can hit them on a shared entity or edge.
-_CONFLICT_CODES = frozenset({1200, 1210})
+# Reruns of a whole batch that hit a write conflict outside the graph writes (those retry
+# in place, see `conflicts`).
 _CONFLICT_RETRIES = 3
-
-
-def _is_conflict(exc: BaseException) -> bool:
-    return getattr(exc, "error_code", None) in _CONFLICT_CODES
 
 
 def commit_intent(
@@ -219,9 +215,9 @@ class WriteWorker:
                     )
                     return True
                 except Exception as exc:  # noqa: BLE001
-                    # Another agent group wrote the same entity or edge at the same moment.
-                    # Commits are idempotency-keyed, so run the batch again before giving up.
-                    if _is_conflict(exc) and attempt < _CONFLICT_RETRIES:
+                    # Another writer touched the same record. Commits are idempotency-keyed,
+                    # so run the batch again before giving up.
+                    if is_conflict(exc) and attempt < _CONFLICT_RETRIES:
                         logger.info(
                             "batch hit a write conflict; retrying",
                             extra={"tenant_id": first.tenant_id, "attempt": attempt + 1},
