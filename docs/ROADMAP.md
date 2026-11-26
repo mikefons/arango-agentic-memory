@@ -1849,17 +1849,39 @@ about 100 claims.
 The red-team and synthesis changes can't be credited to this work: model response times are part
 of both.
 
-Likely reasons for the unchanged flush (inferred, not confirmed):
-- The 14.8 s baseline probably already had batching on: at the one-by-one rate WQ-1 measured
-  (about 0.4 writes/s), 104 claims could not have drained that fast. So "a few seconds" assumed
-  too much.
-- Parallel commits seem to help little. A batch takes about 2.2 s (sum of the `write_many` stage
-  p50s) and batches finished at nearly that pace. A round claims in arrival order, so it may hold
-  only one or two agents. `/health` doesn't show whether concurrency 4 is in effect.
+Why the live flush was no faster than the 14.8 s baseline (inferred): that baseline probably
+already had batching on, since at the one-by-one rate WQ-1 measured (about 0.4 writes/s) 104
+claims could not have drained that fast. So "a few seconds" assumed too much.
+
+**Local replay (2026-11-26).** About 100 claims from four agents arriving over 4.5 s, as in the
+live run, into the `arango` queue and write worker through the 90 ms delay proxy: OpenAI
+embeddings, `fake` extractor, scratch database. Drain time runs from the first write to an empty
+queue, two runs per setting. The harness was a one-off script and is not in the repository.
+
+| `WRITE_BATCH_SIZE` | `WRITE_WORKER_CONCURRENCY` | drain |
+|---|---|---|
+| 16 | 1 | 30.0–31.1 s |
+| 16 (hosted setting) | 4 | 16.4–16.8 s |
+| 32 | 4 | 11.1–11.7 s |
+| 64 | 4 | 7.5–7.7 s |
+| 128 | 4 | 7.4–7.7 s |
+
+- **The batch size is the limit.** A batched commit took about 1.4 s whether it held 2 claims or
+  11. A round claims at most `WRITE_BATCH_SIZE` and splits them by agent, so 16 means many rounds
+  of small commits: 8 rounds at 16, 3 at 64.
+- **Concurrency works.** 4 roughly halved the drain, and each round held two to four agents. This
+  corrects the first reading of the live run, that parallel commits helped little.
+- **The first claim goes alone.** An idle worker takes the first write by itself and commits it
+  one by one, about 2.4 s before the next round can start. A short wait before claiming could
+  fix this (code, not built).
+- No dead letters; some runs had one or two failed batch calls that succeeded on retry.
+- Hosted batches are slower (about 2.2 s against 1.4 s), so expect a longer drain there.
 
 **Open before this item closes.**
-- Read the Railway logs for dead letters.
-- Measure how many agents each claim round holds, and confirm the concurrency setting.
+- The owner: set `WRITE_BATCH_SIZE=64` on Railway (concurrency stays 4), then re-run the Diligence
+  Room live. This supersedes the 16 above.
+- Read the Railway logs for dead letters. They also show whether concurrency 4 is in effect;
+  `/health` doesn't.
 - The hosted core appears to run the `fake` extractor: extraction took 0.2 ms and every entity is
   a `Concept`, including words such as "No" and "Dec". `EXTRACTION_PROVIDER` is not set on Railway
   (owner, 2026-11-26), and the image installs no extraction extra, so `spacy` needs an image change
