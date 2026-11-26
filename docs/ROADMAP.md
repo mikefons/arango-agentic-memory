@@ -1896,6 +1896,21 @@ The flush is now below the 14.8 s baseline but not yet "a few seconds". A batche
 the hosted core takes seconds (the `write_many` stage p50s sum to about 2.8 s), so the next
 gain would come from fewer database calls per commit.
 
+**Fewer calls per batch (built).** Episodes, memories and the replay check are one statement, and
+the three edge collections another: 8 database requests per batch become 4 (plus one when a batch
+merges into existing entities). Both statements were checked on a local cluster, in a OneShard
+database and in one with collections on different DB servers: same graph as before, and a write
+conflict in one collection left nothing behind in the others. Local replay through the 90 ms
+proxy, three runs each:
+
+| `WRITE_BATCH_SIZE` | drain before | drain after | per batch commit |
+|---|---|---|---|
+| 16 | 16.6–17.4 s | 13.9–15.2 s | about 1.4 → 1.0 s |
+| 64 | 7.7–9.2 s | 6.9–8.5 s | about 1.7 → 1.3 s |
+
+Not yet measured on the hosted core. The remaining large cost there is probably data volume: the
+candidate fetch downloads the tenant's entity embeddings on every batch (PF-1h).
+
 **Open before this item closes.**
 - Read the Railway logs for dead letters. They also show whether concurrency 4 is in effect;
   `/health` doesn't.

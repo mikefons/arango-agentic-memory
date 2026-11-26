@@ -576,9 +576,19 @@ FOR row IN @rows
     } IN entities
 """
 
-# Bulk relates_to upsert: same shape as _RELATE, but corroboration/reliability accumulate the
-# batch totals. The EWA weight is folded once (Δt≈0 within a batch — a recency heuristic).
-_BULK_RELATE = """
+# A batch's edges in one round trip, all or nothing: insert the mentions and produced_by edges
+# (idempotent), and upsert relates_to. That upsert has the same shape as _RELATE, but
+# corroboration/reliability accumulate the batch totals. The EWA weight is folded once (Δt≈0
+# within a batch — a recency heuristic).
+_BULK_EDGES = """
+LET mentioned = (
+  FOR doc IN @mentions
+    INSERT doc INTO mentions OPTIONS { overwriteMode: "ignore" }
+)
+LET produced = (
+  FOR doc IN @produced
+    INSERT doc INTO produced_by OPTIONS { overwriteMode: "ignore" }
+)
 FOR row IN @rows
   UPSERT { _key: row.key }
   INSERT row.doc
@@ -723,7 +733,7 @@ def write_entities_many(
     for (name, _label), key in key_by_nl.items():
         name_to_key.setdefault(name, key)
 
-    # 6. bulk-insert mention + produced_by edges.
+    # 6. build the mention + produced_by edges.
     mention_edges: list[dict[str, Any]] = []
     produced_edges: list[dict[str, Any]] = []
     for nl, a in accum.items():
@@ -734,14 +744,6 @@ def write_entities_many(
             produced_edges.append(_edge_doc(
                 f"{key}__{ekey}", f"entities/{key}", f"episodes/{ekey}", now, tenant_id))
             result[mkey].append(key)
-    with timer.stage("edges"):
-        if mention_edges:
-            db.collection("mentions").insert_many(
-                mention_edges, overwrite_mode="ignore", silent=True)
-        if produced_edges:
-            db.collection("produced_by").insert_many(
-                produced_edges, overwrite_mode="ignore", silent=True)
-
     # 7. aggregate relates_to across the batch (typed wins; co-occurrence capped per memory).
     pair_accum: dict[tuple[str, str], dict[str, Any]] = {}
     for mem, ents, rels, vt in per_mem:
@@ -766,26 +768,28 @@ def write_entities_many(
             pa["corr"] += 1
             pa["rel_sum"] += mem.source_reliability
             pa["relationship"] = relationship  # last assertion wins (mirrors the sequential path)
-    if pair_accum:
-        rel_rows: list[dict[str, Any]] = []
-        for (lo, hi), pa in pair_accum.items():
-            vt = pa["vt"]
-            doc = {
-                "_key": f"{lo}__{hi}", "_from": f"entities/{lo}", "_to": f"entities/{hi}",
-                "tenant_id": tenant_id, "relationship": pa["relationship"],
-                "corroboration": pa["corr"],
-                "reliability_sum": pa["rel_sum"], "belief": 1 - (1 - base) ** pa["rel_sum"],
-                "ingestion_time": now, "valid_time": vt or now,
-                "valid_time_explicit": vt is not None, "invalid_at": None,
-                "weight": settings.weight_ewa_alpha, "last_seen": now,
-            }
-            rel_rows.append({"key": f"{lo}__{hi}", "doc": doc, "corr": pa["corr"],
-                             "rel_sum": pa["rel_sum"], "relationship": pa["relationship"]})
-        rel_bind: dict[str, Any] = {
-            "rows": rel_rows, "base": base, "now": now,
-            "w_alpha": settings.weight_ewa_alpha, "w_neg_lam": -settings.weight_lambda}
-        with timer.stage("relate"):
-            retry_on_conflict(lambda: db.aql.execute(_BULK_RELATE, bind_vars=rel_bind))
+    rel_rows: list[dict[str, Any]] = []
+    for (lo, hi), pa in pair_accum.items():
+        vt = pa["vt"]
+        doc = {
+            "_key": f"{lo}__{hi}", "_from": f"entities/{lo}", "_to": f"entities/{hi}",
+            "tenant_id": tenant_id, "relationship": pa["relationship"],
+            "corroboration": pa["corr"],
+            "reliability_sum": pa["rel_sum"], "belief": 1 - (1 - base) ** pa["rel_sum"],
+            "ingestion_time": now, "valid_time": vt or now,
+            "valid_time_explicit": vt is not None, "invalid_at": None,
+            "weight": settings.weight_ewa_alpha, "last_seen": now,
+        }
+        rel_rows.append({"key": f"{lo}__{hi}", "doc": doc, "corr": pa["corr"],
+                         "rel_sum": pa["rel_sum"], "relationship": pa["relationship"]})
+
+    # 8. write all three kinds of edge.
+    edge_bind: dict[str, Any] = {
+        "mentions": mention_edges, "produced": produced_edges,
+        "rows": rel_rows, "base": base, "now": now,
+        "w_alpha": settings.weight_ewa_alpha, "w_neg_lam": -settings.weight_lambda}
+    with timer.stage("edges"):
+        retry_on_conflict(lambda: db.aql.execute(_BULK_EDGES, bind_vars=edge_bind))
 
     if detected:
         metrics.emit("conflict", detected=detected)

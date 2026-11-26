@@ -104,7 +104,7 @@ def test_store_many_reports_where_a_batch_went(db: StandardDatabase) -> None:
     ]
     store_many(db, items, tenant_id="t_stage_many", agent_id="a", extract=True)
     snap = latency.snapshot()
-    batch_keys = ("embed", "existing", "insert", "entities")
+    batch_keys = ("embed", "insert", "entities")
     for key in (f"write_many.{k}" for k in batch_keys):
         assert key in snap, key
     for stage in ("extract", "embed", "pool", "match", "upsert", "edges"):

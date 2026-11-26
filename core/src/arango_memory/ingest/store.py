@@ -13,6 +13,7 @@ import time
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+from functools import partial
 from typing import Any, cast
 
 from arango.cursor import Cursor
@@ -25,6 +26,7 @@ from ..generation import Generator, get_generator
 from ..models import idempotency_key, utcnow_iso
 from ..security.redact import redact
 from ..telemetry import StageTimer, metrics, span
+from .conflicts import retry_on_conflict
 from .entities import GraphMemory, extract_entities, write_entities, write_entities_many
 from .extract import ExtractedEntity, Extractor, get_extractor
 from .prospective import generate_prospective
@@ -89,6 +91,22 @@ def _working_expires(now: str) -> str:
     return (datetime.fromisoformat(now) + delta).isoformat()
 
 
+# A batch's record in one round trip: both collections, all or nothing. It returns the keys of
+# the episodes that are new (an ignored duplicate has no NEW), which alone feed the graph.
+_INSERT_BATCH = """
+LET fresh = (
+  FOR doc IN @episodes
+    INSERT doc INTO episodes OPTIONS { overwriteMode: "ignore" }
+    RETURN NEW._key
+)
+LET recorded = (
+  FOR doc IN @memories
+    INSERT doc INTO memories OPTIONS { overwriteMode: "ignore" }
+)
+RETURN fresh
+"""
+
+
 def store_many(
     db: StandardDatabase,
     items: Sequence[StoreItem],
@@ -136,21 +154,11 @@ def store_many(
     with timer.stage("embed"):
         vec_by_text = embed_batch_cached(emb, [c for _, c, _ in prepared], tenant_id=tenant_id)
 
-    # 3. which episodes already exist (one round trip) — replays must not re-feed the graph.
-    existing: set[str] = set()
-    if extract:
-        with timer.stage("existing"):
-            cursor = cast(Cursor, db.aql.execute(
-                "FOR d IN DOCUMENT('episodes', @keys) RETURN d._key",
-                bind_vars={"keys": list({k for _, _, k in prepared})},
-            ))
-            existing = set(cursor)
-
-    # 4. build docs, then 5. bulk-insert record, then 6. (optional) batched graph pass.
+    # 3. build docs, 4. bulk-insert the record, then 5. (optional) batched graph pass.
     episodes: list[dict[str, Any]] = []
     memories: list[dict[str, Any]] = []
     order: list[tuple[str, str]] = []  # (episode_key, memory_key), for building results
-    graph_inputs: list[GraphMemory] = []
+    graph_candidates: list[GraphMemory] = []
     for item, content, ep_key in prepared:
         is_working = item.memory_type == "working"
         mem_key = f"{ep_key}-mem"
@@ -167,11 +175,9 @@ def store_many(
             turn_index=item.turn_index,
         ))
         order.append((ep_key, mem_key))
-        # Working memory never mints durable entities; only new episodes feed the graph, once
-        # each even if repeated within the batch (mirrors _store_impl's `is_new` gate).
-        if extract and not is_working and ep_key not in existing:
-            existing.add(ep_key)
-            graph_inputs.append(GraphMemory(
+        # Working memory never mints durable entities.
+        if extract and not is_working:
+            graph_candidates.append(GraphMemory(
                 memory_key=mem_key, episode_key=ep_key, content=content,
                 source_reliability=item.source_reliability,
             ))
@@ -180,8 +186,16 @@ def store_many(
     ent_by_mem: dict[str, list[str]] = {}
     with span("memory.write_many", tenant_id=tenant_id):
         with timer.stage("insert"):
-            db.collection("episodes").insert_many(episodes, overwrite_mode="ignore", silent=True)
-            db.collection("memories").insert_many(memories, overwrite_mode="ignore", silent=True)
+            cursor = cast(Cursor, retry_on_conflict(partial(
+                db.aql.execute, _INSERT_BATCH,
+                bind_vars={"episodes": episodes, "memories": memories},
+            )))
+            fresh = {key for key in next(iter(cursor)) if key}
+        # Only new episodes feed the graph (a replay must not count twice), once each even if
+        # repeated within the batch (mirrors _store_impl's `is_new` gate).
+        graph_inputs = list(
+            {m.episode_key: m for m in graph_candidates if m.episode_key in fresh}.values()
+        )
         if graph_inputs:  # IN-2: reflect the whole batch into the graph in a few round trips
             with timer.stage("entities"):
                 ent_by_mem = write_entities_many(
