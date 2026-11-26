@@ -1809,12 +1809,11 @@ PF-1a, c, d and e leave only bm25 → graph.
   loop, so it holds no thread. Inline commits run one at a time, and so do the maintenance routes
   (they were never written to race each other). `reset_access` ignores write conflicts.
 
-### PF-1b — Turn on batch writes on Railway (config, no PR)  🔄 run, flush target missed
+### PF-1b — Turn on batch writes on Railway (config, no PR)  🔄 faster at 64, dead letters unchecked
 
-- **Status.** The owner set both variables on the Railway core (reported 2026-11-26), and the
-  verification run was done the same day (result below). Batching is on; the flush did not get
-  faster.
-- Set `WRITE_BATCH_SIZE=16` and `WRITE_WORKER_CONCURRENCY=4` (one per Diligence Room specialist)
+- **Status.** The owner set both variables on the Railway core (reported 2026-11-26). At batch 16
+  the flush did not get faster; at 64, the same day, it took 8.3 s (results below).
+- Set `WRITE_BATCH_SIZE=16` (now 64, see below) and `WRITE_WORKER_CONCURRENCY=4` (one per Diligence Room specialist)
   on the Railway core. Both are built and tested (WQ-1b #291, WQ-1a #301) and off by default. With
   spaCy, the worker already serialises extraction across groups.
 - **Who.** The owner, in the Railway dashboard (no Railway CLI on the dev machine). This can happen
@@ -1877,9 +1876,25 @@ queue, two runs per setting. The harness was a one-off script and is not in the 
 - No dead letters; some runs had one or two failed batch calls that succeeded on retry.
 - Hosted batches are slower (about 2.2 s against 1.4 s), so expect a longer drain there.
 
+**Hosted run at 64 (2026-11-26, hard-reset room, concurrency 4).** The owner set
+`WRITE_BATCH_SIZE=64`. Verdict "pass", 11 contradictions, 104 claims.
+
+| step | batch 16 | batch 64 |
+|---|---|---|
+| specialists (slowest of 4) | 4.5 s | 3.5 s |
+| `flush:specialists` | 16.6 s | 8.3 s, drained |
+| consolidate | 0.7 s | 0.6 s |
+| red-team | 7.6 s | 7.9 s |
+| `flush:redteam` | 4.6 s | 4.6 s, drained |
+| synthesis | 12.3 s | 10.4 s |
+| batched commits | 11 | 7 |
+
+`/health`: 67 checks over 150 s, no errors, p95 329 ms, max 448 ms. One run at each setting.
+The flush is now below the 14.8 s baseline but not yet "a few seconds". A batched commit on
+the hosted core takes seconds (the `write_many` stage p50s sum to about 2.8 s), so the next
+gain would come from fewer database calls per commit.
+
 **Open before this item closes.**
-- The owner: set `WRITE_BATCH_SIZE=64` on Railway (concurrency stays 4), then re-run the Diligence
-  Room live. This supersedes the 16 above.
 - Read the Railway logs for dead letters. They also show whether concurrency 4 is in effect;
   `/health` doesn't.
 - The hosted core appears to run the `fake` extractor: extraction took 0.2 ms and every entity is
