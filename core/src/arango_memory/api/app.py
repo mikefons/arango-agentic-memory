@@ -16,7 +16,7 @@ from typing import Any, Literal
 
 import anyio
 from arango.database import StandardDatabase
-from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, field_validator
 
@@ -33,6 +33,7 @@ from ..ingest.queue import ArangoQueue, InProcessQueue, StepIntent, WriteIntent,
 from ..ingest.worker import WriteWorker, commit_intent
 from ..lifecycle.community import compute_communities
 from ..lifecycle.conflict import CrossTenantSupersede, supersede
+from ..lifecycle.decay import reset_access
 from ..lifecycle.dream import run_dream_state
 from ..lifecycle.ontology import (
     approve_proposal,
@@ -43,12 +44,12 @@ from ..lifecycle.ontology import (
 from ..lifecycle.salience import compute_centrality
 from ..retrieve.enrich import QueryCache
 from ..retrieve.prime import Include, prime
-from ..retrieve.search import force_view_sync, memory_time_key, retrieve
+from ..retrieve.search import AccessSink, force_view_sync, memory_time_key, retrieve
 from ..schema.collections import ensure_schema, vector_index_state
 from ..security.auth import agent_allowed, require_principal
 from ..security.forget import forget, purge
 from ..stats import stats
-from ..telemetry import latency
+from ..telemetry import StageTimer, latency, metrics
 from ..telemetry.logging import RequestLogMiddleware, configure_logging, logger, tenant_var
 from .limits import RequestSizeLimitMiddleware, rate_limit
 
@@ -79,6 +80,25 @@ async def one_at_a_time(request: Request) -> AsyncIterator[None]:
     so a waiting request holds no handle."""
     async with request.app.state.maintenance_lock:
         yield
+
+
+def _record_access(db: StandardDatabase, keys: list[str]) -> None:
+    """The spaced-repetition write, run after the response (a lost one only costs decay)."""
+    timer = StageTimer("retrieve")
+    try:
+        with timer.stage("access"):
+            reset_access(db, keys)
+    except Exception as exc:  # noqa: BLE001 — §15: nothing is left to fail, so just report it
+        metrics.emit("degraded", op="access", reason=type(exc).__name__)
+        logger.warning("access write failed",
+                       extra={"reason": type(exc).__name__, "detail": str(exc)})
+    timer.record()
+
+
+def _after_response(background: BackgroundTasks, db: StandardDatabase) -> AccessSink:
+    """Write access once the response is sent, on the request's own handle: FastAPI keeps
+    `get_db`'s lease until background tasks finish, so the request takes no second one."""
+    return lambda keys: background.add_task(_record_access, db, keys)
 
 
 def get_embedder_dep(request: Request) -> Embedder:
@@ -790,6 +810,7 @@ def ontology_reject_endpoint(
 def retrieve_endpoint(
     request: Request,
     req: RetrieveRequest,
+    background: BackgroundTasks,
     db: StandardDatabase = Depends(get_db),
     embedder: Embedder = Depends(get_embedder_dep),
     generator: Generator = Depends(get_generator_dep),
@@ -820,6 +841,8 @@ def retrieve_endpoint(
         as_of=req.opts.as_of,
         neighbor_turns=req.opts.neighbor_turns,
         fact_keys=req.opts.fact_keys,
+        access_sink=_after_response(background, db),
+        arm_runner=request.app.state.arms,
     )
     return RetrieveResponse(
         context=result.context,
@@ -834,6 +857,7 @@ def retrieve_endpoint(
 def prime_endpoint(
     request: Request,
     req: PrimeRequest,
+    background: BackgroundTasks,
     db: StandardDatabase = Depends(get_db),
     embedder: Embedder = Depends(get_embedder_dep),
     generator: Generator = Depends(get_generator_dep),
@@ -864,6 +888,8 @@ def prime_endpoint(
         embedder=embedder,
         generator=generator,
         cache=cache,
+        access_sink=_after_response(background, db),
+        arm_runner=request.app.state.arms,
     )
     return PrimeResponse(
         context=result.context,
@@ -927,6 +953,7 @@ def create_app(client: ArangoMemoryClient | None = None) -> FastAPI:
         pool_size = mem_client.config.arango_pool_size
         app.state.db_pool = mem_client.pool(pool_size)
         app.state.db_slots = anyio.Semaphore(pool_size)
+        app.state.arms = mem_client.parallel_arms(pool_size)
         app.state.probe_limiter = anyio.CapacityLimiter(1)  # one probe handle: `client.db`
         app.state.sync_write_lock = anyio.Lock()
         app.state.maintenance_lock = anyio.Lock()
@@ -952,6 +979,7 @@ def create_app(client: ArangoMemoryClient | None = None) -> FastAPI:
             yield
         finally:
             worker.stop()
+            app.state.arms.close()
 
     # Authn then rate limit (§17): require_principal runs first so rate_limit can key
     # off the authenticated tenant. Both no-op unless configured; /health stays open.

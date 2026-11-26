@@ -76,6 +76,13 @@ are versioned together and released from this repository.
 
 ### Changed
 
+- `/v1/retrieve` and `/v1/prime` record memory access after sending the response, one database
+  round trip less per request. An access update can be lost if the process dies in between. Library
+  callers still write it inline. Requires `fastapi>=0.118.0`.
+- A one-by-one write embeds the turn and its entity names in one provider call instead of two.
+  Entity extraction now runs before the embedding; if it fails, the memory is still stored.
+- With the vector index on, the API runs the BM25, vector and fact arms in parallel on extra
+  database connections (up to `ARANGO_POOL_SIZE` more).
 - Retrieval reads far less: the arms no longer return stored embeddings (6.7 MB → 0.31 MB per
   retrieve, median, at 1536 dimensions). They are fetched only for MMR when `MMR_LAMBDA` is below
   1.0.

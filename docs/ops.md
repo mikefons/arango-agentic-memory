@@ -150,8 +150,9 @@ share an entity or a number with the new memory),
 `WRITE_BACKOFF_BASE` (0.5), `WRITE_QUEUE_BACKEND` (`memory`; set `arango` in prod),
 `WRITE_LEASE_SECONDS` (60), `WRITE_BATCH_SIZE` (1; see Batch commit below),
 `WRITE_WORKER_CONCURRENCY` (1; see Parallel agent groups below); connections:
-`ARANGO_POOL_SIZE` (16; database connections leased to concurrent requests, and the same again
-for the `arango` write queue; further requests wait for one); security: `REDACT_PII` (`true`), `API_KEYS` (unset = auth
+`ARANGO_POOL_SIZE` (16; database connections leased to concurrent requests, the same again
+for the `arango` write queue, and up to the same again for running retrieval arms in parallel when
+the vector index is on; further requests wait for one); security: `REDACT_PII` (`true`), `API_KEYS` (unset = auth
 open), `OIDC_ISSUER` (unset = JWT off; see Authentication below), `MAX_REQUEST_BYTES`
 (1 MiB), `RATE_LIMIT_PER_MINUTE` (0 = off); scaling: `REDIS_URL` (unset = per-instance
 limiter + cache; see Optional shared layer).
@@ -562,9 +563,14 @@ the `store_p50` column should stay roughly flat instead of climbing.
   time goes: `write.redact`, `write.episode`, `write.embed`, `write.session`, `write.memory`,
   `write.entities`, and inside it `write.entities.extract`, `.embed`, `.candidates` (entity
   resolution lookups), `.match`, `.upsert`, `.edges`, `.relations` and `.relate`. A stage that did
-  not run for a write (for example `session`, or `entities` for an `extract=false` write) has no
-  sample for it. The stage keys do not sum exactly to `write`: the nested `write.entities.*` keys
-  are part of `write.entities`.
+  not run for a write (for example `session`, or `entities` for an `extract=false` write or a turn
+  with no entities) has no sample for it. The turn and its entity names are embedded in one call,
+  timed as `write.embed`; `write.entities.embed` appears only for direct `write_entities` callers.
+  `write.entities.extract` runs before the embedding and is not part of `write.entities`; the other
+  `write.entities.*` keys are. The stage keys do not sum exactly to `write`.
+  On the API, `retrieve.access` is written after the response is sent, so it is not part of the
+  request's `retrieval.<mode>` time; a failed write is logged and counted as `degraded`
+  (`op="access"`); the access log line's `duration_ms` still includes it. With the vector index on, `retrieve.bm25`, `.vector` and `.facts` overlap.
 - **`GET /v1/stats?tenant_id=`** — per-tenant collection counts.
 - **OTEL spans** — emitted around `memory.write` / `memory.retrieve`; **no-op
   unless** an OpenTelemetry provider is configured in the host process.

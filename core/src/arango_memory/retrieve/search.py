@@ -14,7 +14,7 @@ import dataclasses
 import math
 import re
 import time
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, cast
@@ -24,6 +24,7 @@ from arango.cursor import Cursor
 from arango.database import StandardDatabase
 from arango.exceptions import AQLQueryExecuteError
 
+from ..client import ArmRunner
 from ..config import settings
 from ..embedding import Embedder, get_embedder
 from ..embedding_cache import embed_cached
@@ -276,6 +277,10 @@ _TIER_FRACTIONS = {"working": 0.267, "episodic": 0.467, "semantic": 0.20, "reaso
 _TIER_ORDER = ("working", "episodic", "semantic", "reasoning")
 _TYPE_TO_TIER = {"working": "working", "episodic": "episodic", "semantic": "semantic",
                  "step": "reasoning"}
+
+
+# Takes the surfaced memory keys, to record their access somewhere else.
+AccessSink = Callable[[list[str]], None]
 
 
 @dataclass
@@ -611,6 +616,8 @@ def retrieve(
     as_of: str | None = None,
     neighbor_turns: int | None = None,
     fact_keys: bool | None = None,
+    access_sink: AccessSink | None = None,
+    arm_runner: ArmRunner | None = None,
 ) -> RetrieveResult:
     """Instrumented retrieval (DESIGN.md §18): span + metrics + §15 degradation.
 
@@ -628,8 +635,11 @@ def retrieve(
     `settings.retrieve_neighbor_turns`: also inject the turns within that many positions of
     each hit, in its session, from whatever budget the hits left. `fact_keys=None` uses
     `settings.retrieve_fact_keys` (FK-1): also match the query against the facts Dream State
-    stored on each memory. Any failure degrades to an empty
-    (memory-less) result and a `degraded` event, so a memory fault never breaks the turn.
+    stored on each memory. `access_sink` receives the surfaced keys instead of the access
+    refresh being written here, so a server can write it after responding. `arm_runner` runs
+    the BM25, vector and fact arms at once when the vector arm is on. Any failure degrades
+    to an empty (memory-less) result and a `degraded` event, so a memory fault never breaks
+    the turn.
     """
     if as_of and _event_sort_key(as_of) is None:  # a caller error, not a memory fault
         raise ValueError(f"unparseable as_of {as_of!r}; use an ISO date or date-time")
@@ -664,6 +674,8 @@ def retrieve(
                 as_of=as_of,
                 neighbor_turns=neighbor_turns,
                 fact_keys=fact_keys,
+                access_sink=access_sink,
+                arm_runner=arm_runner,
             )
     except Exception as exc:  # noqa: BLE001 — §15: memory failures never break the turn
         metrics.emit("degraded", op="retrieve", reason=type(exc).__name__)
@@ -723,6 +735,7 @@ def _gather_fused(
     now: str,
     fact_keys: bool = False,
     vector_ready: bool | None = None,
+    arm_runner: ArmRunner | None = None,
     timer: StageTimer | None = None,
 ) -> list[_Candidate]:
     """One query's arms (BM25 + vector + graph) → RRF fusion → recency boost.
@@ -732,11 +745,6 @@ def _gather_fused(
     """
     t = timer if timer is not None else StageTimer("retrieve")
     scope = {"tenant_id": tenant_id, "agent_ids": agent_ids, "pool": candidate_pool}
-    with t.stage("bm25"):
-        bm25_rows = _run(db, _BM25_QUERY, {"query": query, **scope, **decay_binds})
-
-    ranked_lists = [bm25_rows]
-    names = ["bm25"]
     # Self-healing cold start (§7): once the corpus is warm, the first retrieval
     # builds the index lazily; until then we run BM25-only. The one-time build
     # cost moves to the durable write path in Step 3.
@@ -744,29 +752,46 @@ def _gather_fused(
         with t.stage("vector_check"):
             vector_ready = _vector_ready(db, dimensions=dimensions, n_lists=n_lists)
     # query_vec empty → embedder degraded (or the arm was off when asked), BM25-only (§15)
-    if vector_ready and query_vec:
+    use_vector = bool(vector_ready and query_vec)
+
+    def bm25_arm(handle: StandardDatabase) -> list[tuple[str, list[dict[str, Any]]]]:
+        with t.stage("bm25"):
+            return [("bm25", _run(handle, _BM25_QUERY, {"query": query, **scope, **decay_binds}))]
+
+    def vector_arm(handle: StandardDatabase) -> list[tuple[str, list[dict[str, Any]]]]:
         with t.stage("vector"):
-            vector_rows = _vector_arm(
-                db, {"qvec": query_vec, "nprobe": settings.n_probe, **scope}
+            rows = _vector_arm(
+                handle, {"qvec": query_vec, "nprobe": settings.n_probe, **scope}
             )
-        if vector_rows is not None:
-            ranked_lists.append(vector_rows)
-            names.append("vector")
+        return [] if rows is None else [("vector", rows)]
 
     # FK-1: match the query against the facts stored on each memory.
-    if fact_keys:
+    def fact_arm(handle: StandardDatabase) -> list[tuple[str, list[dict[str, Any]]]]:
+        found: list[tuple[str, list[dict[str, Any]]]] = []
         with t.stage("facts"):
-            fact_rows = _run(db, _FACT_BM25_QUERY, {"query": query, **scope})
+            fact_rows = _run(handle, _FACT_BM25_QUERY, {"query": query, **scope})
             if fact_rows:
-                ranked_lists.append(fact_rows)
-                names.append("fact_bm25")
-            size = cast(int, next(iter(cast(Cursor, db.aql.execute(
+                found.append(("fact_bm25", fact_rows))
+            size = cast(int, next(iter(cast(Cursor, handle.aql.execute(
                 _TENANT_SIZE, bind_vars={"tenant_id": tenant_id, "agent_ids": agent_ids})))))
             if query_vec and size <= settings.fact_vector_scan_max:
-                fact_vec_rows = _run(db, _FACT_VECTOR_QUERY, {"qvec": query_vec, **scope})
+                fact_vec_rows = _run(handle, _FACT_VECTOR_QUERY, {"qvec": query_vec, **scope})
                 if fact_vec_rows:
-                    ranked_lists.append(fact_vec_rows)
-                    names.append("fact_vector")
+                    found.append(("fact_vector", fact_vec_rows))
+        return found
+
+    arms = [bm25_arm]
+    if use_vector:
+        arms.append(vector_arm)
+    if fact_keys:
+        arms.append(fact_arm)
+    # With the vector arm on, a caller that has spare handles runs the arms at once.
+    if arm_runner is not None and use_vector:
+        results = arm_runner(db, arms)
+    else:
+        results = [arm(db) for arm in arms]
+    names = [name for result in results for name, _ in result]
+    ranked_lists = [rows for result in results for _, rows in result]
 
     # Graph expansion (§9 stage 4): traverse from the entities of the top hits to
     # surface connected memories that lexical/vector search alone would miss.
@@ -1069,6 +1094,8 @@ def _retrieve_impl(
     as_of: str | None = None,
     neighbor_turns: int | None = None,
     fact_keys: bool | None = None,
+    access_sink: AccessSink | None = None,
+    arm_runner: ArmRunner | None = None,
     timer: StageTimer | None = None,
 ) -> RetrieveResult:
     """BM25 (+ vector when trained) → RRF → (rerank) → MMR → tiered token-budget assembly.
@@ -1106,6 +1133,7 @@ def _retrieve_impl(
             now=now,
             fact_keys=use_fact_keys,
             vector_ready=ready,
+            arm_runner=arm_runner,
             timer=t,
         )
 
@@ -1207,8 +1235,12 @@ def _retrieve_impl(
 
     # Spaced repetition (§11): refresh the memories actually surfaced (Δt → 0).
     if record_access:
-        with t.stage("access"):
-            reset_access(db, [c.key for c in selected])
+        keys = [c.key for c in selected]
+        if access_sink is not None:
+            access_sink(keys)
+        else:
+            with t.stage("access"):
+                reset_access(db, keys)
 
     hits = [
         MemoryHit(text=c.text, score=round(c.fused_score, 6),

@@ -20,6 +20,7 @@ full scan (fine at small N). The merge/flag decision itself is unchanged.
 from __future__ import annotations
 
 import math
+from collections.abc import Mapping
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from typing import Any, cast
@@ -314,6 +315,14 @@ def _relate(
     db.aql.execute(_RELATE, bind_vars=bind)
 
 
+def extract_entities(
+    extractor: Extractor, content: str, timer: StageTimer
+) -> list[ExtractedEntity]:
+    """The extractor's entities for one memory, timed as `<timer>.extract`."""
+    with timer.stage("extract"):
+        return list(extractor.extract(content))
+
+
 def write_entities(
     db: StandardDatabase,
     *,
@@ -325,15 +334,20 @@ def write_entities(
     extractor: Extractor,
     embedder: Embedder,
     source_reliability: float = 1.0,
+    extracted: list[ExtractedEntity] | None = None,
+    vectors: Mapping[str, list[float]] | None = None,
 ) -> list[str]:
     """Extract, dedupe/flag, persist entities + edges. Returns resolved entity keys.
+
+    A caller that already ran the extractor passes `extracted`, and `vectors` (by name) if
+    it embedded the names too; whatever is missing is computed here.
 
     `source_reliability` (0..1) weights how much this episode corroborates each
     fact: it accumulates into `reliability_sum` and drives `belief` (§8/§12).
     """
     timer = StageTimer("write.entities")  # per-write sums → /health write.entities.<stage>
-    with timer.stage("extract"):
-        extracted = extractor.extract(content)
+    if extracted is None:
+        extracted = extract_entities(extractor, content, timer)
     if not extracted:
         timer.record()
         return []
@@ -371,13 +385,14 @@ def write_entities(
 
     # Embed all distinct entity names up front — one provider call for the misses
     # (§16 batch embedding), keeping per-name cache semantics intact.
-    with timer.stage("embed"):
-        vec_by_name = embed_batch_cached(
-            embedder, [ent.name for ent in extracted], tenant_id=tenant_id
-        )
+    if vectors is None:
+        with timer.stage("embed"):
+            vectors = embed_batch_cached(
+                embedder, [ent.name for ent in extracted], tenant_id=tenant_id
+            )
 
     for ent in extracted:
-        vec = vec_by_name[ent.name]
+        vec = vectors[ent.name]
         with timer.stage("candidates"):
             candidates = _candidates(vec)
         with timer.stage("match"):

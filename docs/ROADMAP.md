@@ -1824,7 +1824,7 @@ PF-1a, c, d and e leave only bm25 → graph.
   Then follow WQ-1's rollout note: remove the demo's flush-cap workarounds only after a clean run.
 - Whether to make 16 / 4 the defaults in `config.py` is a separate decision.
 
-### PF-1c — Stop returning embeddings from the retrieval arms (PR 2)  🔄 built
+### PF-1c — Stop returning embeddings from the retrieval arms (PR 2)  ✅ #304
 
 - Remove `embedding: doc.embedding` from `_BM25_QUERY`, `_FACT_BM25_QUERY`, `_FACT_VECTOR_QUERY`,
   `_VECTOR_QUERY`, `_GRAPH_QUERY` and `_SUCCESSORS` in `retrieve/search.py`.
@@ -1842,7 +1842,7 @@ PF-1a, c, d and e leave only bm25 → graph.
   payloads are small, so it only matters on the write path (PF-1h).
 - **Size.** S.
 
-### PF-1d — Cache the vector-index state, and skip the query embedding when it is unused (PR 2)  🔄 built
+### PF-1d — Cache the vector-index state, and skip the query embedding when it is unused (PR 2)  ✅ #304
 
 - **Cache** (`schema/collections.py`):
   - Cache `has_vector_index` per (database, collection) for 60 s.
@@ -1891,7 +1891,7 @@ As built: `ensure_vector_index` stays uncached (ops and tests); request paths ca
 `vector_index_ready`. If a cached "ready" is wrong because another process dropped the index, that
 retrieve clears the cache and answers without the vector arm.
 
-### PF-1e — Fewer round trips per request (PR 3)
+### PF-1e — Fewer round trips per request (PR 3)  🔄 built
 
 1. **Write access after the response.** The API passes an `access_sink` to `retrieve` / `prime`,
    and the handler runs `reset_access` as a FastAPI background task on its own leased handle.
@@ -1919,6 +1919,27 @@ retrieve clears the cache and answers without the vector arm.
   trip on ArangoGraph, but it loses per-arm failure isolation and per-arm stage timings. Revisit
   once the hosted numbers are in.
 - **Size.** M.
+- **As built.**
+  - The access write runs as a background task on the request's own handle, not a second lease.
+    From FastAPI 0.118 `get_db` releases after background tasks, so a second lease would have let
+    requests that hold every handle wait on each other.
+  - The parallel arms use a separate pool and thread pool (`ParallelArms`, up to
+    `ARANGO_POOL_SIZE` connections), for the same reason. The first arm runs on the request's
+    handle.
+- **Result (2026-11-26, 90 ms proxy, `bench_fresh`, vector arm on).** Two runs of `main` and four
+  of this change; queries were embedding-cached.
+
+  | | `main` | PF-1e | Target |
+  |---|---|---|---|
+  | Single retrieve p50 | 596–604 ms | 344–406 ms | ≤ ~500 ms |
+  | 8 concurrent retrieves, wall p50 | 726–815 ms | 446–785 ms | |
+  | One-by-one write p50 (24 writes) | 1181–1208 ms | 989–1064 ms | ~250 ms less |
+  | 24 one-by-one writes, total | 37.3–37.8 s | 33.3–34.4 s | |
+
+  The write target was missed: the p50 fell about 160 ms. Only 16 of the 24 test turns had
+  entities, and only those made a second embedding call. Concurrent wall time is noisy; one run
+  had a 2.6 s worst round (main's worst was 0.9 s), probably first-use connection setup in the arm
+  pool.
 
 ### PF-1f — Put the core next to the database (ops, the owner)
 
