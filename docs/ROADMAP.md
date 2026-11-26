@@ -1812,7 +1812,8 @@ PF-1a, c, d and e leave only bm25 → graph.
 ### PF-1b — Turn on batch writes on Railway (config, no PR)  🔄 faster at 64, dead letters unchecked
 
 - **Status.** The owner set both variables on the Railway core (reported 2026-11-26). At batch 16
-  the flush did not get faster; at 64, the same day, it took 8.3 s (results below).
+  the flush did not get faster; at 64, the same day, it took 8.3 s, and 7.8 s after #311
+  (results below).
 - Set `WRITE_BATCH_SIZE=16` (now 64, see below) and `WRITE_WORKER_CONCURRENCY=4` (one per
   Diligence Room specialist) on the Railway core. Both are built and tested (WQ-1b #291, WQ-1a #301) and off by default. With
   spaCy, the worker already serialises extraction across groups.
@@ -1896,7 +1897,7 @@ The flush is now below the 14.8 s baseline but not yet "a few seconds". A batche
 the hosted core takes seconds (the `write_many` stage p50s sum to about 2.8 s), so the next
 gain would come from fewer database calls per commit.
 
-**Fewer calls per batch (built).** Episodes, memories and the replay check are one statement, and
+**Fewer calls per batch (✅ #311).** Episodes, memories and the replay check are one statement, and
 the three edge collections another: 8 database requests per batch become 4 (plus one when a batch
 merges into existing entities). Both statements were checked on a local cluster, in a OneShard
 database and in one with collections on different DB servers: same graph as before, and a write
@@ -1908,8 +1909,25 @@ proxy, three runs each:
 | 16 | 16.6–17.4 s | 13.9–15.2 s | about 1.4 → 1.0 s |
 | 64 | 7.7–9.2 s | 6.9–8.5 s | about 1.7 → 1.3 s |
 
-Not yet measured on the hosted core. The remaining large cost there is probably data volume: the
-candidate fetch downloads the tenant's entity embeddings on every batch (PF-1h).
+**Hosted run after #311 (2026-11-26, hard-reset room, batch 64, concurrency 4).** Verdict
+"pass", 11 contradictions, 102 claims, 7 batched commits, both flushes drained, 342 relationship
+edges in the room's graph. One run, against the earlier run at 64.
+
+| | before | after |
+|---|---|---|
+| `flush:specialists` | 8.3 s | 7.8 s |
+| `flush:redteam` | 4.6 s | 4.8 s |
+| record turns (`existing` + `insert` → `insert`), p50 | 99 + 667 ms | 549 ms |
+| write edges (`edges` + `relate` → `edges`), p50 | 200 + 177 ms | 193 ms |
+| `write_many.entities.pool` p50 | 637 ms | 559 ms |
+| `write_many.entities` p50 | 1673 ms | 1547 ms |
+
+`/health`: 67 checks over 150 s, no errors, p95 345 ms, max 426 ms. Excluding the embedding
+calls, the stage p50s add to about 0.3 s less per batch. The flush difference is too small to
+show from one run each. Dead letters and write conflicts were not checked (Railway logs).
+
+The largest cost left in a batch is the entity step (about 1.5 s). The candidate fetch within it
+downloads the tenant's entity embeddings on every batch (PF-1h).
 
 **Open before this item closes.**
 - Read the Railway logs for dead letters. They also show whether concurrency 4 is in effect;
