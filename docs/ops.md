@@ -145,7 +145,12 @@ share an entity or a number with the new memory),
 `ONTOLOGY_MIN_SUPPORT` (3); working memory: `WORKING_SESSION_TTL_SECONDS` (3600),
 `WORKING_CAPACITY` (7), `TOPIC_SHIFT_THRESHOLD` (0.7), `TOPIC_EWA_ALPHA` (0.5),
 `WEIGHT_EWA_ALPHA` (0.5), `WEIGHT_LAMBDA` (0.02); embedding cache:
-`EMBEDDING_CACHE` (`true`), `EMBEDDING_CACHE_SIZE` (10000); conflict: `ENTITY_MERGE_THRESHOLD` (0.9),
+`EMBEDDING_CACHE` (`true`), `EMBEDDING_CACHE_SIZE` (10000); entity vector cache:
+`ENTITY_VECTOR_CACHE_MB` (64; 0 = off — without the entity ANN index, each batched write scans
+the tenant's entities, and this keeps their embeddings in the core's memory so a scan downloads
+only new or re-embedded ones. About 12 KB per entity at 1536 dimensions, so 64 MB holds about
+5,000, shared by all tenants, least recently used first out. An embedding edited in place without
+changing its model, version or `reembedded_at` is not noticed until restart); conflict: `ENTITY_MERGE_THRESHOLD` (0.9),
 `ENTITY_FLAG_THRESHOLD` (0.6); durable writes: `WRITE_MAX_RETRIES` (5),
 `WRITE_BACKOFF_BASE` (0.5), `WRITE_QUEUE_BACKEND` (`memory`; set `arango` in prod),
 `WRITE_LEASE_SECONDS` (60), `WRITE_BATCH_SIZE` (1; see Batch commit below),

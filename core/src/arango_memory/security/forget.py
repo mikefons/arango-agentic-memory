@@ -17,6 +17,7 @@ from typing import Any, cast
 from arango.cursor import Cursor
 from arango.database import StandardDatabase
 
+from ..ingest.vector_cache import entity_vectors
 from ..models import utcnow_iso
 from ..schema.collections import EDGE_COLLECTIONS, drop_vector_index
 
@@ -111,4 +112,5 @@ def purge(db: StandardDatabase, *, tenant_id: str, agent_id: str | None = None) 
         )
 
     drop_vector_index(db)
+    entity_vectors.drop((db.name, tenant_id))  # this process's copy (PF-1h)
     return counts

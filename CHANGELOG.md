@@ -76,6 +76,11 @@ are versioned together and released from this repository.
 
 ### Changed
 
+- The batched write keeps entity embeddings in memory (`ENTITY_VECTOR_CACHE_MB`, default 64, 0 =
+  off). Without the entity ANN index (as on ArangoGraph), resolving a batch downloaded every
+  entity's embedding in the tenant; now only new ones come back. At 1536 dimensions with 90 ms of
+  database delay: 2,000 entities went from 1.1 s and 65 MB per batch to 0.15 s and 0.2 MB. The
+  core uses up to that much more memory.
 - A batched write makes about half the database requests (4 instead of 8 for a batch with no
   semantic merges): episodes and memories are recorded in one statement, and the three kinds of
   graph edge in another. Both are all-or-nothing, so a failed edge write is now an error rather
