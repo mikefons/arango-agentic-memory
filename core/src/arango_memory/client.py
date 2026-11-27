@@ -16,9 +16,9 @@ from typing import Any
 
 from arango import ArangoClient  # type: ignore[attr-defined]
 from arango.database import StandardDatabase
-from arango.http import DefaultHTTPClient
 
 from .config import Settings, settings
+from .transport import ObservedHTTPClient
 
 
 class DatabasePool:
@@ -100,7 +100,11 @@ class ArangoMemoryClient:
         self._client = ArangoClient(
             hosts=self._config.arango_url,
             verify_override=self._config.arango_tls_verify,
-            request_timeout=self._config.arango_request_timeout,
+            http_client=ObservedHTTPClient(
+                request_timeout=self._config.arango_request_timeout,
+                connect_timeout=self._config.arango_connect_timeout,
+                slow_seconds=self._config.arango_slow_call_seconds,
+            ),
         )
         self._db: StandardDatabase | None = None
 
@@ -113,8 +117,11 @@ class ArangoMemoryClient:
         probe._client = ArangoClient(
             hosts=self._config.arango_url,
             verify_override=self._config.arango_tls_verify,
-            http_client=DefaultHTTPClient(
-                request_timeout=PROBE_TIMEOUT_SECONDS, retry_attempts=0
+            http_client=ObservedHTTPClient(
+                request_timeout=PROBE_TIMEOUT_SECONDS,
+                connect_timeout=PROBE_TIMEOUT_SECONDS,
+                slow_seconds=self._config.arango_slow_call_seconds,
+                retry_attempts=0,
             ),
             resolver_max_tries=1,
         )

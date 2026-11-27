@@ -297,7 +297,7 @@ Two configurable targets, selected entirely via environment — same code path f
 | `local` (default) | Docker container (`docker-compose`) | basic (root/password) | plain http |
 | `arangograph` | Arango's managed cloud | basic **or** bearer/JWT token | https, `ARANGO_TLS_VERIFY=true` |
 
-- `client.py` passes `verify_override` (from `ARANGO_TLS_VERIFY`) and `request_timeout` to the ArangoDB client; chooses bearer-token auth if `ARANGO_BEARER_TOKEN` is set, else basic.
+- `client.py` passes `verify_override` (from `ARANGO_TLS_VERIFY`) to the ArangoDB client, with its own HTTP transport (`transport.py`: request and connect/send timeouts, a warning for each slow or failed call); chooses bearer-token auth if `ARANGO_BEARER_TOKEN` is set, else basic.
 - **Connection probe:** `python -m arango_memory.check` connects, bootstraps schema, runs a real store→retrieve round-trip under an isolated `__healthcheck__` tenant, then cleans up. Works against either target; used to validate cloud connectivity.
 - **ArangoGraph caveat:** it's managed, so the `--vector-index` startup flag is **not user-settable** there — confirm vector-index availability on the chosen tier before relying on it for production (the BM25 path works regardless; §7).
 

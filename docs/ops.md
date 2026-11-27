@@ -61,6 +61,9 @@ need no API keys.
 | `ARANGO_BEARER_TOKEN` | — | ArangoGraph token (overrides basic auth) |
 | `ARANGO_TLS_VERIFY` | `true` | `true`/CA-path for HTTPS; ignored for http |
 | `ARANGO_TARGET` | `local` | `local` \| `arangograph` (informational) |
+| `ARANGO_REQUEST_TIMEOUT` | `60` | seconds to wait for the database's answer |
+| `ARANGO_CONNECT_TIMEOUT` | `10` | seconds for connecting and for sending the request (never more than the one above); a failed attempt is tried again. Raise it if large write batches go over a slow link |
+| `ARANGO_SLOW_CALL_SECONDS` | `5` | log any database call that takes at least this long; `0` turns that off. See *Slow or failed database calls* |
 
 **Providers** (all default `fake` → keyless)
 | Var | Default | Real option |
@@ -689,6 +692,22 @@ sample followed by errors.
 
 For anything write-durability or degradation related, see [§15](DESIGN.md) and the
 **Durable write path** section above.
+
+**Slow or failed database calls.** The core warns about both, with the method, path, seconds
+and, for an AQL query, the first 120 characters of its text. Bind values, documents and host
+names are left out of these two lines.
+
+| Log line | Meaning |
+|---|---|
+| `database call failed … reason=ConnectTimeout` | No connection could be made within `ARANGO_CONNECT_TIMEOUT` |
+| `database call failed … reason=ReadTimeout` | The request went out and no answer came within `ARANGO_REQUEST_TIMEOUT` |
+| `database call failed … reason=ConnectionError` | The connection broke (`cause` says how; `TimeoutError` = the request couldn't be sent in time) |
+| `slow database call … status=…` | The call was answered, after `ARANGO_SLOW_CALL_SECONDS` or more |
+
+A failed line is per attempt, and the client may try again, so one can be followed by success.
+urllib3 also retries a failed connect inside an attempt and prints its own `Retrying (…)`
+warning, which does name the host. With the defaults, an unreachable database takes over two
+minutes to raise an error.
 
 ---
 
