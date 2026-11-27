@@ -13,6 +13,10 @@ are versioned together and released from this repository.
 
 ### Added
 
+- The spaCy extractor no longer makes one entity of two names set apart by a spaced slash or a
+  comma ("Acme Foods, Globex Retail"), trims trailing business shorthand from a name ("Acme
+  CFO" becomes "Acme"), and drops "Management" and "Letter of Intent" when they stand alone.
+  Entities already stored are not changed.
 - The core logs every database call that fails, and every one that takes
   `ARANGO_SLOW_CALL_SECONDS` (default 5, 0 = off) or longer, with the kind of failure, the
   path, the time taken and the start of the query text (never bind values, documents or the

@@ -2042,9 +2042,19 @@ don't show whether concurrency 4 is in effect.
     resent enqueue reported a unique constraint violation. ✅ **fixed**
   - Still possible, and rare: `access_count` twice; a tool step counted again if a worker
     finishes its intent before the resent enqueue arrives.
-- Open from the same day, in order: the 60 s stall (no cause yet, the logging is in place);
-  502s while a deploy starts (a Railway healthcheck path, the owner's setting); noisy
-  entities.
+  - **Hosted run after #327 (2026-11-27, hard-reset room).** Verdict "pass", 10
+    contradictions, 99 claims, 29 entities and 58 relationships, no same-name duplicates.
+    Flushes 6.8 s and 2.9 s. One batch insert lost its connection (a TLS error), was sent
+    again and the run completed; whether the database had received the first attempt isn't
+    known.
+- Noisy entities: ✅ **composite names filtered.** A spaced slash separates names, a comma
+  list of multi-word names is split, trailing shorthand is trimmed, and "Management" and
+  "Letter of Intent" are dropped. On a local corpus (the data room's documents, 21 claims in
+  the demo's form and 7 composite examples) distinct entities went from 31 to 24 with no real
+  name lost; not yet run on the hosted room. Still noisy: "BSD", "SLAM", "RED-TEAM", names
+  joined by "and", and short forms of longer names.
+- Open from the same day: the 60 s stall (no cause yet, the logging is in place); 502s while a
+  deploy starts (a Railway healthcheck path, the owner's setting).
 
 ### PF-1c — Stop returning embeddings from the retrieval arms (PR 2)  ✅ #304
 
