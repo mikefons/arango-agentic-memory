@@ -58,6 +58,9 @@ def _count(db: StandardDatabase, query: str) -> int:
     ("Brayton & Kell LLP", "brayton & kell"), ("Acme Corporation", "acme"),
     ("Incorporated", "incorporated"), ("Zinc", "zinc"), ("Acme Inc Holdings", "acme inc holdings"),
     ("Acme Robotics", "acme robotics"), ("The Hill", "the hill"),
+    ("Acme's", "acme"), ("Acme Foods'", "acme foods"), ("Acme Foods\u2019", "acme foods"),
+    ("Acme Inc.'s", "acme"), ("O'Brien", "o'brien"), ("Rock 'n' Roll", "rock 'n' roll"),
+    ("'s", "'s"),
 ])
 def test_name_key(name: str, key: str) -> None:
     assert name_key(name) == key
@@ -80,6 +83,13 @@ def test_a_later_write_joins_the_existing_name(db: StandardDatabase, batched: bo
     _write(db, "Acme LLP:Organization", batched=batched)
     _write(db, "acme:Person", batched=batched, start=1)
     assert _entities(db) == [("Acme LLP", "Organization", 2)]
+
+
+@pytest.mark.parametrize("batched", [True, False], ids=["batched", "single"])
+def test_a_possessive_is_the_same_name(db: StandardDatabase, batched: bool) -> None:
+    _write(db, "Acme Foods:Organization", "Acme Foods':Organization;Zed's:Person",
+           "Zed:Person", batched=batched)
+    assert [(name_key(r[0]), r[2]) for r in _entities(db)] == [("acme foods", 2), ("zed", 2)]
 
 
 def test_a_typed_form_names_a_new_entity(db: StandardDatabase) -> None:

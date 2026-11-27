@@ -59,6 +59,22 @@ _SPACY_VALUE_LABELS = frozenset(
 # A spaced dash ("Acme Corp — revenue: ...") usually sets off a heading or field name, and the
 # model often misses a name right before one. Read it as a sentence break.
 _SPACED_DASH = re.compile(r" [—–] ")
+# Business and finance shorthand spaCy takes for organizations. Matched exactly (case too), so
+# a name that merely contains one, or an acronym not listed (IBM, SEC), is kept.
+_JARGON = frozenset({
+    "ARR", "CEO", "CFO", "COO", "CRM", "CTO", "EBITDA", "ERP", "GAAP", "IP", "KPI", "LOI",
+    "MRR", "MSA", "NDA", "NRR", "Q&A", "SOW", "SaaS",
+})
+_PERIOD = re.compile(r"(?:FY|Q[1-4])(?: ?(?:\d{2}|\d{4}))?")  # FY, FY2025, Q4, Q4 25
+
+
+# "Acme's" and "Acme Foods'" (straight or curly apostrophe).
+_POSSESSIVE = re.compile(r"(?:['\u2019]s|(?<=[sS])['\u2019])$")
+
+
+def strip_possessive(name: str) -> str:
+    """`name` without a trailing possessive ending."""
+    return _POSSESSIVE.sub("", name.strip()).strip()
 
 
 @dataclass(frozen=True)
@@ -117,8 +133,9 @@ class FakeExtractor:
 class SpacyExtractor:
     """spaCy NER (tier A; behind the `extraction-spacy` extra). No typed relations.
 
-    Quantities and times are dropped, and a spaced dash is read as a sentence break. The
-    pipeline is injectable so that logic is testable without spaCy."""
+    Quantities, times and business shorthand are dropped, a possessive ending is not part of
+    a name, and a spaced dash is read as a sentence break. The pipeline is injectable so
+    that logic is testable without spaCy."""
 
     io_bound = False
 
@@ -131,10 +148,14 @@ class SpacyExtractor:
         for ent in self._nlp(_SPACED_DASH.sub(". ", text)).ents:
             if ent.label_ in _SPACY_VALUE_LABELS:
                 continue
+            name = strip_possessive(ent.text)
+            bare = name.removeprefix("the ").removeprefix("The ")
+            if not name or bare in _JARGON or _PERIOD.fullmatch(bare):
+                continue
             label = _SPACY_LABELS.get(ent.label_, "Concept")
-            key = (ent.text, label)
+            key = (name, label)
             if key not in seen:
-                seen[key] = ExtractedEntity(name=ent.text, label=label)
+                seen[key] = ExtractedEntity(name=name, label=label)
         return list(seen.values())
 
     def extract_relations(
