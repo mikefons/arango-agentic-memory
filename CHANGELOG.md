@@ -13,6 +13,10 @@ are versioned together and released from this repository.
 
 ### Added
 
+- The core image includes spaCy and its `en_core_web_sm` model (pinned by hash), so
+  `EXTRACTION_PROVIDER=spacy` works there. The default stays `fake`, which doesn't load it. The
+  `extraction-spacy` extra is now bounded to `spacy<3.9`, the model's minor version. The image's
+  installed Python environment grows by about 190 MB.
 - `WRITE_WORKER_CONCURRENCY` (default 1 = off): the write worker commits the agent groups of one
   claimed round in parallel, each on its own DB connection, instead of one after another. An
   agent's writes stay in order, a conflict between groups that write the same entity retries the
@@ -76,6 +80,9 @@ are versioned together and released from this repository.
 
 ### Changed
 
+- The spaCy extractor no longer makes entities of dates, times, money, percentages, quantities or
+  numbers, and reads a spaced dash ("Acme — revenue") as a sentence break, which helps it find the
+  name before the dash. Graphs and benchmark numbers produced with `spacy` before this differ.
 - The batched write keeps entity embeddings in memory (`ENTITY_VECTOR_CACHE_MB`, default 64, 0 =
   off). Without the entity ANN index (as on ArangoGraph), resolving a batch downloaded every
   entity's embedding in the tenant; now only new ones come back. At 1536 dimensions with 90 ms of

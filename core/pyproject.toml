@@ -51,7 +51,8 @@ extraction = [
 # torch-heavy gliner/glirel tiers. The cheap first rung for the HX-1b graph-on benchmark.
 # After installing, fetch the model: `make spacy-model` (python -m spacy download en_core_web_sm).
 extraction-spacy = [
-    "spacy>=3.8.0",
+    # Bounded to the minor the image's model wheel is built for (see the Dockerfile).
+    "spacy>=3.8.0,<3.9",
 ]
 mcp = [
     # 1.21.1: first release importable with pydantic 2.14 (older ones import a private helper

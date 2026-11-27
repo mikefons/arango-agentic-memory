@@ -52,6 +52,13 @@ _SPACY_LABELS = {
     "PRODUCT": "Object",
     "WORK_OF_ART": "Object",
 }
+# spaCy also tags quantities and times. They are values, not things to link memories by.
+_SPACY_VALUE_LABELS = frozenset(
+    {"CARDINAL", "DATE", "MONEY", "ORDINAL", "PERCENT", "QUANTITY", "TIME"}
+)
+# A spaced dash ("Acme Corp — revenue: ...") usually sets off a heading or field name, and the
+# model often misses a name right before one. Read it as a sentence break.
+_SPACED_DASH = re.compile(r" [—–] ")
 
 
 @dataclass(frozen=True)
@@ -108,21 +115,22 @@ class FakeExtractor:
 
 
 class SpacyExtractor:
-    """spaCy NER (tier A; behind the `extraction` extra). No typed relations."""
+    """spaCy NER (tier A; behind the `extraction-spacy` extra). No typed relations.
+
+    Quantities and times are dropped, and a spaced dash is read as a sentence break. The
+    pipeline is injectable so that logic is testable without spaCy."""
 
     io_bound = False
 
-    def __init__(self, model: str = "en_core_web_sm") -> None:
-        try:
-            import spacy
-        except ImportError as exc:  # pragma: no cover - exercised only without the extra
-            raise RuntimeError("SpacyExtractor needs the 'extraction' extra (spacy).") from exc
-        self._nlp = spacy.load(model)
+    def __init__(self, model: str = "en_core_web_sm", *, nlp: Any | None = None) -> None:
+        self._nlp = nlp or _load_spacy(model)
         self.name = f"spacy:{model}"
 
     def extract(self, text: str) -> list[ExtractedEntity]:
         seen: dict[tuple[str, str], ExtractedEntity] = {}
-        for ent in self._nlp(text).ents:
+        for ent in self._nlp(_SPACED_DASH.sub(". ", text)).ents:
+            if ent.label_ in _SPACY_VALUE_LABELS:
+                continue
             label = _SPACY_LABELS.get(ent.label_, "Concept")
             key = (ent.text, label)
             if key not in seen:
@@ -375,6 +383,16 @@ def _parse_json_object(raw: str) -> dict[str, Any]:
     except json.JSONDecodeError:
         return {}
     return obj if isinstance(obj, dict) else {}
+
+
+def _load_spacy(model: str) -> Any:  # pragma: no cover - needs the extra
+    try:
+        import spacy
+    except ImportError as exc:
+        raise RuntimeError(
+            "SpacyExtractor needs the 'extraction-spacy' extra (spacy)."
+        ) from exc
+    return spacy.load(model)
 
 
 def _load_gliner(model: str) -> Any:  # pragma: no cover - needs the extra + torch
