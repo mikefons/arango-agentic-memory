@@ -54,11 +54,6 @@ from ..telemetry.logging import RequestLogMiddleware, configure_logging, logger,
 from .limits import RequestSizeLimitMiddleware, rate_limit
 
 
-def get_client(request: Request) -> ArangoMemoryClient:
-    """Resolve the request-scoped Arango client from app state."""
-    return request.app.state.client  # type: ignore[no-any-return]
-
-
 @asynccontextmanager
 async def _leased(app: FastAPI) -> AsyncIterator[StandardDatabase]:
     """A pooled database handle. The wait for one happens on the event loop, so queued
@@ -430,29 +425,46 @@ def _require_ontology() -> None:
 # A handler that touches the database, embedder, generator or extractor is a plain `def`,
 # so FastAPI runs it in its threadpool and one slow call doesn't stall every other request.
 # The few `async` ones push their blocking calls to a thread themselves.
-async def health(
-    request: Request, client: ArangoMemoryClient = Depends(get_client)
-) -> dict[str, object]:
-    # Probes get their own handle and thread slot, so they never queue behind requests.
-    return await anyio.to_thread.run_sync(
-        _health, request, client, limiter=request.app.state.probe_limiter
-    )
+_PROBE_WAIT_SECONDS = 1.5  # under the image HEALTHCHECK's 2 s
 
 
-def _health(request: Request, client: ArangoMemoryClient) -> dict[str, object]:
+class DatabaseProbe:
+    """How the database is, for /health and /ready.
+
+    One question at a time, on a connection of its own. Callers share it and wait at most
+    `_PROBE_WAIT_SECONDS`: a database that stops answering is reported as unreachable
+    instead of holding the probes up behind it."""
+
+    def __init__(self, client: ArangoMemoryClient) -> None:
+        self.client = client
+        self._asking: asyncio.Task[tuple[bool, str]] | None = None
+        self._limiter = anyio.CapacityLimiter(1)  # the probe's own thread slot and handle
+
+    async def check(self) -> tuple[bool, str]:
+        """(reachable, vector index state)."""
+        if self._asking is None or self._asking.done():
+            self._asking = asyncio.create_task(
+                anyio.to_thread.run_sync(self._ask, limiter=self._limiter))
+        asking = self._asking
+        done, _ = await asyncio.wait({asking}, timeout=_PROBE_WAIT_SECONDS)
+        return asking.result() if done else (False, "unknown")
+
+    def _ask(self) -> tuple[bool, str]:
+        if not self.client.ping():
+            return False, "unknown"
+        # Vector arm state (MA-8): 'trained'/'deferred' when the DB is reachable.
+        try:
+            return True, vector_index_state(self.client.db)
+        except Exception:  # noqa: BLE001 — health must never raise
+            return True, "unknown"
+
+
+async def health(request: Request) -> dict[str, object]:
     # **Liveness** — is the process up? Always 200 when serving; *not* gated on the DB
     # (so a DB blip can't trigger a liveness-probe restart loop — that's /ready's job).
     # `arango` is informational; `latency` is process-global p50/p95/p99 (§18/§23),
     # surfaced here (not /v1/stats, which is per-tenant). Wire k8s livenessProbe here.
-    arango = client.ping()
-    # Vector arm state (MA-8) — 'trained'/'deferred' when the DB is reachable, else
-    # 'unknown'. Best-effort so a DB blip can't fail the liveness probe.
-    vector = "unknown"
-    if arango:
-        try:
-            vector = vector_index_state(client.db)
-        except Exception:  # noqa: BLE001 — health must never raise
-            vector = "unknown"
+    arango, vector = await request.app.state.probe.check()
     # The write worker drains every async write. If its thread is gone, queued writes pile up
     # unseen, so say so here. Still 200: restarting on it is the platform's call, not liveness's.
     worker = getattr(request.app.state, "worker", None)
@@ -466,13 +478,11 @@ def _health(request: Request, client: ArangoMemoryClient) -> dict[str, object]:
     }
 
 
-async def ready(
-    request: Request, client: ArangoMemoryClient = Depends(get_client)
-) -> JSONResponse:
+async def ready(request: Request) -> JSONResponse:
     # **Readiness** — can the service actually serve (DB reachable)? `503` when not,
     # so an orchestrator stops routing traffic without restarting the pod. Wire k8s
     # readinessProbe here.
-    ok = await anyio.to_thread.run_sync(client.ping, limiter=request.app.state.probe_limiter)
+    ok, _ = await request.app.state.probe.check()
     return JSONResponse(
         {"status": "ready" if ok else "unavailable", "arango": ok},
         status_code=200 if ok else 503,
@@ -954,7 +964,7 @@ def create_app(client: ArangoMemoryClient | None = None) -> FastAPI:
         app.state.db_pool = mem_client.pool(pool_size)
         app.state.db_slots = anyio.Semaphore(pool_size)
         app.state.arms = mem_client.parallel_arms(pool_size)
-        app.state.probe_limiter = anyio.CapacityLimiter(1)  # one probe handle: `client.db`
+        app.state.probe = DatabaseProbe(mem_client.probe())
         app.state.sync_write_lock = anyio.Lock()
         app.state.maintenance_lock = anyio.Lock()
         # Build the queue after the schema exists (the durable backend needs its

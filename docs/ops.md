@@ -25,7 +25,10 @@ service + ArangoDB). See [`api.md`](api.md) for the request contract and
 (the module-level `app = create_app()` boots the schema + write worker on startup).
 
 **Container & probes.** The image (`core/Dockerfile`) is digest-pinned, runs as a
-**non-root** user (uid 10001), and has a Docker `HEALTHCHECK` on `/health`. Two probes:
+**non-root** user (uid 10001), and has a Docker `HEALTHCHECK` on `/health`. Both probes below ask
+the database over their own connection and answer within about 1.5 s: if it hasn't replied by
+then, `/health` reports `arango: false` and `/ready` returns `503`. Each database call a probe
+makes is tried once, for at most 3 s. Two probes:
 - **liveness → `GET /health`** — always `200` when the process is up (never gated on the
   DB), so a DB blip can't restart the pod.
 - **readiness → `GET /ready`** — `200` when the DB is reachable, **`503`** when not, so
