@@ -5,7 +5,7 @@ from __future__ import annotations
 import socket
 import threading
 import time
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from concurrent.futures import ThreadPoolExecutor
 
 import pytest
@@ -39,7 +39,7 @@ def silent_server() -> Iterator[tuple[str, list[socket.socket]]]:
         conn.close()
 
 
-def test_a_probe_makes_one_short_attempt(
+def test_a_probe_does_not_repeat_a_call_that_gets_no_answer(
     silent_server: tuple[str, list[socket.socket]], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     url, connections = silent_server
@@ -49,6 +49,48 @@ def test_a_probe_makes_one_short_attempt(
     assert probe.ping() is False
     assert time.monotonic() - started < 2.0  # not a multiple of the timeout
     assert len(connections) == 1
+
+
+def _serve(handle: Callable[[socket.socket, int], None]) -> tuple[str, socket.socket]:
+    server = socket.socket()
+    server.bind(("127.0.0.1", 0))
+    server.listen(20)
+
+    def accept() -> None:
+        number = 0
+        while True:
+            try:
+                conn = server.accept()[0]
+            except OSError:
+                return
+            number += 1
+            threading.Thread(target=handle, args=(conn, number), daemon=True).start()
+
+    threading.Thread(target=accept, daemon=True).start()
+    return f"http://127.0.0.1:{server.getsockname()[1]}", server
+
+
+@pytest.mark.parametrize("dropped, reachable", [(1, True), (2, False)])
+def test_a_probe_tries_a_dropped_connection_once_more(dropped: int, reachable: bool) -> None:
+    connections: list[int] = []
+
+    def handle(conn: socket.socket, number: int) -> None:
+        connections.append(number)
+        conn.recv(65536)
+        if number <= dropped:
+            conn.close()
+            return
+        body = b'{"server":"arango","version":"3.12.0"}'
+        conn.sendall(b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"
+                     b"Connection: close\r\nContent-Length: %d\r\n\r\n%s" % (len(body), body))
+        conn.close()
+
+    url, server = _serve(handle)
+    try:
+        assert ArangoMemoryClient(Settings(arango_url=url)).probe().ping() is reachable
+        assert len(connections) == 2  # never a third
+    finally:
+        server.close()
 
 
 def test_a_hung_database_call_does_not_hold_up_the_probes(

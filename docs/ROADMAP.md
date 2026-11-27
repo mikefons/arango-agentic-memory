@@ -2011,6 +2011,19 @@ don't show whether concurrency 4 is in effect.
   says what it was and how it failed; connecting and sending give up after 10 s instead of 60 s
   (`ARANGO_CONNECT_TIMEOUT`). The failed run's logs had no connect-retry warning, so the shorter
   timeout is not expected to fix that stall; the next one should show where it happens.
+  - **Hosted run after #324 (2026-11-27, hard-reset room).** Verdict "pass", 11
+    contradictions, 101 claims, 30 entities and 52 relationships. Flushes 7.7 s and 2.7 s,
+    `write_many.insert` p95 1.2 s, no call over 5 s; the stall did not recur. No possessives in
+    the graph; combined names and non-entities remain.
+  - The new logging showed dropped connections: two health-probe calls failed with a connection
+    reset before the run, and during the first flush a query's TLS connection ended early and
+    urllib3 sent it again. Whether dropped connections have anything to do with the stall is not
+    known. urllib3 resends after a TLS error whatever the method, so a write could be sent
+    twice; whether that has happened is not known.
+- Health probes and dropped connections: ✅ **a dropped connection is tried once more.** The probe
+  made one attempt per call, so one reset connection reported the database unreachable. A call
+  that times out is still not repeated, and the probes still answer within about 1.5 s. The same
+  change logs a timed-out `GET` as `ReadTimeout`; #324 logged those as `ConnectionError`.
 
 ### PF-1c — Stop returning embeddings from the retrieval arms (PR 2)  ✅ #304
 

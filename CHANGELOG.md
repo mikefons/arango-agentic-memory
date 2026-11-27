@@ -167,6 +167,11 @@ are versioned together and released from this repository.
 
 ### Fixed
 
+- `/health` and `/ready` no longer report the database unreachable because one connection to
+  it had been dropped: a probe call whose connection breaks or is refused is tried once
+  more. A call that times out is still not repeated.
+- A database read that timed out is logged as `ReadTimeout` for `GET` calls too, not as
+  `ConnectionError`.
 - `/health` and `/ready` no longer stall behind a database call that gets no answer. Probes queued
   one behind another, and the default transport retried each timed-out read (with a 60 s request
   timeout, minutes in all). They now use their own connection with one 3 s attempt per call, share

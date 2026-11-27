@@ -87,6 +87,19 @@ def test_no_answer_is_logged_as_a_read_timeout_with_the_query(
     assert "do-not-log" not in json.dumps({k: str(v) for k, v in vars(failed).items()})
 
 
+def test_a_get_that_gets_no_answer_is_a_read_timeout_too(
+    server: Callable[..., str], logs: _Records
+) -> None:
+    """requests reports this one as a ConnectionError."""
+    url = server(lambda conn: None)
+    http = ObservedHTTPClient(request_timeout=0.5, connect_timeout=1, slow_seconds=0,
+                              retry_attempts=0)
+    with pytest.raises(requests.ConnectionError):
+        http.send_request(http.create_session(url), "get", url)
+    (failed,) = logs.named("database call failed")
+    assert failed.reason == "ReadTimeout"
+
+
 def test_a_broken_connection_is_logged_even_though_the_call_is_sent_again(
     server: Callable[..., str], logs: _Records
 ) -> None:

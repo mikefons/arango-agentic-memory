@@ -109,10 +109,13 @@ class ArangoMemoryClient:
         self._db: StandardDatabase | None = None
 
     def probe(self) -> ArangoMemoryClient:
-        """A client for health checks, on its own connection: one short attempt per call.
+        """A client for health checks, on its own connection, with short timeouts.
 
-        The default transport retries a read that timed out, and tries the host again after
-        that, so against a database that stops answering one call lasts many timeouts."""
+        A call that gets no answer is not repeated: the default transport retries a read that
+        timed out, and tries the host again after that, so against a database that stops
+        answering one call lasts many timeouts. A call whose connection breaks (an idle one
+        reset by the far end, say) is tried once more, so that alone doesn't report the
+        database down."""
         probe = ArangoMemoryClient(self._config)
         probe._client = ArangoClient(
             hosts=self._config.arango_url,
@@ -122,6 +125,7 @@ class ArangoMemoryClient:
                 connect_timeout=PROBE_TIMEOUT_SECONDS,
                 slow_seconds=self._config.arango_slow_call_seconds,
                 retry_attempts=0,
+                resend_dropped=True,
             ),
             resolver_max_tries=1,
         )

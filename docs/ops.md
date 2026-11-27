@@ -27,8 +27,10 @@ service + ArangoDB). See [`api.md`](api.md) for the request contract and
 **Container & probes.** The image (`core/Dockerfile`) is digest-pinned, runs as a
 **non-root** user (uid 10001), and has a Docker `HEALTHCHECK` on `/health`. Both probes below ask
 the database over their own connection and answer within about 1.5 s: if it hasn't replied by
-then, `/health` reports `arango: false` and `/ready` returns `503`. Each database call a probe
-makes is tried once, for at most 3 s. Two probes:
+then, `/health` reports `arango: false` and `/ready` returns `503`. A probe waits at most 3 s
+to connect and 3 s for an answer. A call that gets no answer isn't repeated; one whose
+connection breaks or is refused (an idle connection reset by the far end, for example) is tried
+once more. Two probes:
 - **liveness → `GET /health`** — always `200` when the process is up (never gated on the
   DB), so a DB blip can't restart the pod.
 - **readiness → `GET /ready`** — `200` when the DB is reachable, **`503`** when not, so
