@@ -13,6 +13,12 @@ are versioned together and released from this repository.
 
 ### Added
 
+- The core logs every database call that fails, and every one that takes
+  `ARANGO_SLOW_CALL_SECONDS` (default 5, 0 = off) or longer, with the kind of failure, the
+  path, the time taken and the start of the query text (never bind values, documents or the
+  host). Connecting and sending a request now give up after `ARANGO_CONNECT_TIMEOUT` (default
+  10 s, previously the 60 s request timeout) and are tried again; waiting for the answer is
+  unchanged. See ops.md "Slow or failed database calls".
 - The core image includes spaCy and its `en_core_web_sm` model (pinned by hash), so
   `EXTRACTION_PROVIDER=spacy` works there. The default stays `fake`, which doesn't load it. The
   `extraction-spacy` extra is now bounded to `spacy<3.9`, the model's minor version. The image's

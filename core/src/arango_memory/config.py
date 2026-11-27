@@ -48,6 +48,11 @@ class Settings(BaseSettings):
     # may be a CA-bundle path. Ignored for plain-http local connections.
     arango_tls_verify: bool = True
     arango_request_timeout: int = 60
+    # Opening a connection and sending the request get their own, shorter limit; waiting for the
+    # answer keeps the one above. A failed connect or send is tried again.
+    arango_connect_timeout: float = Field(default=10.0, gt=0)
+    # Log any database call that takes at least this long (0 = don't). Failures are always logged.
+    arango_slow_call_seconds: float = Field(default=5.0, ge=0)
     # Database connections the API leases to concurrent requests (the durable write queue
     # keeps a second pool of the same size). A request past the limit waits for one.
     arango_pool_size: int = Field(default=16, ge=1, le=128)

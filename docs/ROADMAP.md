@@ -2000,6 +2000,17 @@ don't show whether concurrency 4 is in effect.
   server; the hosted timeout is 60 s). Probes now try once with a 3 s timeout, share a check and
   answer within about 1.5 s. That this explains the hosted stall is inferred; why the call hung is
   unknown. After the deploy, 10 rounds of `/health` and `/ready` answered in 0.24–0.39 s.
+- Possessives and shorthand: ✅ **filtered** (#323). The spaCy extractor trims a possessive
+  ending and drops a short list of business shorthand.
+  - **Hosted run after #323 (2026-11-27, hard-reset room): failed.** The first batch's memory
+    insert took 60.7 s, the flushes timed out and the red-team agent found no claims. All five
+    batches completed afterwards. No error or warning appeared in the logs and `/health` stayed
+    under 0.5 s. None of the listed possessives or shorthand were in the partial graph. Why the
+    insert hung is unknown.
+- Slow database calls: 🔄 **now logged.** Every failed call, and every call of 5 s or more,
+  says what it was and how it failed; connecting and sending give up after 10 s instead of 60 s
+  (`ARANGO_CONNECT_TIMEOUT`). The failed run's logs had no connect-retry warning, so the shorter
+  timeout is not expected to fix that stall; the next one should show where it happens.
 
 ### PF-1c — Stop returning embeddings from the retrieval arms (PR 2)  ✅ #304
 
