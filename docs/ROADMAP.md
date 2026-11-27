@@ -1949,6 +1949,15 @@ don't show whether concurrency 4 is in effect.
   a `Concept`, including words such as "No" and "Dec". `EXTRACTION_PROVIDER` is not set on Railway
   (owner, 2026-11-26), and the image installs no extraction extra, so `spacy` needs an image change
   first.
+  - **Image change (built 2026-11-27, hosted setting not switched).** On 21 hand-written demo-style
+    claims, spaCy as it was found 22 of 33 expected name mentions and made entities of dates and
+    figures (41 distinct); with those dropped and a spaced dash read as a sentence break it found
+    29 of 33 (16 distinct), against 33 of 33 for `fake` with junk such as "Note" and "January" (26
+    distinct). In the built image (Python 3.14, arm64, local database, 210 queued writes, two
+    runs) memory after writes was 234–238 MB against 154–188 MB for `fake`, and the flush took
+    1.0–1.1 s against 0.8–0.9 s. The installed environment grows from 151 MB to 341 MB.
+  - **To switch,** set `EXTRACTION_PROVIDER=spacy` on Railway, run the room live, and compare the
+    flush and the graph. Remove the variable to switch back; entities already written stay.
 
 ### PF-1c — Stop returning embeddings from the retrieval arms (PR 2)  ✅ #304
 

@@ -20,7 +20,15 @@ COPY src ./src
 
 # The `mcp` extra lets this one image also run the MCP server over Streamable HTTP
 # (a different command; see docs/adapters/mcp.md). It adds ~9 small packages.
-RUN uv sync --no-dev --extra mcp
+# `extraction-spacy` makes EXTRACTION_PROVIDER=spacy work (the default stays `fake`, which
+# never imports it).
+RUN uv sync --no-dev --extra mcp --extra extraction-spacy
+
+# spaCy's English model isn't on PyPI, so it is installed from its release, pinned by hash. Its
+# minor version must match spaCy's (bounded in pyproject.toml).
+RUN echo "en_core_web_sm @ https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl --hash=sha256:1932429db727d4bff3deed6b34cfc05df17794f4a52eeb26cf8928f7c1a0fb85" > /tmp/spacy-model.txt \
+    && uv pip install --python .venv/bin/python --require-hashes --no-deps -r /tmp/spacy-model.txt \
+    && rm /tmp/spacy-model.txt
 
 # Import from src directly so uvicorn finds the package regardless of the
 # editable-install state (uv's src-layout editable .pth can be flaky).
