@@ -1945,19 +1945,38 @@ don't show whether concurrency 4 is in effect.
   and model-call timeout (#194) are for a model call that wedged, not for write speed. The core
   timeouts and the single retry of the briefing read only act when something is slow.
   `DILIGENCE_SYNC_WRITES` stays off and has not been re-tested.
-- The hosted core appears to run the `fake` extractor: extraction took 0.2 ms and every entity is
-  a `Concept`, including words such as "No" and "Dec". `EXTRACTION_PROVIDER` is not set on Railway
-  (owner, 2026-11-26), and the image installs no extraction extra, so `spacy` needs an image change
-  first.
-  - **Image change (built 2026-11-27, hosted setting not switched).** On 21 hand-written demo-style
+- The hosted extractor: ✅ **spaCy since 2026-11-27** (#318). Before that the core ran `fake`
+  (extraction took 0.2 ms and every entity was a `Concept`, including words such as "No" and
+  "Dec"), because the image had no other extractor.
+  - **Image change (#318).** On 21 hand-written demo-style
     claims, spaCy as it was found 22 of 33 expected name mentions and made entities of dates and
     figures (41 distinct); with those dropped and a spaced dash read as a sentence break it found
     29 of 33 (16 distinct), against 33 of 33 for `fake` with junk such as "Note" and "January" (26
     distinct). In the built image (Python 3.14, arm64, local database, 210 queued writes, two
     runs) memory after writes was 234–238 MB against 154–188 MB for `fake`, and the flush took
     1.0–1.1 s against 0.8–0.9 s. The installed environment grows from 151 MB to 341 MB.
-  - **To switch,** set `EXTRACTION_PROVIDER=spacy` on Railway, run the room live, and compare the
-    flush and the graph. Remove the variable to switch back; entities already written stay.
+  - **Hosted run on spaCy (2026-11-27, `EXTRACTION_PROVIDER=spacy`, hard-reset room, batch 64).**
+    Verdict "pass", 11 contradictions, 103 claims, both flushes drained. One run, against the last
+    `fake` run (after #313).
+
+    | | `fake` | spaCy |
+    |---|---|---|
+    | entities / relationships in the graph | 80 / 376 | 41 / 83 |
+    | entity types | all `Concept` | 29 organization, 4 person, 4 location, 4 other |
+    | `write_many.entities.extract` p50 per batch | 0.2 ms | 70 ms |
+    | `write_many.entities` p50 per batch | 1400 ms | 1258 ms |
+    | `flush:specialists` | 7.6 s | 5.3 s |
+    | `flush:redteam` | 3.4 s | 3.9 s |
+    | memory just after the run | about 360–390 MB | about 470 MB |
+
+    The first flush isn't comparable: one specialist took 7.2 s (about 2–4 s for the others), so
+    many claims committed before the flush began. Idle memory went from about 277 MB on a fresh
+    `fake` core to 382 MB. `/health`: 67 checks, no errors, p95 296 ms, max 675 ms. The deployment
+    logs (115 `/v1/store` requests) have no warning or error. Memo quality was not compared.
+  - **Owner's decision (2026-11-27): keep spaCy.** The graph is better, not clean: near-duplicates
+    ("Northwind Robotics" and "Northwind", "Brayton & Kell" with and without "LLP"), wrong types
+    (Orion Retail and Ridgeline as locations) and non-entities such as "Q&A" and "NRR". Remove the
+    variable to switch back; entities already written stay.
 
 ### PF-1c — Stop returning embeddings from the retrieval arms (PR 2)  ✅ #304
 
