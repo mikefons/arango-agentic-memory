@@ -713,10 +713,15 @@ minutes to raise an error.
 
 **What is sent again.** After a broken connection the driver sends the request again, even if
 the database had already received it. A request for a cursor's next batch is the exception: it
-raises `CursorBatchLost`, because asking twice would skip rows. Writes are still sent again,
-so a connection that breaks after a write has run can count it twice (entity mention counts and
-beliefs, relationship corroboration, tool-step use counts) or report a plain insert as a
-duplicate that in fact succeeded.
+raises `CursorBatchLost`, because asking twice would skip rows. Writes are sent again too, and
+the ones that count recognise it: entity mention counts and beliefs, relationship
+corroboration and tool-step use counts carry an id per write, and each such document keeps its
+last 16 in an `ops` field, so a repeat changes nothing. A repeated batch insert still builds
+its graph links, a repeated queue claim takes the same intents, and a repeated enqueue is
+ignored. Two narrow cases remain: a memory's `access_count` can go up twice, and a queued
+write can be added again if a worker finishes it before the resent enqueue arrives (a stored
+turn is then recognised as a duplicate; a tool step is counted again). Counts returned by
+`forget` can be low after a resend, though the deletion is done.
 
 ---
 

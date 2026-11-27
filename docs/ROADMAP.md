@@ -2032,14 +2032,19 @@ don't show whether concurrency 4 is in effect.
   drops the connection once the database has answered):
   - A cursor's next batch: 20 of 30 rows came back, with no error. ✅ **fixed**: it raises
     instead, or gets the same batch again on an `allow_retry` cursor.
-  - A tool step recorded twice in all ended with `use_count` 3. ⬜ **open**: the counting
-    writes (entities, relationships, steps) are still resent. Refusing the resend would be
-    worse in the graph pass, where a failed statement loses the turn's entity links; making
-    those statements recognise a repeat avoids both.
-  - A plain insert reported a unique constraint violation although it had succeeded. ⬜ **open**
-- Open from the same day, in order: the counting writes above; the 60 s stall (no cause yet,
-  the logging is in place); 502s while a deploy starts (a Railway healthcheck path, the
-  owner's setting); noisy entities.
+  - A tool step recorded twice in all ended with `use_count` 3. ✅ **fixed**: the counting
+    writes (entities, relationships, steps) carry an id and ignore a repeat. Refusing the
+    resend would have been worse in the graph pass, where a failed statement loses the turn's
+    entity links.
+  - A resent batch insert reported none of its turns as new, so they got no entity links
+    (found while fixing the above). ✅ **fixed**
+  - A resent queue claim leased further intents and left the first to wait out their lease; a
+    resent enqueue reported a unique constraint violation. ✅ **fixed**
+  - Still possible, and rare: `access_count` twice; a tool step counted again if a worker
+    finishes its intent before the resent enqueue arrives.
+- Open from the same day, in order: the 60 s stall (no cause yet, the logging is in place);
+  502s while a deploy starts (a Railway healthcheck path, the owner's setting); noisy
+  entities.
 
 ### PF-1c — Stop returning embeddings from the retrieval arms (PR 2)  ✅ #304
 

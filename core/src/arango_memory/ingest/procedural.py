@@ -15,11 +15,15 @@ from arango.cursor import Cursor
 from arango.database import StandardDatabase
 
 from ..models import utcnow_iso
+from ..repeats import new_op
 
 _UPSERT_STEP = """
 UPSERT { tenant_id: @tenant_id, agent_id: @agent_id, tool_name: @tool_name, outcome: @outcome }
-INSERT @doc
-UPDATE { use_count: OLD.use_count + 1, last_used_at: @now, arguments: @arguments }
+INSERT MERGE(@doc, { ops: [@op] })
+UPDATE ((@op IN NOT_NULL(OLD.ops, [])) ? {} : {
+  use_count: OLD.use_count + 1, last_used_at: @now, arguments: @arguments,
+  ops: SLICE(PUSH(NOT_NULL(OLD.ops, []), @op), -16)
+})
 IN steps
 RETURN NEW._key
 """
@@ -30,7 +34,7 @@ FOR s IN steps
   FILTER @tool_name == null OR s.tool_name == @tool_name
   SORT s.use_count DESC
   LIMIT @limit
-  RETURN s
+  RETURN UNSET(s, "ops")
 """
 
 
@@ -91,6 +95,7 @@ def record_step(
         "doc": doc,
         "arguments": arguments,
         "now": now,
+        "op": new_op(),
     }
     db.aql.execute(_UPSERT_STEP, bind_vars=bind_vars)
 

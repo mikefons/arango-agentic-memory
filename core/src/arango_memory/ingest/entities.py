@@ -36,6 +36,7 @@ from ..config import settings
 from ..embedding import Embedder
 from ..embedding_cache import embed_batch_cached
 from ..models import utcnow_iso
+from ..repeats import new_op
 from ..schema.collections import forget_vector_state, vector_index_ready
 from ..telemetry import StageTimer, metrics
 from ..telemetry.logging import logger
@@ -57,13 +58,14 @@ from .vector_cache import Entry, entity_vectors
 # new name at once collide on it and the loser, retried, corroborates the winner's.
 _UPSERT_ENTITY = """
 UPSERT { _key: @key }
-INSERT @doc
-UPDATE {
+INSERT MERGE(@doc, { ops: [@op] })
+UPDATE ((@op IN NOT_NULL(OLD.ops, [])) ? {} : {
   mention_count: OLD.mention_count + 1,
   reliability_sum: NOT_NULL(OLD.reliability_sum, 0) + @rel,
   belief: OLD.confidence * (1 - POW(1 - @base, NOT_NULL(OLD.reliability_sum, 0) + @rel)),
-  accessed_at: @now
-}
+  accessed_at: @now,
+  ops: SLICE(PUSH(NOT_NULL(OLD.ops, []), @op), -16)
+})
 IN entities
 RETURN NEW._key
 """
@@ -137,12 +139,13 @@ _ANN_QVEC_CHUNK = 64
 _INCREMENT = """
 FOR e IN entities
   FILTER e._key == @key
-  UPDATE e WITH {
+  UPDATE e WITH ((@op IN NOT_NULL(e.ops, [])) ? {} : {
     mention_count: e.mention_count + 1,
     reliability_sum: NOT_NULL(e.reliability_sum, 0) + @rel,
     belief: e.confidence * (1 - POW(1 - @base, NOT_NULL(e.reliability_sum, 0) + @rel)),
-    accessed_at: @now
-  } IN entities
+    accessed_at: @now,
+    ops: SLICE(PUSH(NOT_NULL(e.ops, []), @op), -16)
+  }) IN entities
 """
 
 # A relates_to edge corroborated by another episode: bump the count, accumulate
@@ -150,8 +153,8 @@ FOR e IN entities
 # from a later assertion wins (last-writer). mentions/produced_by stay idempotent.
 _RELATE = """
 UPSERT { _key: @key }
-INSERT @doc
-UPDATE {
+INSERT MERGE(@doc, { ops: [@op] })
+UPDATE ((@op IN NOT_NULL(OLD.ops, [])) ? {} : {
   corroboration: NOT_NULL(OLD.corroboration, 1) + 1,
   reliability_sum: NOT_NULL(OLD.reliability_sum, 0) + @rel,
   belief: 1 - POW(1 - @base, NOT_NULL(OLD.reliability_sum, 0) + @rel),
@@ -160,8 +163,9 @@ UPDATE {
   weight: @w_alpha + (1 - @w_alpha) * NOT_NULL(OLD.weight, @w_alpha)
           * EXP(@w_neg_lam * DATE_DIFF(NOT_NULL(OLD.last_seen, @now), @now, "s") / 86400.0),
   relationship: @relationship,
-  last_seen: @now
-}
+  last_seen: @now,
+  ops: SLICE(PUSH(NOT_NULL(OLD.ops, []), @op), -16)
+})
 IN relates_to
 """
 
@@ -407,7 +411,7 @@ def _relate(
         "last_seen": now,
     }
     bind: dict[str, Any] = {
-        "key": key, "doc": doc, "relationship": relationship,
+        "key": key, "doc": doc, "relationship": relationship, "op": new_op(),
         "rel": rel, "base": base, "now": now,
         "w_alpha": settings.weight_ewa_alpha,
         "w_neg_lam": -settings.weight_lambda,
@@ -508,7 +512,8 @@ def write_entities(
                 same = cast(str, match["key"])  # semantic duplicate under another name
 
         if same is not None:
-            inc_bind: dict[str, Any] = {"key": same, "now": now, "rel": rel, "base": base}
+            inc_bind: dict[str, Any] = {
+                "key": same, "now": now, "rel": rel, "base": base, "op": new_op()}
             with timer.stage("upsert"):
                 retry_on_conflict(partial(db.aql.execute, _INCREMENT, bind_vars=inc_bind))
             key = same
@@ -525,6 +530,7 @@ def write_entities(
                 "now": now,
                 "rel": rel,
                 "base": base,
+                "op": new_op(),
             }
             with timer.stage("upsert"):
                 cursor = cast(Cursor, retry_on_conflict(
@@ -657,13 +663,14 @@ class _EntityAccum:
 _BULK_UPSERT_ENTITY = """
 FOR row IN @rows
   UPSERT { _key: row.key }
-  INSERT row.doc
-  UPDATE {
+  INSERT MERGE(row.doc, { ops: [@op] })
+  UPDATE ((@op IN NOT_NULL(OLD.ops, [])) ? {} : {
     mention_count: OLD.mention_count + row.count,
     reliability_sum: NOT_NULL(OLD.reliability_sum, 0) + row.rel_sum,
     belief: OLD.confidence * (1 - POW(1 - @base, NOT_NULL(OLD.reliability_sum, 0) + row.rel_sum)),
-    accessed_at: @now
-  }
+    accessed_at: @now,
+    ops: SLICE(PUSH(NOT_NULL(OLD.ops, []), @op), -16)
+  })
   IN entities
 """
 
@@ -672,12 +679,13 @@ _BULK_INCREMENT = """
 FOR row IN @rows
   FOR e IN entities
     FILTER e._key == row.key
-    UPDATE e WITH {
+    UPDATE e WITH ((@op IN NOT_NULL(e.ops, [])) ? {} : {
       mention_count: e.mention_count + row.count,
       reliability_sum: NOT_NULL(e.reliability_sum, 0) + row.rel_sum,
       belief: e.confidence * (1 - POW(1 - @base, NOT_NULL(e.reliability_sum, 0) + row.rel_sum)),
-      accessed_at: @now
-    } IN entities
+      accessed_at: @now,
+      ops: SLICE(PUSH(NOT_NULL(e.ops, []), @op), -16)
+    }) IN entities
 """
 
 # A batch's edges in one round trip, all or nothing: insert the mentions and produced_by edges
@@ -695,16 +703,17 @@ LET produced = (
 )
 FOR row IN @rows
   UPSERT { _key: row.key }
-  INSERT row.doc
-  UPDATE {
+  INSERT MERGE(row.doc, { ops: [@op] })
+  UPDATE ((@op IN NOT_NULL(OLD.ops, [])) ? {} : {
     corroboration: NOT_NULL(OLD.corroboration, 1) + row.corr,
     reliability_sum: NOT_NULL(OLD.reliability_sum, 0) + row.rel_sum,
     belief: 1 - POW(1 - @base, NOT_NULL(OLD.reliability_sum, 0) + row.rel_sum),
     weight: @w_alpha + (1 - @w_alpha) * NOT_NULL(OLD.weight, @w_alpha)
             * EXP(@w_neg_lam * DATE_DIFF(NOT_NULL(OLD.last_seen, @now), @now, "s") / 86400.0),
     relationship: row.relationship,
-    last_seen: @now
-  }
+    last_seen: @now,
+    ops: SLICE(PUSH(NOT_NULL(OLD.ops, []), @op), -16)
+  })
   IN relates_to
 """
 
@@ -824,7 +833,8 @@ def write_entities_many(
     # 4. bulk increment semantic-merge targets.
     if increments:
         inc_rows = [{"key": k, "count": c, "rel_sum": r} for k, (c, r) in increments.items()]
-        inc_bind: dict[str, Any] = {"rows": inc_rows, "now": now, "base": base}
+        inc_bind: dict[str, Any] = {
+            "rows": inc_rows, "now": now, "base": base, "op": new_op()}
         with timer.stage("increment"):
             retry_on_conflict(lambda: db.aql.execute(_BULK_INCREMENT, bind_vars=inc_bind))
 
@@ -838,7 +848,8 @@ def write_entities_many(
             up_rows.append({"key": doc["_key"], "doc": doc,
                             "count": a.count, "rel_sum": a.rel_sum})
             key_by_nk[nk] = doc["_key"]
-        up_bind: dict[str, Any] = {"rows": up_rows, "now": now, "base": base}
+        up_bind: dict[str, Any] = {
+            "rows": up_rows, "now": now, "base": base, "op": new_op()}
         with timer.stage("upsert"):
             retry_on_conflict(lambda: db.aql.execute(_BULK_UPSERT_ENTITY, bind_vars=up_bind))
 
@@ -895,7 +906,7 @@ def write_entities_many(
     # 8. write all three kinds of edge.
     edge_bind: dict[str, Any] = {
         "mentions": mention_edges, "produced": produced_edges,
-        "rows": rel_rows, "base": base, "now": now,
+        "rows": rel_rows, "base": base, "now": now, "op": new_op(),
         "w_alpha": settings.weight_ewa_alpha, "w_neg_lam": -settings.weight_lambda}
     with timer.stage("edges"):
         retry_on_conflict(lambda: db.aql.execute(_BULK_EDGES, bind_vars=edge_bind))
