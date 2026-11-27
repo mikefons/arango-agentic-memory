@@ -36,6 +36,11 @@ once more. Two probes:
 - **readiness → `GET /ready`** — `200` when the DB is reachable, **`503`** when not, so
   the orchestrator stops routing traffic without restarting. Both are public (no auth).
 
+**Deploys.** Have the platform wait for the new instance before it moves traffic to it, or
+requests fail while the app starts (about 15 s on the hosted core). On Railway, set the
+service's healthcheck path to `/ready`. Railway checks the port in the `PORT` variable and the
+image listens on 8080, so set `PORT=8080` too; a failing check marks the deploy failed.
+
 **Multiple instances.** The API is stateless, so scale out by running N instances
 against the **same** ArangoDB — required: `WRITE_QUEUE_BACKEND=arango` (the in-memory
 queue is per-process), so every instance's worker shares one durable backlog and the
@@ -65,6 +70,7 @@ need no API keys.
 | `ARANGO_TARGET` | `local` | `local` \| `arangograph` (informational) |
 | `ARANGO_REQUEST_TIMEOUT` | `60` | seconds to wait for the database's answer |
 | `ARANGO_CONNECT_TIMEOUT` | `10` | seconds for connecting and for sending the request (never more than the one above); a failed attempt is tried again. Raise it if large write batches go over a slow link |
+| `ARANGO_MAX_IDLE_SECONDS` | `30` | a pooled connection idle for longer is reopened before use, because a proxy or load balancer may have dropped it without saying so; `0` reuses it however long it has waited |
 | `ARANGO_SLOW_CALL_SECONDS` | `5` | log any database call that takes at least this long; `0` turns that off. See *Slow or failed database calls* |
 
 **Providers** (all default `fake` → keyless)

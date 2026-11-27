@@ -2062,8 +2062,24 @@ don't show whether concurrency 4 is in effect.
   - As in the run before, a batch insert early in the run failed with a TLS error, was sent
     again and the run completed. A connection gone stale while idle would explain it; that
     hasn't been checked.
-- Open from the same day: the 60 s stall (no cause yet, the logging is in place); 502s while a
-  deploy starts (a Railway healthcheck path, the owner's setting).
+- The 60 s stall: ✅ **reproduced, and the likely cause removed.** A connection that goes
+  silent while idle (no reset, no close) followed by a large insert took 63.1 s on the code of
+  the failed run (`2beaaf3`) and succeeded without logging anything: sending timed out after
+  60 s and the driver sent the request again on a new connection. That matches the failed run's
+  60.7 s insert with no error. That it is what happened there is inferred. With #324 the same
+  takes 11.4 s and is logged. Connections idle for over 30 s are now reopened before use
+  (`ARANGO_MAX_IDLE_SECONDS`), and the same test with 35 s idle took 0.7 s. A connection that
+  dies in under 30 s is still left to the timeouts. Not yet run on the hosted core.
+- 502s while a deploy starts: ⬜ **open**, a Railway setting. The service has no healthcheck
+  path (checked 2026-11-27). Set it to `/ready`, with `PORT=8080` (ops.md "Deploys"). A config
+  file in the repo wasn't used: Railway has deprecated it.
+- Short forms ("Ridgeline" beside "Ridgeline Ventures"): ⬜ **open, design proposed, not
+  built.** A Dream State pass, off by default, merges an entity into a longer name when its
+  words begin exactly one live name of a compatible type in the tenant. "Northwind" fits both
+  "Northwind Robotics" and "Northwind Logistics LLC", so it stays. A merge adds the counts and
+  reliability to the longer entity, moves its mention, produced-by and relationship edges
+  (combining duplicates, dropping self-links), records the short name as an alias that later
+  writes match, and retires the short entity. Each step has to be safe to send twice.
 
 ### PF-1c — Stop returning embeddings from the retrieval arms (PR 2)  ✅ #304
 

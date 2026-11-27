@@ -53,6 +53,9 @@ class Settings(BaseSettings):
     arango_connect_timeout: float = Field(default=10.0, gt=0)
     # Log any database call that takes at least this long (0 = don't). Failures are always logged.
     arango_slow_call_seconds: float = Field(default=5.0, ge=0)
+    # A pooled connection idle for longer than this is reopened before use, since a proxy or
+    # load balancer may have dropped it without saying so (0 = reuse regardless).
+    arango_max_idle_seconds: float = Field(default=30.0, ge=0)
     # Database connections the API leases to concurrent requests (the durable write queue
     # keeps a second pool of the same size). A request past the limit waits for one.
     arango_pool_size: int = Field(default=16, ge=1, le=128)

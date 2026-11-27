@@ -104,6 +104,7 @@ class ArangoMemoryClient:
                 request_timeout=self._config.arango_request_timeout,
                 connect_timeout=self._config.arango_connect_timeout,
                 slow_seconds=self._config.arango_slow_call_seconds,
+                max_idle_seconds=self._config.arango_max_idle_seconds,
             ),
         )
         self._db: StandardDatabase | None = None
@@ -124,6 +125,7 @@ class ArangoMemoryClient:
                 request_timeout=PROBE_TIMEOUT_SECONDS,
                 connect_timeout=PROBE_TIMEOUT_SECONDS,
                 slow_seconds=self._config.arango_slow_call_seconds,
+                max_idle_seconds=self._config.arango_max_idle_seconds,
                 retry_attempts=0,
                 resend_dropped=True,
             ),

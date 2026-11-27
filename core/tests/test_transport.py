@@ -179,6 +179,63 @@ def test_a_lost_cursor_batch_is_never_skipped(
     assert dropped and logs.named("database call failed")
 
 
+def _answer(conn: socket.socket) -> bool:
+    """Reads one whole request (head and body can arrive apart) and answers it."""
+    data = b""
+    while True:
+        head, split, body = data.partition(b"\r\n\r\n")
+        if split:
+            lengths = [line for line in head.lower().split(b"\r\n")
+                       if line.startswith(b"content-length:")]
+            if len(body) >= int(lengths[0].split(b":")[1]) if lengths else True:
+                break
+        if not (more := conn.recv(65536)):
+            return False
+        data += more
+    reply = b'{"result":[],"hasMore":false,"error":false,"code":201}'
+    conn.sendall(b"HTTP/1.1 201 Created\r\nContent-Type: application/json\r\n"
+                 b"Content-Length: %d\r\n\r\n%s" % (len(reply), reply))
+    return True
+
+
+@pytest.mark.parametrize("max_idle, opened", [(0.2, 2), (30, 1), (0, 1)])
+def test_a_connection_that_has_sat_idle_is_not_reused(
+    server: Callable[..., str], logs: _Records, max_idle: float, opened: int
+) -> None:
+    connections: list[int] = []
+
+    def answer(conn: socket.socket) -> None:
+        connections.append(1)
+        with contextlib.suppress(OSError):
+            while _answer(conn):
+                pass
+
+    db = _db(server(answer), arango_max_idle_seconds=max_idle)
+    for pause in (0, 0.4, 0):
+        time.sleep(pause)
+        list(db.aql.execute("RETURN 1"))  # type: ignore[arg-type]
+    assert len(connections) == opened  # the third call reuses the one just used
+    assert not logs.records
+
+
+def test_a_connection_that_went_silent_while_idle_is_replaced(
+    server: Callable[..., str], logs: _Records
+) -> None:
+    """Nothing says it is dead: a request on it would hang until a timeout."""
+    connections: list[int] = []
+
+    def answer_once(conn: socket.socket) -> None:
+        connections.append(1)
+        _answer(conn)
+
+    db = _db(server(answer_once), arango_max_idle_seconds=0.2, arango_request_timeout=3)
+    list(db.aql.execute("RETURN 1"))  # type: ignore[arg-type]
+    time.sleep(0.4)
+    started = time.perf_counter()
+    list(db.aql.execute("RETURN 2"))  # type: ignore[arg-type]
+    assert time.perf_counter() - started < 1 and len(connections) == 2 and not logs.records
+
+
 def test_only_unsent_or_repeatable_requests_are_left_to_be_resent() -> None:
     http = ObservedHTTPClient(request_timeout=1, connect_timeout=1, slow_seconds=0)
 
