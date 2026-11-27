@@ -80,6 +80,11 @@ are versioned together and released from this repository.
 
 ### Changed
 
+- One name is now one entity per tenant, whatever type the extractor gave it: names match ignoring
+  case, spacing and a trailing legal suffix ("Acme", "ACME Inc."), including between new entities
+  in one batch. Before, each type made its own entity. The entity keeps its first typed form. A new
+  entity's key is derived from its tenant and name. Duplicates already stored are not merged. Two
+  different things that share a name now share an entity.
 - The spaCy extractor no longer makes entities of dates, times, money, percentages, quantities or
   numbers, and reads a spaced dash ("Acme — revenue") as a sentence break, which helps it find the
   name before the dash. Graphs and benchmark numbers produced with `spacy` before this differ.

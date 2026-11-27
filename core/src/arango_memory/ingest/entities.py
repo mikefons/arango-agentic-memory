@@ -6,7 +6,8 @@ so `mention_count` stays stable). For each extracted entity:
       ≥ merge_threshold → treat as the same entity (bump its mention_count)
       ≥ flag_threshold  → create, but mark `needs_review` for Dream State (§13)
       otherwise         → create
-  - UPSERT by natural key (tenant, name, label) so exact repeats just increment.
+  - One entity per tenant and name (`name_key`: type and legal suffix ignored), so a
+    repeated name just increments.
 Then write `mentions` (memory→entity), `produced_by` (entity→episode), and
 `relates_to` (entity↔entity co-occurrence) edges, all idempotently.
 
@@ -19,7 +20,9 @@ full scan (fine at small N). The merge/flag decision itself is unchanged.
 
 from __future__ import annotations
 
+import hashlib
 import math
+import re
 from collections.abc import Mapping
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
@@ -49,8 +52,10 @@ from .vector_cache import Entry, entity_vectors
 
 # A corroborating mention bumps mention_count, accumulates the source's
 # reliability, and recomputes belief = confidence_prior × (1 − (1−base)^Σreliability) (§8/§12).
+# A new entity's key comes from its name (`_entity_key`), so two writers that meet the same
+# new name at once collide on it and the loser, retried, corroborates the winner's.
 _UPSERT_ENTITY = """
-UPSERT { tenant_id: @tenant_id, name: @name, label: @label }
+UPSERT { _key: @key }
 INSERT @doc
 UPDATE {
   mention_count: OLD.mention_count + 1,
@@ -65,7 +70,8 @@ RETURN NEW._key
 _FETCH_EXISTING = """
 FOR e IN entities
   FILTER e.tenant_id == @tenant_id
-  RETURN { key: e._key, name: e.name, label: e.label, embedding: e.embedding }
+  RETURN { key: e._key, name: e.name, label: e.label, embedding: e.embedding,
+           invalid: e.invalid_at != null }
 """
 
 # `_FETCH_EXISTING` for a caller that holds some embeddings already (`vector_cache`): @known maps
@@ -73,10 +79,12 @@ FOR e IN entities
 _FETCH_UNCACHED = """
 FOR e IN entities
   FILTER e.tenant_id == @tenant_id
-  LET stamp = CONCAT_SEPARATOR("|", e.embedding_model, e.embedding_version, e.reembedded_at)
+  // ingestion_time: a purged and re-created entity reuses its key but is a new embedding
+  LET stamp = CONCAT_SEPARATOR(
+    "|", e.embedding_model, e.embedding_version, e.reembedded_at, e.ingestion_time)
   LET cached = HAS(NOT_NULL(@known[stamp], {}), e._key)
   RETURN { key: e._key, name: e.name, label: e.label, stamp: stamp, cached: cached,
-           embedding: cached ? null : e.embedding }
+           embedding: cached ? null : e.embedding, invalid: e.invalid_at != null }
 """
 _SCAN_BATCH_SIZE = 10_000  # rows per cursor page: cached rows are small, so fewer round trips
 
@@ -89,7 +97,8 @@ FOR e IN entities
   LET score = APPROX_NEAR_COSINE(e.embedding, @qvec, {nProbe: @nprobe})
   SORT score DESC
   LIMIT @topk
-  RETURN { key: e._key, name: e.name, label: e.label, embedding: e.embedding }
+  RETURN { key: e._key, name: e.name, label: e.label, embedding: e.embedding,
+           invalid: e.invalid_at != null }
 """
 
 # IN-6: the union of top-k nearest existing entity KEYS across a chunk of query vectors, in ONE
@@ -112,7 +121,8 @@ FOR qvec IN @qvecs
 _FETCH_BY_KEYS = """
 FOR e IN entities
   FILTER e._key IN @keys
-  RETURN { key: e._key, name: e.name, label: e.label, embedding: e.embedding }
+  RETURN { key: e._key, name: e.name, label: e.label, embedding: e.embedding,
+           invalid: e.invalid_at != null }
 """
 
 _TENANT_ENTITY_COUNT = """
@@ -153,6 +163,43 @@ UPDATE {
 }
 IN relates_to
 """
+
+
+# Company forms that don't tell two names apart ("Acme", "Acme Inc.", "Acme, LLC").
+_LEGAL_SUFFIX = re.compile(
+    r"[\s,]+(?:inc|incorporated|llc|llp|ltd|limited|corp|corporation|plc|gmbh)\.?$"
+)
+
+
+def name_key(name: str) -> str:
+    """What makes two entity names the same one: the words, ignoring case, spacing and a
+    trailing legal suffix. The extractor's type is deliberately not part of it, since one
+    name often comes back with different types."""
+    folded = " ".join(name.casefold().split())
+    return _LEGAL_SUFFIX.sub("", folded).strip(" .,") or folded
+
+
+def _entity_key(tenant_id: str, name: str) -> str:
+    raw = f"{tenant_id}\x1f{name_key(name)}"
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:32]
+
+
+def _by_name(pool: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
+    index: dict[str, list[dict[str, Any]]] = {}
+    for row in pool:
+        index.setdefault(name_key(row["name"]), []).append(row)
+    return index
+
+
+def _name_match(rows: list[dict[str, Any]], label: str) -> str | None:
+    """The key of the existing entity a name belongs to, from the rows sharing its
+    `name_key`: the same label first, then any live one. A deprecated entity is only taken
+    for its own label (the exact entity coming back)."""
+    usable = [r for r in rows if r["label"] == label or not r.get("invalid")]
+    if not usable:
+        return None
+    best = min(usable, key=lambda r: (r["label"] != label, bool(r.get("invalid")), r["key"]))
+    return cast(str, best["key"])
 
 
 def _cos(a: list[float], b: list[float]) -> float:
@@ -439,19 +486,27 @@ def write_entities(
                 embedder, [ent.name for ent in extracted], tenant_id=tenant_id
             )
 
+    key_by_name_key: dict[str, str] = {}  # one corroboration per name in this episode
     for ent in extracted:
+        nk = name_key(ent.name)
+        if (seen := key_by_name_key.get(nk)) is not None:
+            key_by_entity[(ent.name, ent.label)] = seen
+            key_by_name.setdefault(ent.name, seen)
+            continue
         vec = vectors[ent.name]
         with timer.stage("candidates"):
             candidates = _candidates(vec)
         with timer.stage("match"):
+            same = _name_match(_by_name(candidates).get(nk, []), ent.label)
             match, sim = _best_match(vec, candidates, exclude=(ent.name, ent.label))
+            if same is None and match is not None and sim >= settings.entity_merge_threshold:
+                same = cast(str, match["key"])  # semantic duplicate under another name
 
-        if match is not None and sim >= settings.entity_merge_threshold:
-            # Semantic duplicate of a differently-named entity → merge into it.
-            inc_bind: dict[str, Any] = {"key": match["key"], "now": now, "rel": rel, "base": base}
+        if same is not None:
+            inc_bind: dict[str, Any] = {"key": same, "now": now, "rel": rel, "base": base}
             with timer.stage("upsert"):
                 retry_on_conflict(partial(db.aql.execute, _INCREMENT, bind_vars=inc_bind))
-            key = cast(str, match["key"])
+            key = same
         else:
             needs_review = match is not None and sim >= settings.entity_flag_threshold
             detected += int(needs_review)
@@ -460,9 +515,7 @@ def write_entities(
                 rel, base,
             )
             up_bind: dict[str, Any] = {
-                "tenant_id": tenant_id,
-                "name": ent.name,
-                "label": ent.label,
+                "key": doc["_key"],
                 "doc": doc,
                 "now": now,
                 "rel": rel,
@@ -473,6 +526,7 @@ def write_entities(
                     partial(db.aql.execute, _UPSERT_ENTITY, bind_vars=up_bind)))
                 key = cast(str, next(iter(cursor)))
 
+        key_by_name_key[nk] = key
         key_by_entity[(ent.name, ent.label)] = key
         key_by_name.setdefault(ent.name, key)
         with timer.stage("edges"):
@@ -536,6 +590,7 @@ def _entity_doc(
 ) -> dict[str, Any]:
     confidence = 1.0
     return {
+        "_key": _entity_key(tenant_id, ent.name),
         "name": ent.name,
         "label": ent.label,
         "tenant_id": tenant_id,
@@ -596,7 +651,7 @@ class _EntityAccum:
 # function of the reliability *sum*, §8/§12).
 _BULK_UPSERT_ENTITY = """
 FOR row IN @rows
-  UPSERT { tenant_id: @tenant_id, name: row.name, label: row.label }
+  UPSERT { _key: row.key }
   INSERT row.doc
   UPDATE {
     mention_count: OLD.mention_count + row.count,
@@ -605,7 +660,6 @@ FOR row IN @rows
     accessed_at: @now
   }
   IN entities
-  RETURN { name: row.name, label: row.label, key: NEW._key }
 """
 
 # Bulk increment (semantic-merge targets): add each batch total to an existing entity by key.
@@ -665,9 +719,9 @@ def write_entities_many(
     result equals calling `write_entities` per memory (DESIGN §8). Returns memory_key → keys.
 
     Two documented, benign differences from the sequential path: (1) intra-batch *semantic* dedup
-    of two differently-named-but-similar NEW entities is left to consolidation — exact-name repeats
-    still merge via the upsert key; (2) the EWA edge weight (a recency heuristic, not a correctness
-    invariant) folds once per batch (Δt≈0)."""
+    of two differently-named-but-similar NEW entities is left to consolidation — names with the
+    same `name_key` are still one entity; (2) the EWA edge weight (a recency heuristic, not a
+    correctness invariant) folds once per batch (Δt≈0)."""
     if not memories:
         return {}
     timer = StageTimer("write_many.entities")  # /health write_many.entities.<stage>
@@ -709,46 +763,58 @@ def write_entities_many(
     with timer.stage("embed"):
         vec_by_name = embed_batch_cached(embedder, names, tenant_id=tenant_id)
 
-    # 2. accumulate per distinct (name, label) across the batch.
-    accum: dict[tuple[str, str], _EntityAccum] = {}
+    # 2. accumulate per distinct name (`name_key`) across the batch. The first typed form
+    #    stands for the name: it is what a new entity is called.
+    accum: dict[str, _EntityAccum] = {}
     for mem, ents, _rels, vt in per_mem:
-        for ent in {(e.name, e.label): e for e in ents}.values():  # per-memory dedup
-            nl = (ent.name, ent.label)
-            a = accum.get(nl)
+        in_memory: dict[str, ExtractedEntity] = {}  # per-memory dedup
+        for ent in ents:
+            kept = in_memory.setdefault(name_key(ent.name), ent)
+            if kept.label == "Concept" and ent.label != "Concept":
+                in_memory[name_key(ent.name)] = ent
+        for nk, ent in in_memory.items():
+            a = accum.get(nk)
             if a is None:
-                a = accum[nl] = _EntityAccum(ent=ent, vec=vec_by_name[ent.name], valid_time=vt)
+                a = accum[nk] = _EntityAccum(ent=ent, vec=vec_by_name[ent.name], valid_time=vt)
+            elif a.ent.label == "Concept" and ent.label != "Concept":
+                a.ent, a.vec = ent, vec_by_name[ent.name]
             a.count += 1
             a.rel_sum += mem.source_reliability
             a.mem_refs.append((mem.memory_key, mem.episode_key))
 
-    # 3. resolve distinct entities against existing DB entities — one candidate-pool fetch +
-    #    one vectorized (numpy) match, instead of a lookup + a Python cosine per entity (IN-6).
-    #    The per-entity ANN query / O(cardinality²) scan loop was the graph-on ingest wall a
-    #    real (high-cardinality) extractor exposed; folding it into a batch keeps it ~O(N·M)
-    #    matmul in C. Belief/corroboration still fold by sum, so the result is unchanged.
-    nls = list(accum.keys())
-    qvecs = [accum[nl].vec for nl in nls]
+    # 3. resolve distinct entities against existing DB entities — one candidate-pool fetch,
+    #    then by name, else one vectorized (numpy) match, instead of a lookup + a Python cosine
+    #    per entity (IN-6). The per-entity ANN query / O(cardinality²) scan loop was the
+    #    graph-on ingest wall a real (high-cardinality) extractor exposed; folding it into a
+    #    batch keeps it ~O(N·M) matmul in C. Belief/corroboration still fold by sum.
+    nks = list(accum.keys())
+    qvecs = [accum[nk].vec for nk in nks]
     with timer.stage("pool"):  # the candidate fetch: index-state check + ANN/scan query
         use_ann = _use_ann(db, tenant_id, dimensions=embedder.dimensions)
         pool = _resolution_pool(db, tenant_id, qvecs, use_ann=use_ann)
     with timer.stage("match"):
-        matches = _best_match_many(qvecs, pool, exclude=nls)
+        named = _by_name(pool)
+        matches = _best_match_many(
+            qvecs, pool, exclude=[(accum[nk].ent.name, accum[nk].ent.label) for nk in nks])
 
-    key_by_nl: dict[tuple[str, str], str] = {}
+    key_by_nk: dict[str, str] = {}
     increments: dict[str, list[float]] = {}  # existing key -> [count, rel_sum]
-    own: dict[tuple[str, str], tuple[_EntityAccum, dict[str, Any] | None, bool]] = {}
+    own: dict[str, tuple[_EntityAccum, dict[str, Any] | None, bool]] = {}
     detected = 0
-    for nl, (match, sim) in zip(nls, matches, strict=True):
-        a = accum[nl]
-        if match is not None and sim >= settings.entity_merge_threshold:
-            key_by_nl[nl] = cast(str, match["key"])
-            inc = increments.setdefault(cast(str, match["key"]), [0.0, 0.0])
+    for nk, (match, sim) in zip(nks, matches, strict=True):
+        a = accum[nk]
+        same = _name_match(named.get(nk, []), a.ent.label)
+        if same is None and match is not None and sim >= settings.entity_merge_threshold:
+            same = cast(str, match["key"])  # semantic duplicate under another name
+        if same is not None:
+            key_by_nk[nk] = same
+            inc = increments.setdefault(same, [0.0, 0.0])
             inc[0] += a.count
             inc[1] += a.rel_sum
         else:
             needs_review = match is not None and sim >= settings.entity_flag_threshold
             detected += int(needs_review)
-            own[nl] = (a, match, needs_review)
+            own[nk] = (a, match, needs_review)
 
     # 4. bulk increment semantic-merge targets.
     if increments:
@@ -757,32 +823,25 @@ def write_entities_many(
         with timer.stage("increment"):
             retry_on_conflict(lambda: db.aql.execute(_BULK_INCREMENT, bind_vars=inc_bind))
 
-    # 5. bulk upsert own entities → resolved keys.
+    # 5. bulk upsert own entities, under the keys their names give them.
     if own:
         up_rows: list[dict[str, Any]] = []
-        for (name, label), (a, match, needs_review) in own.items():
+        for nk, (a, match, needs_review) in own.items():
             doc = _entity_doc(a.ent, a.vec, tenant_id, agent_id, embedder, now,
                               needs_review, match, a.valid_time, a.rel_sum, base)
             doc["mention_count"] = a.count  # INSERT carries the batch total (UPDATE adds it)
-            up_rows.append({"name": name, "label": label, "doc": doc,
+            up_rows.append({"key": doc["_key"], "doc": doc,
                             "count": a.count, "rel_sum": a.rel_sum})
-        up_bind: dict[str, Any] = {
-            "rows": up_rows, "tenant_id": tenant_id, "now": now, "base": base}
+            key_by_nk[nk] = doc["_key"]
+        up_bind: dict[str, Any] = {"rows": up_rows, "now": now, "base": base}
         with timer.stage("upsert"):
-            cur = cast(Cursor, retry_on_conflict(
-                lambda: db.aql.execute(_BULK_UPSERT_ENTITY, bind_vars=up_bind)))
-            for row in cur:
-                key_by_nl[(row["name"], row["label"])] = row["key"]
-
-    name_to_key: dict[str, str] = {}
-    for (name, _label), key in key_by_nl.items():
-        name_to_key.setdefault(name, key)
+            retry_on_conflict(lambda: db.aql.execute(_BULK_UPSERT_ENTITY, bind_vars=up_bind))
 
     # 6. build the mention + produced_by edges.
     mention_edges: list[dict[str, Any]] = []
     produced_edges: list[dict[str, Any]] = []
-    for nl, a in accum.items():
-        key = key_by_nl[nl]
+    for nk, a in accum.items():
+        key = key_by_nk[nk]
         for mkey, ekey in a.mem_refs:
             mention_edges.append(_edge_doc(
                 f"{mkey}__{key}", f"memories/{mkey}", f"entities/{key}", now, tenant_id))
@@ -794,14 +853,14 @@ def write_entities_many(
     for mem, ents, rels, vt in per_mem:
         mpairs: dict[tuple[str, str], str] = {}
         for r in rels:
-            ka, kb = name_to_key.get(r.source), name_to_key.get(r.target)
+            ka, kb = key_by_nk.get(name_key(r.source)), key_by_nk.get(name_key(r.target))
             if not ka or not kb or ka == kb:
                 continue
             lo, hi = sorted((ka, kb))
             mpairs[(lo, hi)] = r.relationship
         for left, right in cooccurring_pairs(ents, max_pairs=settings.graph_max_pairs_per_turn):
-            ka = key_by_nl.get((left.name, left.label))
-            kb = key_by_nl.get((right.name, right.label))
+            ka = key_by_nk.get(name_key(left.name))
+            kb = key_by_nk.get(name_key(right.name))
             if not ka or not kb or ka == kb:
                 continue
             lo, hi = sorted((ka, kb))

@@ -222,7 +222,7 @@ tenants           Tenant isolation root. Fields: tenant_id, name, config
 _meta             Single doc. schema_version for migration runner.
 ```
 
-**Idempotency (resolved Rev 2):** `episodes` and `memories` carry an `idempotency_key` with a unique persistent index. The key is a hash of `(tenant_id, agent_id, session_id, content, turn_index)`. Re-running a turn or retrying a failed write cannot create duplicates. Entities remain deduped by UPSERT on natural key `(name, label, tenant_id)`.
+**Idempotency (resolved Rev 2):** `episodes` and `memories` carry an `idempotency_key` with a unique persistent index. The key is a hash of `(tenant_id, agent_id, session_id, content, turn_index)`. Re-running a turn or retrying a failed write cannot create duplicates. Entities are deduped per tenant by **name**: the words, ignoring case, spacing and a trailing legal suffix, and not the type (§8 Stage 3).
 
 ### Edge Collections
 
@@ -379,7 +379,8 @@ Stage 4: Prospective Indexing  [FULL MODE ONLY]
   ▼
 Stage 5: Graph Write (concurrent-safe, idempotent, durable)
   - Episode: INSERT ... with idempotency_key (unique) — dedupe on retry
-  - Entities: UPSERT by (name, label, tenant_id)
+  - Entities: an existing entity of the same name (type ignored) is corroborated; a new one is
+    UPSERTed under a key derived from (tenant_id, name), so concurrent writers converge
   - Memory: INSERT with idempotency_key; TTL if working
   - Edges: INSERT; _rev optimistic locking for updates;
            stream transaction for atomic multi-step writes
