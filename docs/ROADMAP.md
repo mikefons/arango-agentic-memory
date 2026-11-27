@@ -2051,8 +2051,17 @@ don't show whether concurrency 4 is in effect.
   list of multi-word names is split, trailing shorthand is trimmed, and "Management" and
   "Letter of Intent" are dropped. On a local corpus (the data room's documents, 21 claims in
   the demo's form and 7 composite examples) distinct entities went from 31 to 24 with no real
-  name lost; not yet run on the hosted room. Still noisy: "BSD", "SLAM", "RED-TEAM", names
-  joined by "and", and short forms of longer names.
+  name lost. Still noisy: "BSD", "SLAM", "RED-TEAM", names joined by "and", and short forms of
+  longer names.
+  - **Hosted run after #328 (2026-11-27, hard-reset room).** Verdict "pass", 13
+    contradictions, 101 claims, 20 entities and 37 relationships (29 and 58 the run before;
+    claims differ between runs, so the rules don't account for all of it). No slash or comma
+    composite, trailing shorthand, or standalone "Management" or "Letter of Intent". Left:
+    "Auditor", "BSD", "SLAM", "RED-TEAM", "Orion and Vertex", and "Northwind" and "Ridgeline"
+    beside their longer names. Flushes 5.0 s and 2.7 s.
+  - As in the run before, a batch insert early in the run failed with a TLS error, was sent
+    again and the run completed. A connection gone stale while idle would explain it; that
+    hasn't been checked.
 - Open from the same day: the 60 s stall (no cause yet, the logging is in place); 502s while a
   deploy starts (a Railway healthcheck path, the owner's setting).
 
