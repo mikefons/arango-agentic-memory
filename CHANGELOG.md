@@ -167,6 +167,12 @@ are versioned together and released from this repository.
 
 ### Fixed
 
+- A dropped connection can no longer skip rows from a query result. Asking a cursor for its
+  next batch was sent again after a broken connection, and the database answered with the batch
+  after the lost one, without an error. That request now raises `CursorBatchLost`, except on
+  cursors opened with `allow_retry` (the entity fetch is), which get the same batch again.
+- urllib3 no longer resends a request by itself after errors such as a TLS connection ending
+  early; the driver's own, logged, resend handles them.
 - `/health` and `/ready` no longer report the database unreachable because one connection to
   it had been dropped: a probe call whose connection breaks or is refused is tried once
   more. A call that times out is still not repeated.

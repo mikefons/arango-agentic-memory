@@ -2024,6 +2024,22 @@ don't show whether concurrency 4 is in effect.
   made one attempt per call, so one reset connection reported the database unreachable. A call
   that times out is still not repeated, and the probes still answer within about 1.5 s. The same
   change logs a timed-out `GET` as `ReadTimeout`; #324 logged those as `ConnectionError`.
+  - **Deployed (#325, 2026-11-27).** A connection reset 22 minutes after the deploy logged one
+    failed call and no second, so the second attempt got through.
+  - Right after that deploy the service answered 502 for a few seconds while the app was still
+    starting (about 14 s).
+- Requests sent twice after a dropped connection (reproduced 2026-11-27 with a proxy that
+  drops the connection once the database has answered):
+  - A cursor's next batch: 20 of 30 rows came back, with no error. ✅ **fixed**: it raises
+    instead, or gets the same batch again on an `allow_retry` cursor.
+  - A tool step recorded twice in all ended with `use_count` 3. ⬜ **open**: the counting
+    writes (entities, relationships, steps) are still resent. Refusing the resend would be
+    worse in the graph pass, where a failed statement loses the turn's entity links; making
+    those statements recognise a repeat avoids both.
+  - A plain insert reported a unique constraint violation although it had succeeded. ⬜ **open**
+- Open from the same day, in order: the counting writes above; the 60 s stall (no cause yet,
+  the logging is in place); 502s while a deploy starts (a Railway healthcheck path, the
+  owner's setting); noisy entities.
 
 ### PF-1c — Stop returning embeddings from the retrieval arms (PR 2)  ✅ #304
 

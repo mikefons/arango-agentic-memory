@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import socket
@@ -9,6 +10,7 @@ import threading
 import time
 from collections.abc import Callable, Iterator
 from typing import Any
+from urllib.parse import urlsplit
 
 import pytest
 import requests
@@ -17,7 +19,7 @@ from arango.database import StandardDatabase
 from arango_memory.client import ArangoMemoryClient
 from arango_memory.config import Settings
 from arango_memory.telemetry.logging import logger
-from arango_memory.transport import ObservedHTTPClient, _query_of
+from arango_memory.transport import CursorBatchLost, ObservedHTTPClient, _query_of
 
 
 class _Records(logging.Handler):
@@ -135,6 +137,68 @@ def test_a_request_that_cannot_be_sent_gives_up_at_the_connect_timeout(
     assert time.perf_counter() - started < 10
     (failed,) = logs.named("database call failed")
     assert (failed.reason, failed.cause) == ("ConnectionError", "TimeoutError")
+
+
+@pytest.mark.parametrize("allow_retry", [False, True])
+def test_a_lost_cursor_batch_is_never_skipped(
+    db: StandardDatabase, settings: Settings, server: Callable[..., str], logs: _Records,
+    allow_retry: bool,
+) -> None:
+    """The database answers, then the connection drops before the answer arrives."""
+    target = urlsplit(settings.arango_url)
+    dropped: list[int] = []
+
+    def proxy(client: socket.socket) -> None:
+        upstream = socket.create_connection((target.hostname, target.port or 8529))
+        drop = threading.Event()
+
+        def answers() -> None:
+            with contextlib.suppress(OSError):
+                while data := upstream.recv(1 << 20):
+                    if drop.is_set():
+                        client.shutdown(socket.SHUT_RDWR)
+                        return
+                    client.sendall(data)
+
+        threading.Thread(target=answers, daemon=True).start()
+        with contextlib.suppress(OSError):
+            while data := client.recv(1 << 20):
+                if not dropped and b"/_api/cursor/" in data.split(b"\r\n", 1)[0]:
+                    dropped.append(1)
+                    drop.set()
+                upstream.sendall(data)
+
+    through = settings.model_copy(update={"arango_url": server(proxy)})
+    via = ArangoMemoryClient(through).database(db.name)
+    cursor = via.aql.execute("FOR i IN 1..30 RETURN i", batch_size=10, allow_retry=allow_retry)
+    if allow_retry:
+        assert list(cursor) == list(range(1, 31))  # type: ignore[arg-type]
+    else:
+        with pytest.raises(CursorBatchLost):
+            list(cursor)  # type: ignore[arg-type]
+    assert dropped and logs.named("database call failed")
+
+
+def test_only_unsent_or_repeatable_requests_are_left_to_be_resent() -> None:
+    http = ObservedHTTPClient(request_timeout=1, connect_timeout=1, slow_seconds=0)
+
+    def raised(error: type[Exception], method: str, path: str) -> type[BaseException]:
+        class _Session:
+            def request(self, **kwargs: Any) -> Any:
+                raise error("x")
+
+        with pytest.raises(Exception) as caught:  # noqa: PT011
+            http.send_request(_Session(), method, "http://h" + path)  # type: ignore[arg-type]
+        return caught.type
+
+    broken, unsent = requests.ConnectionError, requests.ConnectTimeout
+    assert raised(broken, "post", "/_db/x/_api/cursor/123") is CursorBatchLost
+    assert raised(broken, "post", "/_db/x/_api/cursor/123/2") is broken  # allow_retry
+    assert raised(broken, "post", "/_db/x/_api/cursor") is broken
+    assert raised(broken, "delete", "/_db/x/_api/cursor/123") is broken
+    assert raised(unsent, "post", "/_db/x/_api/cursor/123") is unsent
+    session = http.create_session("http://h")
+    assert all(a.max_retries.other == 0 for a in session.adapters.values())  # type: ignore[attr-defined]
 
 
 def test_a_slow_call_is_logged(server: Callable[..., str], logs: _Records) -> None:

@@ -325,9 +325,13 @@ def _scan_pool(db: StandardDatabase, tenant_id: str) -> list[dict[str, Any]]:
     for key, (stamp, _) in held.items():
         known.setdefault(stamp, {})[key] = 1
     bind: dict[str, Any] = {"tenant_id": tenant_id, "known": known}
-    rows = list(cast(Cursor, db.aql.execute(
-        _FETCH_UNCACHED, bind_vars=bind, batch_size=_SCAN_BATCH_SIZE,
-    )))
+    # allow_retry: a batch lost to a dropped connection can be asked for again (`transport`)
+    cur = cast(Cursor, db.aql.execute(
+        _FETCH_UNCACHED, bind_vars=bind, batch_size=_SCAN_BATCH_SIZE, allow_retry=True,
+    ))
+    rows = list(cur)
+    if cur.id is not None:  # such a cursor stays on the server until closed or expired
+        cur.close(ignore_missing=True)
     entry: Entry = {}
     for row in rows:
         if row["cached"]:
