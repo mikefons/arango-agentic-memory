@@ -2067,7 +2067,22 @@ retrieve clears the cache and answers without the vector arm.
   had a 2.6 s worst round (main's worst was 0.9 s), probably first-use connection setup in the arm
   pool.
 
-### PF-1f — Put the core next to the database (ops, the owner)
+### PF-1f — Put the core next to the database (ops, the owner)  🔄 regions differ, not moved
+
+- **Finding (2026-11-27).** The core runs in Railway **US East**; the database is in **AWS
+  `eu-central-1` (Frankfurt)**, judged from where its endpoint's load balancer resolves. Every
+  database call crosses the Atlantic, which fits the roughly 90 ms per call measured earlier.
+- **Options.** The owner decided on 2026-11-27 not to move anything for now.
+  - Move the core to Railway **EU West** (recommended: one setting, reversible). Database calls
+    should fall to around 10 ms (an estimate, not measured). Embedding and model calls may get
+    slower from Europe, and the demos' server functions would then cross the Atlantic once per
+    request to reach the core; moving their region too would avoid that.
+  - Or move the database to a US East region, which means a new deployment and a data migration,
+    if the platform offers it.
+- **If the core moves,** compare a live Diligence Room run and the `/health` stage timings with the
+  2026-11-26 runs.
+- Still open from the checks below: the in-container round-trip measurement and the two console
+  settings. The region comparison is done.
 
 - **Measure the round trip from inside the Railway container.** Run
   `python -m arango_memory.check` from Railway's shell. It writes and then deletes one probe memory
