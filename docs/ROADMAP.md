@@ -2094,7 +2094,7 @@ retrieve clears the cache and answers without the vector arm.
 - **Docs.** The `ops.md` scaling section.
 - **Size.** S–M.
 
-### PF-1h — Entity resolution fetches the tenant's entity vectors on every write  🔄 built
+### PF-1h — Entity resolution fetches the tenant's entity vectors on every write  ✅ #313
 
 - **What happens.** Without the entity ANN index, `write_entities` / `write_entities_many` resolve
   against `_FETCH_EXISTING`, which returns every entity in the tenant with its embedding, once per
@@ -2126,7 +2126,24 @@ retrieve clears the cache and answers without the vector arm.
   | 5,000 | 2909 ms, 163 MB | 3442 ms | 169 ms, 0.47 MB | 62 MB |
 
 - **Scope.** Batched writes only. The one-by-one write path still fetches everything.
-- Not measured on the hosted core.
+- **Hosted run after #313 (2026-11-26, hard-reset room, batch 64, concurrency 4 as set).**
+  Verdict "pass", 10 contradictions, both flushes drained, 376 relationship edges. One run,
+  against the run after #311.
+
+  | | before | after |
+  |---|---|---|
+  | claims / batched commits | 102 / 7 | 107 / 8 |
+  | `flush:specialists` | 7.8 s | 7.6 s |
+  | `flush:redteam` | 4.8 s | 3.4 s |
+  | `write_many.entities.pool` p50 | 559 ms | 466 ms |
+  | `write_many.entities` p50 | 1547 ms | 1400 ms |
+
+  `/health`: 67 checks over 150 s, no errors, p95 280 ms, max 452 ms. The run's deployment logs
+  (118 `/v1/store` requests) have no warning or error, write conflict or dead letter.
+- A small gain, as expected for a room of about 80 entities, and one run each can't separate it
+  from normal variation; the faster second flush isn't attributed to the cache. The candidate
+  fetch still takes 466 ms with little to download. Why is not yet known (the timer also covers
+  the vector-index check).
 
 **Order.**
 - PF-1b now (config only).
