@@ -57,14 +57,19 @@ _SPACY_VALUE_LABELS = frozenset(
     {"CARDINAL", "DATE", "MONEY", "ORDINAL", "PERCENT", "QUANTITY", "TIME"}
 )
 # A spaced dash ("Acme Corp — revenue: ...") usually sets off a heading or field name, and the
-# model often misses a name right before one. Read it as a sentence break.
-_SPACED_DASH = re.compile(r" [—–] ")
+# model often misses a name right before one. A spaced slash ("Acme / Globex") sets two names
+# side by side, which the model takes for one. Read both as a sentence break.
+_SEPARATOR = re.compile(r" [—–/] ")
 # Business and finance shorthand spaCy takes for organizations. Matched exactly (case too), so
-# a name that merely contains one, or an acronym not listed (IBM, SEC), is kept.
+# an acronym not listed (IBM, SEC) is kept. At the end of a longer name it is trimmed off
+# ("Acme CFO" is about Acme); elsewhere in a name it stays ("CRM Dynamics").
 _JARGON = frozenset({
     "ARR", "CEO", "CFO", "COO", "CRM", "CTO", "EBITDA", "ERP", "GAAP", "IP", "KPI", "LOI",
     "MRR", "MSA", "NDA", "NRR", "Q&A", "SOW", "SaaS",
 })
+# Document words it takes for organizations. Dropped only when they are the whole name, so
+# "Acme Asset Management" is kept.
+_GENERIC = frozenset({"Letter of Intent", "Management"})
 _PERIOD = re.compile(r"(?:FY|Q[1-4])(?: ?(?:\d{2}|\d{4}))?")  # FY, FY2025, Q4, Q4 25
 
 
@@ -75,6 +80,28 @@ _POSSESSIVE = re.compile(r"(?:['\u2019]s|(?<=[sS])['\u2019])$")
 def strip_possessive(name: str) -> str:
     """`name` without a trailing possessive ending."""
     return _POSSESSIVE.sub("", name.strip()).strip()
+
+
+def _listed_names(span: str) -> list[str]:
+    """The names in a span the model read as one: "Acme Foods, Globex Retail" is two. Split
+    only when every part is two words or more, which leaves "Acme, Inc." and a firm named for
+    its partners ("Skadden, Arps, Slate") whole."""
+    parts = span.split(", ")
+    return parts if all(len(part.split()) > 1 for part in parts) else [span]
+
+
+def _entity_name(span: str) -> str | None:
+    """The name in a span, without a possessive ending or trailing shorthand. None if nothing
+    but shorthand, a reporting period or a document word is there."""
+    words = strip_possessive(span).split()
+    keep = 2 if words[:1] in (["the"], ["The"]) else 1  # never trim down to the article
+    while len(words) > keep and (words[-1] in _JARGON or _PERIOD.fullmatch(words[-1])):
+        words.pop()
+    name = strip_possessive(" ".join(words))
+    bare = name.removeprefix("the ").removeprefix("The ")
+    if not name or bare in _JARGON or bare in _GENERIC or _PERIOD.fullmatch(bare):
+        return None
+    return name
 
 
 @dataclass(frozen=True)
@@ -133,9 +160,10 @@ class FakeExtractor:
 class SpacyExtractor:
     """spaCy NER (tier A; behind the `extraction-spacy` extra). No typed relations.
 
-    Quantities, times and business shorthand are dropped, a possessive ending is not part of
-    a name, and a spaced dash is read as a sentence break. The pipeline is injectable so
-    that logic is testable without spaCy."""
+    Quantities, times, business shorthand and a few document words are dropped, a possessive
+    ending or trailing shorthand is not part of a name, a comma list of names is split, and a
+    spaced dash or slash is read as a sentence break. The pipeline is injectable so that logic
+    is testable without spaCy."""
 
     io_bound = False
 
@@ -145,17 +173,12 @@ class SpacyExtractor:
 
     def extract(self, text: str) -> list[ExtractedEntity]:
         seen: dict[tuple[str, str], ExtractedEntity] = {}
-        for ent in self._nlp(_SPACED_DASH.sub(". ", text)).ents:
+        for ent in self._nlp(_SEPARATOR.sub(". ", text)).ents:
             if ent.label_ in _SPACY_VALUE_LABELS:
                 continue
-            name = strip_possessive(ent.text)
-            bare = name.removeprefix("the ").removeprefix("The ")
-            if not name or bare in _JARGON or _PERIOD.fullmatch(bare):
-                continue
             label = _SPACY_LABELS.get(ent.label_, "Concept")
-            key = (name, label)
-            if key not in seen:
-                seen[key] = ExtractedEntity(name=name, label=label)
+            for name in filter(None, map(_entity_name, _listed_names(ent.text))):
+                seen.setdefault((name, label), ExtractedEntity(name=name, label=label))
         return list(seen.values())
 
     def extract_relations(
