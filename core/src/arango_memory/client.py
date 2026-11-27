@@ -16,6 +16,7 @@ from typing import Any
 
 from arango import ArangoClient  # type: ignore[attr-defined]
 from arango.database import StandardDatabase
+from arango.http import DefaultHTTPClient
 
 from .config import Settings, settings
 
@@ -86,6 +87,9 @@ class ParallelArms:
         self._threads.shutdown()
 
 
+PROBE_TIMEOUT_SECONDS = 3.0  # per database call made by a health probe
+
+
 class ArangoMemoryClient:
     """Thin wrapper around python-arango exposing the memory database handle."""
 
@@ -99,6 +103,23 @@ class ArangoMemoryClient:
             request_timeout=self._config.arango_request_timeout,
         )
         self._db: StandardDatabase | None = None
+
+    def probe(self) -> ArangoMemoryClient:
+        """A client for health checks, on its own connection: one short attempt per call.
+
+        The default transport retries a read that timed out, and tries the host again after
+        that, so against a database that stops answering one call lasts many timeouts."""
+        probe = ArangoMemoryClient(self._config)
+        probe._client = ArangoClient(
+            hosts=self._config.arango_url,
+            verify_override=self._config.arango_tls_verify,
+            http_client=DefaultHTTPClient(
+                request_timeout=PROBE_TIMEOUT_SECONDS, retry_attempts=0
+            ),
+            resolver_max_tries=1,
+        )
+        probe._db = probe.database(self._config.arango_db)
+        return probe
 
     @property
     def config(self) -> Settings:

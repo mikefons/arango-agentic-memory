@@ -155,6 +155,12 @@ are versioned together and released from this repository.
 
 ### Fixed
 
+- `/health` and `/ready` no longer stall behind a database call that gets no answer. Probes queued
+  one behind another, and the default transport retried each timed-out read (with a 60 s request
+  timeout, minutes in all). They now use their own connection with one 3 s attempt per call, share
+  a check in progress, and answer within about 1.5 s, reporting `arango: false` (`/ready`: 503)
+  if the database hasn't replied by then.
+
 - A write conflict while writing entities no longer drops them. The batch was rerun, found its
   turns already stored and skipped the graph, so the memories were saved with no entity links and
   nothing reported it (the one-by-one retry did the same). Each graph write is now retried where it
