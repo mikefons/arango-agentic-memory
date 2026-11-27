@@ -46,6 +46,7 @@ from .extract import (
     Extractor,
     cooccurring_pairs,
     is_io_bound,
+    strip_possessive,
 )
 from .temporal import parse_explicit_time
 from .vector_cache import Entry, entity_vectors
@@ -172,10 +173,10 @@ _LEGAL_SUFFIX = re.compile(
 
 
 def name_key(name: str) -> str:
-    """What makes two entity names the same one: the words, ignoring case, spacing and a
-    trailing legal suffix. The extractor's type is deliberately not part of it, since one
-    name often comes back with different types."""
-    folded = " ".join(name.casefold().split())
+    """What makes two entity names the same one: the words, ignoring case, spacing, a
+    possessive ending and a trailing legal suffix. The extractor's type is deliberately not
+    part of it, since one name often comes back with different types."""
+    folded = strip_possessive(" ".join(name.casefold().split())) or name.casefold()
     return _LEGAL_SUFFIX.sub("", folded).strip(" .,") or folded
 
 

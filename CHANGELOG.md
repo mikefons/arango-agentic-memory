@@ -80,6 +80,12 @@ are versioned together and released from this repository.
 
 ### Changed
 
+- Entity names ignore a possessive ending: "Vertex Foods'" and "Acme's" are "Vertex Foods" and
+  "Acme". So a name that ends that way by nature ("Sotheby's") loses it too.
+- The spaCy extractor no longer makes entities of a fixed list of business shorthand (ARR, CEO,
+  CFO, COO, CRM, CTO, EBITDA, ERP, GAAP, IP, KPI, LOI, MRR, MSA, NDA, NRR, Q&A, SOW, SaaS) or of
+  period labels (FY2025, Q4). The match is exact, so longer names containing one and other
+  acronyms are kept. Entities already stored stay.
 - One name is now one entity per tenant, whatever type the extractor gave it: names match ignoring
   case, spacing and a trailing legal suffix ("Acme", "ACME Inc."), including between new entities
   in one batch. Before, each type made its own entity. The entity keeps its first typed form. A new
