@@ -24,6 +24,7 @@ from ..embedding import Embedder, get_embedder
 from ..embedding_cache import embed_batch_cached
 from ..generation import Generator, get_generator
 from ..models import idempotency_key, utcnow_iso
+from ..repeats import new_op
 from ..security.redact import redact
 from ..telemetry import StageTimer, metrics, span
 from .conflicts import retry_on_conflict
@@ -93,17 +94,25 @@ def _working_expires(now: str) -> str:
 
 # A batch's record in one round trip: both collections, all or nothing. It returns the keys of
 # the episodes that are new (an ignored duplicate has no NEW), which alone feed the graph.
+# A query the driver sent twice (`repeats`) finds its first run's episodes by @op and counts
+# them as new, or their entity links would never be written.
 _INSERT_BATCH = """
+LET resent = (
+  FOR doc IN @episodes
+    LET stored = DOCUMENT(episodes, doc._key)
+    FILTER stored != null AND stored.op == @op
+    RETURN stored._key
+)
 LET fresh = (
   FOR doc IN @episodes
-    INSERT doc INTO episodes OPTIONS { overwriteMode: "ignore" }
+    INSERT MERGE(doc, { op: @op }) INTO episodes OPTIONS { overwriteMode: "ignore" }
     RETURN NEW._key
 )
 LET recorded = (
   FOR doc IN @memories
     INSERT doc INTO memories OPTIONS { overwriteMode: "ignore" }
 )
-RETURN fresh
+RETURN APPEND(resent, fresh)
 """
 
 
@@ -188,7 +197,7 @@ def store_many(
         with timer.stage("insert"):
             cursor = cast(Cursor, retry_on_conflict(partial(
                 db.aql.execute, _INSERT_BATCH,
-                bind_vars={"episodes": episodes, "memories": memories},
+                bind_vars={"episodes": episodes, "memories": memories, "op": new_op()},
             )))
             fresh = {key for key in next(iter(cursor)) if key}
         # Only new episodes feed the graph (a replay must not count twice), once each even if

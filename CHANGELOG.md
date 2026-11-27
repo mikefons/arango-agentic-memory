@@ -167,6 +167,11 @@ are versioned together and released from this repository.
 
 ### Fixed
 
+- A write sent again after a dropped connection no longer counts twice. Entity, relationship
+  and tool-step counts carry an id per write and ignore a repeat (documents gain an `ops` field
+  with the last 16 ids, episodes written in batches an `op` field). A repeated batch insert no
+  longer leaves its turns without graph links, a repeated queue claim takes the same intents,
+  and a repeated enqueue no longer reports a unique constraint violation. No migration needed.
 - A dropped connection can no longer skip rows from a query result. Asking a cursor for its
   next batch was sent again after a broken connection, and the database answered with the batch
   after the lost one, without an error. That request now raises `CursorBatchLost`, except on

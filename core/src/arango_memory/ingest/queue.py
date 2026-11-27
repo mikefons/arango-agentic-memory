@@ -28,6 +28,7 @@ from arango.database import StandardDatabase
 
 from ..client import DatabasePool
 from ..models import idempotency_key, utcnow_iso
+from ..repeats import new_op
 from ..schema.collections import WRITE_QUEUE_COLLECTION
 
 
@@ -174,23 +175,25 @@ def _to_intent(kind: str, data: dict[str, Any]) -> Intent:
 
 
 # Claim the oldest free (unleased or lease-expired) intent and lease it, atomically.
-# OPTIONS{exclusive} serialises claims so two workers can't grab the same intent.
+# OPTIONS{exclusive} serialises claims so two workers can't grab the same intent. A claim the
+# driver sent twice (`repeats`) takes the same intents again, found by @op, instead of leasing
+# more and leaving the first ones to wait out their lease.
 _CLAIM = """
 FOR d IN @@coll
-  FILTER d.leased_until == null OR d.leased_until < @now
+  FILTER d.leased_until == null OR d.leased_until < @now OR d.claim_op == @op
   SORT d.enqueued_at
   LIMIT 1
-  UPDATE d WITH { leased_until: @lease_until } IN @@coll OPTIONS { exclusive: true }
+  UPDATE d WITH { leased_until: @lease_until, claim_op: @op } IN @@coll OPTIONS { exclusive: true }
   RETURN NEW
 """
 
 # Same lease, for a batch: the `limit` oldest free intents in one round trip.
 _CLAIM_MANY = """
 FOR d IN @@coll
-  FILTER d.leased_until == null OR d.leased_until < @now
+  FILTER d.leased_until == null OR d.leased_until < @now OR d.claim_op == @op
   SORT d.enqueued_at
   LIMIT @limit
-  UPDATE d WITH { leased_until: @lease_until } IN @@coll OPTIONS { exclusive: true }
+  UPDATE d WITH { leased_until: @lease_until, claim_op: @op } IN @@coll OPTIONS { exclusive: true }
   RETURN NEW
 """
 
@@ -239,7 +242,9 @@ class ArangoQueue:
             "leased_until": None,
         }
         with self._pool.lease() as db:
-            db.collection(WRITE_QUEUE_COLLECTION).insert(doc, silent=True)
+            # a resent insert (`transport`) finds its own document: not an error
+            db.collection(WRITE_QUEUE_COLLECTION).insert(
+                doc, overwrite_mode="ignore", silent=True)
 
     def claim(self) -> Claim | None:
         now = utcnow_iso()
@@ -247,7 +252,8 @@ class ArangoQueue:
             datetime.fromisoformat(now) + timedelta(seconds=self._lease_seconds)
         ).isoformat()
         bind: dict[str, Any] = {
-            "@coll": WRITE_QUEUE_COLLECTION, "now": now, "lease_until": lease_until
+            "@coll": WRITE_QUEUE_COLLECTION, "now": now, "lease_until": lease_until,
+            "op": new_op(),
         }
         with self._pool.lease() as db:
             rows = list(cast(Cursor, db.aql.execute(_CLAIM, bind_vars=bind)))
@@ -263,7 +269,7 @@ class ArangoQueue:
         ).isoformat()
         bind: dict[str, Any] = {
             "@coll": WRITE_QUEUE_COLLECTION, "now": now, "lease_until": lease_until,
-            "limit": limit,
+            "limit": limit, "op": new_op(),
         }
         with self._pool.lease() as db:
             rows = list(cast(Cursor, db.aql.execute(_CLAIM_MANY, bind_vars=bind)))
