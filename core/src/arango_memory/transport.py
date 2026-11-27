@@ -7,11 +7,17 @@ through here, so each failure is logged with what kind it was: `ConnectTimeout` 
 connection), `ReadTimeout` (connected, no answer) or `ConnectionError` (the connection broke).
 (Underneath, urllib3 also retries failed connects and warns about those itself.) Host names,
 bind values and documents are never logged.
+
+One request is never sent again once it may have arrived: asking a cursor for its next batch.
+The database moves on when it answers, so asking twice skips a batch without any error. That
+call raises `CursorBatchLost` instead, unless the cursor was opened with `allow_retry`, which
+lets the same batch be asked for again.
 """
 
 from __future__ import annotations
 
 import json
+import re
 import time
 from collections.abc import MutableMapping
 from typing import Any
@@ -21,11 +27,20 @@ from arango.http import DefaultHTTPClient
 from arango.response import Response
 from requests import ConnectionError as RequestsConnectionError
 from requests import ConnectTimeout, Session
+from requests.adapters import HTTPAdapter
 from urllib3.exceptions import ReadTimeoutError
 
 from .telemetry.logging import logger
 
 _QUERY_CHARS = 120
+# The next batch of a cursor with no batch id in the path: not repeatable.
+_NEXT_BATCH = re.compile(r"/_api/cursor/[^/]+$")
+
+
+class CursorBatchLost(ConnectionError):
+    """The connection broke while fetching a cursor's next batch; run the query again.
+
+    Built on the builtin `ConnectionError`, not requests', which the driver would resend."""
 
 
 def _kind(exc: BaseException) -> str:
@@ -77,6 +92,15 @@ class ObservedHTTPClient(DefaultHTTPClient):
         self.slow_seconds = slow_seconds  # 0 = don't report slow calls
         self.resend_dropped = resend_dropped  # send once more if the connection broke
 
+    def create_session(self, host: str) -> Session:
+        session = super().create_session(host)
+        for adapter in session.adapters.values():
+            # urllib3 resends after other errors (a TLS connection ending early) whatever the
+            # method. Raise them instead, so every resend is logged and goes through here.
+            assert isinstance(adapter, HTTPAdapter)
+            adapter.max_retries = adapter.max_retries.new(other=0)
+        return session
+
     def send_request(
         self,
         session: Session,
@@ -91,6 +115,10 @@ class ObservedHTTPClient(DefaultHTTPClient):
         try:
             return self._attempt(*request)
         except RequestsConnectionError as exc:
+            if isinstance(exc, ConnectTimeout):
+                raise  # nothing was sent
+            if method.lower() in ("post", "put") and _NEXT_BATCH.search(urlsplit(url).path):
+                raise CursorBatchLost("connection lost while fetching a cursor batch") from exc
             if not (self.resend_dropped and _dropped(exc)):
                 raise
         return self._attempt(*request)

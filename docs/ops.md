@@ -711,6 +711,13 @@ urllib3 also retries a failed connect inside an attempt and prints its own `Retr
 warning, which does name the host. With the defaults, an unreachable database takes over two
 minutes to raise an error.
 
+**What is sent again.** After a broken connection the driver sends the request again, even if
+the database had already received it. A request for a cursor's next batch is the exception: it
+raises `CursorBatchLost`, because asking twice would skip rows. Writes are still sent again,
+so a connection that breaks after a write has run can count it twice (entity mention counts and
+beliefs, relationship corroboration, tool-step use counts) or report a plain insert as a
+duplicate that in fact succeeded.
+
 ---
 
 ## Schema & upgrades
