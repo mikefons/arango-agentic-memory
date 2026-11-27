@@ -39,11 +39,11 @@ const SYNTHESIS_TASK =
 // claim caps this is plenty of drain window; the barrier is best-effort anyway (see flushStep).
 const FLUSH_TIMEOUT_MS = Number(process.env.DILIGENCE_FLUSH_MS ?? 30000);
 
-// Claims go through the core's async write queue (drained at the flush barriers). Opt in to
-// synchronous commits with DILIGENCE_SYNC_WRITES=1 — but don't, on the hosted core: every sync
-// store forces an ArangoSearch view sync, and 16 concurrent ones saturated the core (all four
-// specialists and the red-team timed out, 2026-11-20). The proper fix is a multi-worker write
-// queue in the core (ROADMAP WQ-1); until then the async queue plus a patient flush is safer.
+// Claims go through the core's async write queue (drained at the flush barriers), which the core
+// commits in batches (ROADMAP WQ-1, PF-1b). DILIGENCE_SYNC_WRITES=1 opts in to synchronous
+// commits instead; leave it off on a hosted core. Each sync store forces an ArangoSearch view
+// sync, and 16 concurrent ones saturated the core (all four specialists and the red-team timed
+// out, 2026-11-20). The core has changed since, but that setting has not been re-tested.
 const SYNC_WRITES = process.env.DILIGENCE_SYNC_WRITES === "1";
 
 /** Run one specialist with the real extractor + store (drained at flush:specialists). */

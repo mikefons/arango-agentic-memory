@@ -1728,6 +1728,7 @@ converges.
 **Rollout.** Ship with the defaults at 1. Set `WRITE_BATCH_SIZE=16` on the Railway core, run the
 Diligence Room live, and read the flush log lines (`drained` or `N still queued`), the step timings
 and `/health` `write.*`. Remove the demo's flush-cap workarounds only after that run is clean.
+(Reviewed after it and kept: see PF-1b's follow-ups.)
 
 **Size.** WQ-1b: M (about 200 lines plus tests). WQ-1a: M, only if the batch result says so.
 
@@ -1938,7 +1939,12 @@ error from the core. So no run lost entity links to the conflict bug fixed in #3
 don't show whether concurrency 4 is in effect.
 
 **Follow-ups (not part of this item).**
-- Remove the demo's flush-cap workarounds, which waited for a clean run.
+- The demo's flush-cap workarounds (WQ-1 rollout note): reviewed 2026-11-27 after the clean run,
+  and kept. The flush barrier waits at most 30 s and then carries on (#195), which still stops a
+  stuck flush from stalling a durable run; recent flushes took about 8 s or less. The claim caps
+  and model-call timeout (#194) are for a model call that wedged, not for write speed. The core
+  timeouts and the single retry of the briefing read only act when something is slow.
+  `DILIGENCE_SYNC_WRITES` stays off and has not been re-tested.
 - The hosted core appears to run the `fake` extractor: extraction took 0.2 ms and every entity is
   a `Concept`, including words such as "No" and "Dec". `EXTRACTION_PROVIDER` is not set on Railway
   (owner, 2026-11-26), and the image installs no extraction extra, so `spacy` needs an image change
