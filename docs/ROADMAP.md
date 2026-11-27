@@ -1977,6 +1977,29 @@ don't show whether concurrency 4 is in effect.
     ("Northwind Robotics" and "Northwind", "Brayton & Kell" with and without "LLP"), wrong types
     (Orion Retail and Ridgeline as locations) and non-entities such as "Q&A" and "NRR". Remove the
     variable to switch back; entities already written stay.
+- Duplicate entities: ✅ **one entity per name** (#320). Names match ignoring case, spacing and a
+  trailing legal suffix, whatever the type, including between new entities in one batch.
+  - On the 41 names of the first spaCy run, with 10 pairs judged to be duplicates: the embedding
+    threshold found 2 with no wrong merge, a Jaro-Winkler score of 0.80 or more (the single-record
+    scorer of `arango-entity-resolution`, reimplemented) 9 with 36 wrong, and this rule 3 with none.
+    Adding short forms that fit only one longer name found 8 with 1 wrong, but at write time that
+    depends on which names have arrived. The library itself was not adopted: it requires
+    GPL-licensed packages and works as a batch pipeline.
+  - **Hosted run after #320 (2026-11-27, hard-reset room).** Verdict "pass", 13 contradictions,
+    102 claims, 39 entities and 82 relationships, **no same-name duplicates**. Flushes 4.6 s and
+    3.4 s, `write_many.entities` p50 1106 ms, no warning, error or write conflict in the logs.
+    One run; timing changes aren't attributed to the rule.
+  - **Still duplicated or noisy:** short forms ("Halcyon", "Northwind", "Ridgeline", "Cole"), a
+    trailing possessive ("Vertex Foods'"), combined names ("Orion and Vertex") and non-entities
+    ("LOI", "NRR"). Merging short forms belongs in a consolidation pass, which first needs a real
+    merge: today's `supersede` retires the loser without moving its edges, so graph retrieval
+    stops using them.
+- Health probes: ✅ **no longer stall** (#321). In that run `/health` didn't answer from 13:28:07
+  to 13:29:09 UTC while other requests were normal. Probes queued on one connection, and the
+  driver retries a timed-out read (a 2 s timeout took 42 s over 12 attempts against a silent
+  server; the hosted timeout is 60 s). Probes now try once with a 3 s timeout, share a check and
+  answer within about 1.5 s. That this explains the hosted stall is inferred; why the call hung is
+  unknown. After the deploy, 10 rounds of `/health` and `/ready` answered in 0.24–0.39 s.
 
 ### PF-1c — Stop returning embeddings from the retrieval arms (PR 2)  ✅ #304
 
