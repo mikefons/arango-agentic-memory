@@ -19,11 +19,28 @@ from urllib.parse import urlsplit
 
 from arango.http import DefaultHTTPClient
 from arango.response import Response
-from requests import Session
+from requests import ConnectionError as RequestsConnectionError
+from requests import ConnectTimeout, Session
+from urllib3.exceptions import ReadTimeoutError
 
 from .telemetry.logging import logger
 
 _QUERY_CHARS = 120
+
+
+def _kind(exc: BaseException) -> str:
+    """What failed. requests calls a read that timed out a `ConnectionError` when urllib3 was
+    allowed to retry the method (a GET, say); report it as the `ReadTimeout` it is."""
+    wrapped = exc.args[0] if isinstance(exc, RequestsConnectionError) and exc.args else None
+    if isinstance(getattr(wrapped, "reason", None), ReadTimeoutError):
+        return "ReadTimeout"
+    return type(exc).__name__
+
+
+def _dropped(exc: BaseException) -> bool:
+    """A connection that broke or was refused, as opposed to one that timed out."""
+    return (isinstance(exc, RequestsConnectionError) and not isinstance(exc, ConnectTimeout)
+            and _kind(exc) != "ReadTimeout")
 
 
 def _root_cause(exc: BaseException) -> str:
@@ -53,10 +70,12 @@ class ObservedHTTPClient(DefaultHTTPClient):
         connect_timeout: float,
         slow_seconds: float,
         retry_attempts: int = 3,
+        resend_dropped: bool = False,
     ) -> None:
         super().__init__(request_timeout=request_timeout, retry_attempts=retry_attempts)
         self.connect_timeout = min(connect_timeout, request_timeout)
         self.slow_seconds = slow_seconds  # 0 = don't report slow calls
+        self.resend_dropped = resend_dropped  # send once more if the connection broke
 
     def send_request(
         self,
@@ -67,6 +86,24 @@ class ObservedHTTPClient(DefaultHTTPClient):
         params: MutableMapping[str, str] | None = None,
         data: Any = None,
         auth: tuple[str, str] | None = None,
+    ) -> Response:
+        request = (session, method, url, headers, params, data, auth)
+        try:
+            return self._attempt(*request)
+        except RequestsConnectionError as exc:
+            if not (self.resend_dropped and _dropped(exc)):
+                raise
+        return self._attempt(*request)
+
+    def _attempt(
+        self,
+        session: Session,
+        method: str,
+        url: str,
+        headers: MutableMapping[str, str] | None,
+        params: MutableMapping[str, str] | None,
+        data: Any,
+        auth: tuple[str, str] | None,
     ) -> Response:
         started = time.perf_counter()
 
@@ -87,7 +124,7 @@ class ObservedHTTPClient(DefaultHTTPClient):
             )
         except Exception as exc:
             logger.warning("database call failed",
-                           extra=details(reason=type(exc).__name__, cause=_root_cause(exc)))
+                           extra=details(reason=_kind(exc), cause=_root_cause(exc)))
             raise
         if self.slow_seconds and time.perf_counter() - started >= self.slow_seconds:
             logger.warning("slow database call", extra=details(status=response.status_code))
