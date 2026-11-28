@@ -2075,9 +2075,11 @@ don't show whether concurrency 4 is in effect.
     first was 5.0 s the run before; why isn't known). All 177 logged requests returned 200, and
     no failed or slow database call was logged, including the TLS error on an early batch
     insert seen in the two runs before. One run, so it doesn't show the stall is gone.
-- 502s while a deploy starts: ⬜ **open**, a Railway setting. The service has no healthcheck
-  path (checked 2026-11-27). Set it to `/ready`, with `PORT=8080` (ops.md "Deploys"). A config
-  file in the repo wasn't used: Railway has deprecated it.
+- 502s while a deploy starts: ✅ **healthcheck set** (2026-11-27). The service had no
+  healthcheck path, and the deploy before the change answered its first probes with 502. It now
+  has `/ready`, with `PORT=8080` (ops.md "Deploys"). In the deploy that applied the setting, 60
+  probes of `/ready` about a second apart all returned 200. That is one deploy, of unchanged
+  code. A config file in the repo wasn't used: Railway has deprecated it.
 - Short forms ("Ridgeline" beside "Ridgeline Ventures"): ⬜ **open, design proposed, not
   built.** A Dream State pass, off by default, merges an entity into a longer name when its
   words begin exactly one live name of a compatible type in the tenant. "Northwind" fits both
