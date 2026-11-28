@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+import pytest
+
 from arango_memory.ingest.extract import ExtractedEntity, SpacyExtractor
 
 
@@ -71,6 +73,36 @@ def test_a_comma_list_of_names_is_split() -> None:
 def test_document_words_are_dropped_only_alone() -> None:
     assert _names("Management", "Letter of Intent", "the Management", "Acme Asset Management",
                   "Acme Letter of Intent") == ["Acme Asset Management", "Acme Letter of Intent"]
+
+
+def test_an_article_does_not_keep_a_document_word() -> None:
+    assert _names("a Letter of Intent", "A Management", "an LOI", "a", "An Post") == ["An Post"]
+
+
+def test_a_cut_off_bracket_is_not_part_of_a_name() -> None:
+    assert _names("Northwind (Series", "Acme Robotics (Series B diligence", "(Series",
+                  "Initech (UK) Labs") == ["Northwind", "Acme Robotics", "Initech (UK) Labs"]
+
+
+@pytest.mark.parametrize(
+    ("span", "found"),
+    [
+        ("CFO Marcus Cole", [("Marcus Cole", "Person")]),
+        ("Northwind CFO Marcus Cole",
+         [("Northwind", "Organization"), ("Marcus Cole", "Person")]),
+        ("Northwind's CEO Dana Reyes",
+         [("Northwind", "Organization"), ("Dana Reyes", "Person")]),
+        ("the Interim CFO Marcus Cole", [("Marcus Cole", "Person")]),
+        ("CEO & CFO Marcus Cole", [("Marcus Cole", "Person")]),
+        # one word, or none, after the title: not read as a person
+        ("CFO Partners", [("CFO Partners", "Organization")]),
+        ("Northwind CFO", [("Northwind", "Organization")]),
+        ("CTO of Northwind", [("CTO of Northwind", "Organization")]),
+    ],
+)
+def test_a_name_is_split_at_a_job_title(span: str, found: list[tuple[str, str]]) -> None:
+    entities = SpacyExtractor(nlp=_Pipeline((span, "ORG"))).extract("x")
+    assert [(e.name, e.label) for e in entities] == found
 
 
 def test_possessive_endings_are_not_part_of_a_name() -> None:

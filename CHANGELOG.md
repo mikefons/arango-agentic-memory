@@ -20,7 +20,10 @@ are versioned together and released from this repository.
   any model call. There is no undo; see DESIGN §12.
 - The spaCy extractor no longer makes one entity of two names set apart by a spaced slash or a
   comma ("Acme Foods, Globex Retail"), trims trailing business shorthand from a name ("Acme
-  CFO" becomes "Acme"), and drops "Management" and "Letter of Intent" when they stand alone.
+  CFO" becomes "Acme"), and drops "Management" and "Letter of Intent" when they stand alone,
+  with or without an article ("a Letter of Intent"). It also cuts a name at a bracket the model
+  left unclosed ("Acme (Series" becomes "Acme"), and splits a name at CEO, CFO, COO or CTO when
+  two or more words follow ("Acme CFO Jane Doe" becomes "Acme" and the person "Jane Doe").
   Entities already stored are not changed.
 - The core logs every database call that fails, and every one that takes
   `ARANGO_SLOW_CALL_SECONDS` (default 5, 0 = off) or longer, with the kind of failure, the

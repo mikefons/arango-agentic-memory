@@ -70,6 +70,14 @@ _JARGON = frozenset({
 # Document words it takes for organizations. Dropped only when they are the whole name, so
 # "Acme Asset Management" is kept.
 _GENERIC = frozenset({"Letter of Intent", "Management"})
+_ARTICLES = frozenset({"A", "An", "The", "a", "an", "the"})
+# Job titles it reads into a name ("Acme CFO Jane Doe"). A name of two words or more after one
+# is taken for the person; one word ("CFO Partners") leaves the span alone.
+_TITLES = frozenset({"CEO", "CFO", "COO", "CTO"})
+# Words that belong to the title when they come right before it ("Interim CFO Jane Doe").
+_TITLE_LEADS = _TITLES | _ARTICLES | frozenset(
+    {"&", "Acting", "Chief", "Co", "Deputy", "Former", "Incoming", "Interim", "New", "and"}
+)
 _PERIOD = re.compile(r"(?:FY|Q[1-4])(?: ?(?:\d{2}|\d{4}))?")  # FY, FY2025, Q4, Q4 25
 
 
@@ -90,16 +98,36 @@ def _listed_names(span: str) -> list[str]:
     return parts if all(len(part.split()) > 1 for part in parts) else [span]
 
 
+def _split_at_title(span: str) -> list[tuple[str, str | None]]:
+    """(name span, label) pairs: "Acme CFO Jane Doe" is "Acme" and the person "Jane Doe". A
+    label of None keeps the model's."""
+    words = span.split()
+    for i, word in enumerate(words):
+        after = words[i + 1 :]
+        if word in _TITLES and len(after) > 1 and all(
+            w[:1].isupper() and w not in _JARGON for w in after[:2]
+        ):
+            before = words[:i]
+            while before and before[-1] in _TITLE_LEADS:
+                before.pop()
+            return [(" ".join(before), None), (" ".join(after), "Person")]
+    return [(span, None)]
+
+
 def _entity_name(span: str) -> str | None:
-    """The name in a span, without a possessive ending or trailing shorthand. None if nothing
-    but shorthand, a reporting period or a document word is there."""
+    """The name in a span, without a possessive ending, trailing shorthand or a bracket the
+    model cut off ("Acme (Series"). None if nothing but an article, shorthand, a reporting
+    period or a document word is there."""
+    if span.count("(") > span.count(")"):
+        span = span.rpartition("(")[0]
     words = strip_possessive(span).split()
-    keep = 2 if words[:1] in (["the"], ["The"]) else 1  # never trim down to the article
+    keep = 2 if words and words[0] in _ARTICLES else 1  # never trim down to the article
     while len(words) > keep and (words[-1] in _JARGON or _PERIOD.fullmatch(words[-1])):
         words.pop()
     name = strip_possessive(" ".join(words))
-    bare = name.removeprefix("the ").removeprefix("The ")
-    if not name or bare in _JARGON or bare in _GENERIC or _PERIOD.fullmatch(bare):
+    parts = name.split()
+    bare = " ".join(parts[1:] if parts and parts[0] in _ARTICLES else parts)
+    if not bare or bare in _JARGON or bare in _GENERIC or _PERIOD.fullmatch(bare):
         return None
     return name
 
@@ -160,9 +188,10 @@ class FakeExtractor:
 class SpacyExtractor:
     """spaCy NER (tier A; behind the `extraction-spacy` extra). No typed relations.
 
-    Quantities, times, business shorthand and a few document words are dropped, a possessive
-    ending or trailing shorthand is not part of a name, a comma list of names is split, and a
-    spaced dash or slash is read as a sentence break. The pipeline is injectable so that logic
+    Quantities, times, business shorthand and a few document words are dropped; a possessive
+    ending, trailing shorthand or a cut-off bracket is not part of a name; a comma list of names
+    is split, as is a name at a job title; and a spaced dash or slash is read as a sentence
+    break. The pipeline is injectable so that logic
     is testable without spaCy."""
 
     io_bound = False
@@ -177,8 +206,12 @@ class SpacyExtractor:
             if ent.label_ in _SPACY_VALUE_LABELS:
                 continue
             label = _SPACY_LABELS.get(ent.label_, "Concept")
-            for name in filter(None, map(_entity_name, _listed_names(ent.text))):
-                seen.setdefault((name, label), ExtractedEntity(name=name, label=label))
+            for listed in _listed_names(ent.text):
+                for span, titled in _split_at_title(listed):
+                    name = _entity_name(span)
+                    if name is not None:
+                        kind = titled or label
+                        seen.setdefault((name, kind), ExtractedEntity(name=name, label=kind))
         return list(seen.values())
 
     def extract_relations(
