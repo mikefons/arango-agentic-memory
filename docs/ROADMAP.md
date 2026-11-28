@@ -2069,7 +2069,12 @@ don't show whether concurrency 4 is in effect.
   60.7 s insert with no error. That it is what happened there is inferred. With #324 the same
   takes 11.4 s and is logged. Connections idle for over 30 s are now reopened before use
   (`ARANGO_MAX_IDLE_SECONDS`), and the same test with 35 s idle took 0.7 s. A connection that
-  dies in under 30 s is still left to the timeouts. Not yet run on the hosted core.
+  dies in under 30 s is still left to the timeouts.
+  - **Hosted run after #330 (2026-11-27, hard-reset room).** Verdict "pass", 10
+    contradictions, 105 claims, 20 entities and 40 relationships. Flushes 7.7 s and 2.4 s (the
+    first was 5.0 s the run before; why isn't known). All 177 logged requests returned 200, and
+    no failed or slow database call was logged, including the TLS error on an early batch
+    insert seen in the two runs before. One run, so it doesn't show the stall is gone.
 - 502s while a deploy starts: ⬜ **open**, a Railway setting. The service has no healthcheck
   path (checked 2026-11-27). Set it to `/ready`, with `PORT=8080` (ops.md "Deploys"). A config
   file in the repo wasn't used: Railway has deprecated it.
