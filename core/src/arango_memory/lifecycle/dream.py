@@ -26,6 +26,7 @@ from ..config import settings
 from ..generation import Generator, get_generator
 from ..models import utcnow_iso
 from ..telemetry import metrics
+from ..telemetry.logging import logger
 from .conflict import supersede
 from .facts import run_fact_keys
 from .short_forms import merge_short_forms
@@ -108,9 +109,11 @@ def run_dream_state(
     )
 
     # Before the review, so it sees (and summarises) the merged entities. No model call.
-    merged = (
-        merge_short_forms(db, tenant_id=tenant_id) if settings.merge_short_forms else 0
-    )
+    merged = 0
+    if settings.merge_short_forms:
+        merged = merge_short_forms(db, tenant_id=tenant_id)
+        # Logged here, so a later failing model call doesn't lose the count.
+        logger.info("short names merged", extra={"merged": merged})
 
     bind: dict[str, Any] = {"tenant_id": tenant_id, "threshold": threshold}
     candidates = list(cast(Cursor, db.aql.execute(_CANDIDATES, bind_vars=bind)))

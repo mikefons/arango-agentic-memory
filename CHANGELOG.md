@@ -16,7 +16,8 @@ are versioned together and released from this repository.
 - Merging short entity names, behind `MERGE_SHORT_FORMS` (default off). Dream State merges a
   one-word name into the one longer name that begins with it ("Ridgeline" into "Ridgeline
   Ventures"), moving its counts and links, and later writes of the short name follow.
-  `/v1/dream` reports the number as `merged`. There is no undo; see DESIGN §12.
+  `/v1/dream` reports the number as `merged`, and the core logs it (`short names merged`) before
+  any model call. There is no undo; see DESIGN §12.
 - The spaCy extractor no longer makes one entity of two names set apart by a spaced slash or a
   comma ("Acme Foods, Globex Retail"), trims trailing business shorthand from a name ("Acme
   CFO" becomes "Acme"), and drops "Management" and "Letter of Intent" when they stand alone.
