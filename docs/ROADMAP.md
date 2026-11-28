@@ -2088,8 +2088,14 @@ don't show whether concurrency 4 is in effect.
   acronyms. On the 41 names of the first spaCy run it makes 3 merges, 4 once the composite
   names filtered since #328 are removed, all matching the earlier duplicate list; on the 20
   names of the last hosted run, 1. Those guards were chosen after seeing these names, so this
-  is not an independent test. "Northwind" stays, as it fits two names. Not run on the hosted
-  core.
+  is not an independent test. "Northwind" stays, as it fits two names.
+  Turned on for the hosted core 2026-11-28. In the first run after the pass logged its count
+  (#334), Dream State returned 200 in 19.5 s and logged `short names merged` with 2. Which two
+  names merged isn't logged, so neither merge has been checked. All logged requests returned
+  200, and no failed or slow database call was logged. Left in that run's graph: "Vertex"
+  beside "Vertex Foods" (created without a salience score, so apparently after the pass),
+  "CFO Marcus Cole" beside "Marcus Cole", the cut-off "Northwind (Series", and "a Letter of
+  Intent".
 
 ### PF-1c — Stop returning embeddings from the retrieval arms (PR 2)  ✅ #304
 
