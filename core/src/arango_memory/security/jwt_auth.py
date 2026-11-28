@@ -42,20 +42,26 @@ def _jwks_uri() -> str:
     return f"{settings.oidc_issuer.rstrip('/')}/.well-known/jwks.json"
 
 
+def new_jwks_client(uri: str) -> jwt.PyJWKClient:
+    """A JWKS client with the unknown-`kid` refetch cooldown and fetch timeout applied. Every
+    verifier of IdP tokens (the core and the MCP server) builds its client through this."""
+    return jwt.PyJWKClient(
+        uri,
+        cooldown_duration=_JWKS_REFRESH_COOLDOWN_SECONDS,
+        timeout=_JWKS_FETCH_TIMEOUT_SECONDS,
+    )
+
+
 def _jwks_client() -> jwt.PyJWKClient:
     uri = _jwks_uri()
     client = _jwks_clients.get(uri)
     if client is None:
-        client = jwt.PyJWKClient(
-            uri,
-            cooldown_duration=_JWKS_REFRESH_COOLDOWN_SECONDS,
-            timeout=_JWKS_FETCH_TIMEOUT_SECONDS,
-        )
+        client = new_jwks_client(uri)
         _jwks_clients[uri] = client
     return client
 
 
-def _claim_tokens(value: object) -> list[str]:
+def claim_tokens(value: object) -> list[str]:
     """Normalize a claim value to tokens: a space-delimited string (OAuth2 `scope`) or
     a list (roles)."""
     if isinstance(value, str):
@@ -65,9 +71,9 @@ def _claim_tokens(value: object) -> list[str]:
     return []
 
 
-def _scope_from_claim(value: object) -> str:
+def scope_from_claim(value: object) -> str:
     """Map the scope/roles claim to read|write|consolidate (highest wins; MA-7)."""
-    tokens = [t.lower() for t in _claim_tokens(value)]
+    tokens = [t.lower() for t in claim_tokens(value)]
     if any("consolidate" in t for t in tokens):
         return "consolidate"
     return "write" if any("write" in t for t in tokens) else "read"
@@ -77,7 +83,7 @@ def _agents_from_claim(claims: dict[str, object]) -> tuple[str, ...] | None:
     """Map the configured agent claim (MA-7) to an allow-list, or None (any agent)."""
     if settings.oidc_agent_claim is None:
         return None
-    tokens = _claim_tokens(claims.get(settings.oidc_agent_claim))
+    tokens = claim_tokens(claims.get(settings.oidc_agent_claim))
     return tuple(tokens) if tokens else None
 
 
@@ -111,7 +117,7 @@ def verify_jwt(token: str) -> Principal:
             detail=f"token missing tenant claim '{settings.oidc_tenant_claim}'",
             headers=_UNAUTHORIZED,
         )
-    scope = _scope_from_claim(claims.get(settings.oidc_scope_claim))
+    scope = scope_from_claim(claims.get(settings.oidc_scope_claim))
     return Principal(
         tenant_id=str(tenant), scope=scope, agent_ids=_agents_from_claim(claims)
     )
