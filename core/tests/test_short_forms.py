@@ -330,15 +330,38 @@ def test_report_knows_moved_links_the_text_does_not_show(db: StandardDatabase) -
     assert _only_merge(db)["samples"] == ["then RIDGELINE met Orion."]
 
 
-def test_report_hides_a_merge_whose_memories_are_forgotten(db: StandardDatabase) -> None:
-    _write(db, "t")
-    merge_short_forms(db, tenant_id="t")
+def _forget(db: StandardDatabase, *texts: str) -> None:
     keys = list(db.aql.execute(  # type: ignore[arg-type]
         "FOR m IN memories FILTER m.tenant_id == 't' AND m.text IN @texts RETURN m._key",
-        bind_vars={"texts": list(_TURNS[1:])},
+        bind_vars={"texts": list(texts)},
     ))
-    assert forget_memories(db, tenant_id="t", memory_keys=keys) == 2
+    assert forget_memories(db, tenant_id="t", memory_keys=keys) == len(texts)
+
+
+def test_report_lists_a_merge_with_no_sample_to_show(db: StandardDatabase) -> None:
+    _write(db, "t")
+    merge_short_forms(db, tenant_id="t")
+    # links as an earlier version moved them, unmarked; what is left names both forms
+    db.aql.execute("FOR e IN mentions UPDATE e WITH { merged_short: null } IN mentions")
+    _forget(db, *_TURNS[1:])
+    merge = _only_merge(db)
+    assert merge["samples"] == [] and merge["into_samples"] == [_TURNS[0]]
+
+
+def test_report_hides_a_merge_whose_name_is_in_no_readable_memory(db: StandardDatabase) -> None:
+    _write(db, "t")
+    merge_short_forms(db, tenant_id="t")
+    _forget(db, *_TURNS)
     assert merge_report(db, tenant_id="t") == []
+
+
+def test_report_marks_a_merge_whose_longer_name_was_retired(db: StandardDatabase) -> None:
+    _write(db, "t")
+    merge_short_forms(db, tenant_id="t")
+    assert _only_merge(db)["into_retired_at"] is None
+    db.collection("entities").update(
+        {"_key": _entity(db, "t", "Ridgeline Ventures")["_key"], "invalid_at": "2026-01-02"})
+    assert _only_merge(db)["into_retired_at"] == "2026-01-02"
 
 
 @pytest.mark.parametrize(

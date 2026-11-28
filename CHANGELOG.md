@@ -14,7 +14,9 @@ are versioned together and released from this repository.
 ### Added
 
 - `GET /v1/entities/merges` lists the short names merged into longer ones, with memories using
-  each name, so a merge can be judged. A credential bound to agents sees only their memories.
+  each name, so a merge can be judged. A merge is listed even when no sample is found, and
+  marked if the longer entity has since been retired. A credential bound to agents sees only
+  their memories.
   Moved memory links now record the short name's entity (`merged_short`).
 - Merging short entity names, behind `MERGE_SHORT_FORMS` (default off). Dream State merges a
   one-word name into the one longer name that begins with it ("Ridgeline" into "Ridgeline
