@@ -118,6 +118,61 @@ IN relates_to
 """
 
 
+# Merged pairs with the memories to judge them by. A pair is listed only while the caller can
+# still read a memory using the short name, so forgotten or hidden text doesn't surface a name.
+# `samples`: memories whose link the merge moved, or that use the short name without the longer
+# one (written since). `into_samples`: what the longer name refers to.
+_REPORT = """
+FOR s IN entities
+  FILTER s.tenant_id == @tenant_id AND s.merged_into != null
+  LET t = DOCUMENT(entities, s.merged_into)
+  FILTER t != null AND t.tenant_id == @tenant_id AND t.invalid_at == null
+  LET samples = (
+    FOR m, link IN 1..1 INBOUND t._id mentions
+      FILTER m.tenant_id == @tenant_id AND m.invalid_at == null
+      FILTER @agent_ids == null OR m.agent_id IN @agent_ids
+        OR LENGTH(FOR p IN @agent_prefixes FILTER STARTS_WITH(m.agent_id, p) RETURN 1) > 0
+      FILTER link.merged_short == s._key
+        OR (CONTAINS(m.text, s.name) AND NOT CONTAINS(m.text, t.name))
+      SORT NOT_NULL(m.event_time, m.created_at) DESC, m._key
+      LIMIT @samples
+      RETURN m.text)
+  FILTER LENGTH(samples) > 0
+  LET into_samples = (
+    FOR m IN 1..1 INBOUND t._id mentions
+      FILTER m.tenant_id == @tenant_id AND m.invalid_at == null
+      FILTER @agent_ids == null OR m.agent_id IN @agent_ids
+        OR LENGTH(FOR p IN @agent_prefixes FILTER STARTS_WITH(m.agent_id, p) RETURN 1) > 0
+      FILTER CONTAINS(m.text, t.name)
+      SORT NOT_NULL(m.event_time, m.created_at) DESC, m._key
+      LIMIT @samples
+      RETURN m.text)
+  SORT s.invalid_at DESC, s._key
+  LIMIT @limit
+  RETURN { id: s._key, name: s.name, into_id: t._key, into_name: t.name,
+           merged_at: s.invalid_at, samples, into_samples }
+"""
+
+
+def merge_report(
+    db: StandardDatabase,
+    *,
+    tenant_id: str,
+    agent_ids: Sequence[str] | None = None,
+    limit: int = 50,
+    samples: int = 3,
+) -> list[dict[str, Any]]:
+    """The tenant's merged short names, newest first, for judging whether each was right.
+    `agent_ids` is a credential's allow-list (a trailing `*` matches by prefix); None reads
+    every agent's memories."""
+    patterns = None if agent_ids is None else list(agent_ids)
+    return _query(
+        db, _REPORT, tenant_id=tenant_id, limit=limit, samples=samples,
+        agent_ids=None if patterns is None else [p for p in patterns if not p.endswith("*")],
+        agent_prefixes=[p[:-1] for p in patterns or [] if p.endswith("*")],
+    )
+
+
 def _could_follow(word: str) -> bool:
     """Whether a word can be part of a fuller name: "Ventures" can, while "ARR" or "deal"
     make it the name of something else."""
@@ -182,7 +237,9 @@ def _move_links(db: StandardDatabase, collection: str, short: str, target: str) 
     for edge in old:
         if collection == "mentions":
             key = f"{edge['_from'].split('/', 1)[1]}__{target}"
-            moved.append({**edge, "_key": key, "_to": f"entities/{target}"})
+            # `merged_short` lets the merge report show which memories used the short name
+            moved.append(
+                {**edge, "_key": key, "_to": f"entities/{target}", "merged_short": short})
         else:
             key = f"{target}__{edge['_to'].split('/', 1)[1]}"
             moved.append({**edge, "_key": key, "_from": f"entities/{target}"})

@@ -16,7 +16,7 @@ from typing import Any, Literal
 
 import anyio
 from arango.database import StandardDatabase
-from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Request
+from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, field_validator
 
@@ -42,6 +42,7 @@ from ..lifecycle.ontology import (
     reject_proposal,
 )
 from ..lifecycle.salience import compute_centrality
+from ..lifecycle.short_forms import merge_report
 from ..retrieve.enrich import QueryCache
 from ..retrieve.prime import Include, prime
 from ..retrieve.search import AccessSink, force_view_sync, memory_time_key, retrieve
@@ -339,6 +340,20 @@ class EntityResponse(BaseModel):
 
 class EntitiesResponse(BaseModel):
     entities: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class EntityMerge(BaseModel):
+    id: str
+    name: str
+    into_id: str
+    into_name: str
+    merged_at: str
+    samples: list[str]  # memories that used the short name
+    into_samples: list[str]  # memories that use the longer one
+
+
+class MergesResponse(BaseModel):
+    merges: list[EntityMerge] = Field(default_factory=list)
 
 
 class SeedRequest(BaseModel):
@@ -669,6 +684,21 @@ def entities_endpoint(
         db, tenant_id=tenant_id, agent_id=agent_id, label=label, limit=limit
     )
     return EntitiesResponse(entities=rows)
+
+
+def merges_endpoint(
+    request: Request,
+    tenant_id: str,
+    limit: int = Query(50, ge=1, le=200),
+    db: StandardDatabase = Depends(get_db),
+) -> MergesResponse:
+    """Short names merged into longer ones, with memories to judge each merge by (§12)."""
+    _authorize(request, tenant_id=tenant_id)
+    principal = getattr(request.state, "principal", None)
+    # It returns memory text, so a credential bound to some agents reads only theirs.
+    agent_ids = None if principal is None else principal.agent_ids
+    rows = merge_report(db, tenant_id=tenant_id, agent_ids=agent_ids, limit=limit)
+    return MergesResponse(merges=[EntityMerge(**row) for row in rows])
 
 
 def seed_endpoint(
@@ -1055,6 +1085,10 @@ def create_app(client: ArangoMemoryClient | None = None) -> FastAPI:
     )
     app.add_api_route(
         "/v1/entities", entities_endpoint, methods=["GET"], response_model=EntitiesResponse,
+        tags=eg_t,
+    )
+    app.add_api_route(
+        "/v1/entities/merges", merges_endpoint, methods=["GET"], response_model=MergesResponse,
         tags=eg_t,
     )
     app.add_api_route(
