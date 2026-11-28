@@ -147,6 +147,10 @@ lifecycle: `DECAY_LAMBDA` (0.02),
 `DECAY_FLOOR` (0.1),
 `CONSOLIDATION_MENTION_THRESHOLD` (5), `DREAM_BREAKER_THRESHOLD` (0.5),
 `DREAM_DISTILL_MAX_MENTIONS` (20 — most recent memories one entity summary reads),
+`MERGE_SHORT_FORMS` (`false` — Dream State merges a one-word entity name into the one longer name
+that begins with it, "Ridgeline" into "Ridgeline Ventures", and later writes of the short name
+follow; no LLM call. Types are ignored, so it can join different things, and there is no undo.
+See DESIGN §12),
 `FACT_SUPERSESSION` (`false` — GX-2: Dream State links a memory to the older statements it updates,
 one LLM call per new memory with candidates, and retrieval ranks current statements above stale
 ones; also `opts.supersession`), `SUPERSESSION_MIN_SIMILARITY` (0.5 — embedding cosine an older

@@ -2080,13 +2080,16 @@ don't show whether concurrency 4 is in effect.
   has `/ready`, with `PORT=8080` (ops.md "Deploys"). In the deploy that applied the setting, 60
   probes of `/ready` about a second apart all returned 200. That is one deploy, of unchanged
   code. A config file in the repo wasn't used: Railway has deprecated it.
-- Short forms ("Ridgeline" beside "Ridgeline Ventures"): ⬜ **open, design proposed, not
-  built.** A Dream State pass, off by default, merges an entity into a longer name when its
-  words begin exactly one live name of a compatible type in the tenant. "Northwind" fits both
-  "Northwind Robotics" and "Northwind Logistics LLC", so it stays. A merge adds the counts and
-  reliability to the longer entity, moves its mention, produced-by and relationship edges
-  (combining duplicates, dropping self-links), records the short name as an alias that later
-  writes match, and retires the short entity. Each step has to be safe to send twice.
+- Short forms ("Ridgeline" beside "Ridgeline Ventures"): ✅ **merge pass built, off by
+  default** (`MERGE_SHORT_FORMS`; DESIGN §12). The proposed rule, same or unknown type, missed
+  that pair (the extractor typed one an object, the other an organization) and merged
+  "Northwind Robotics" into "Northwind Robotics ARR". The rule built ignores types, takes only
+  one-word short names, and counts only longer names whose added words are capitalised and not
+  acronyms. On the 41 names of the first spaCy run it makes 3 merges, 4 once the composite
+  names filtered since #328 are removed, all matching the earlier duplicate list; on the 20
+  names of the last hosted run, 1. Those guards were chosen after seeing these names, so this
+  is not an independent test. "Northwind" stays, as it fits two names. Not run on the hosted
+  core.
 
 ### PF-1c — Stop returning embeddings from the retrieval arms (PR 2)  ✅ #304
 

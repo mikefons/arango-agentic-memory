@@ -146,6 +146,11 @@ class Settings(BaseSettings):
     # Cap on the memories one distillation reads (most recent first), so a heavily
     # mentioned entity can't push an unbounded prompt at the LLM.
     dream_distill_max_mentions: int = Field(default=20, ge=1)
+    # Dream State merges a one-word name into the one longer name that begins with it
+    # ("Ridgeline" → "Ridgeline Ventures"; the added words capitalised, not acronyms), whatever
+    # the types; later writes of the short name follow. No LLM call. Off by default: a short
+    # name can be a different thing.
+    merge_short_forms: bool = False
     # GX-2 memory-level fact supersession: Dream State links a memory to the older statements
     # it updates (`superseded_by`/`valid_to`, nothing hidden), and retrieval ranks the current
     # statement above a stale one it retrieved. One LLM call per new memory that has candidates.

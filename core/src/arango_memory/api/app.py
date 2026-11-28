@@ -380,6 +380,7 @@ class DreamResponse(BaseModel):
     cleared: int = 0
     breaker_tripped: bool = False
     memories_superseded: int = 0  # GX-2 links made (FACT_SUPERSESSION)
+    merged: int = 0  # short entity names merged into longer ones (MERGE_SHORT_FORMS)
 
 
 # ── /v1/salience (graph centrality, §9/§13) ───────────────
@@ -733,6 +734,7 @@ def dream_endpoint(
         cleared=r.cleared,
         breaker_tripped=r.breaker_tripped,
         memories_superseded=r.memories_superseded,
+        merged=r.merged,
     )
 
 
