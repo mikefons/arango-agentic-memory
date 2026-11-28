@@ -1,5 +1,9 @@
-"""The ArangoDB HTTP transport: a shorter timeout for connecting and sending, and a log line
-for any call that fails or is slow.
+"""The ArangoDB HTTP transport: a shorter timeout for connecting and sending, a log line for
+any call that fails or is slow, and no reuse of a connection that has sat idle.
+
+Something between here and a hosted database drops idle connections, sometimes without saying
+so. A request sent on one is then reset, or goes nowhere until a timeout. So a pooled
+connection idle for longer than `max_idle_seconds` is closed and opened again before use.
 
 python-arango sends a request again after a connection error without saying so, which makes a
 call that stalled and then succeeded look like one slow call. Each of those attempts passes
@@ -28,6 +32,7 @@ from arango.response import Response
 from requests import ConnectionError as RequestsConnectionError
 from requests import ConnectTimeout, Session
 from requests.adapters import HTTPAdapter
+from urllib3.connectionpool import HTTPConnectionPool, HTTPSConnectionPool
 from urllib3.exceptions import ReadTimeoutError
 
 from .telemetry.logging import logger
@@ -41,6 +46,28 @@ class CursorBatchLost(ConnectionError):
     """The connection broke while fetching a cursor's next batch; run the query again.
 
     Built on the builtin `ConnectionError`, not requests', which the driver would resend."""
+
+
+def _retiring_pools(max_idle: float) -> dict[str, type[HTTPConnectionPool]]:
+    """urllib3 pool classes that reopen a connection which waited in the pool too long."""
+
+    class _Retiring(HTTPConnectionPool):
+        def _put_conn(self, conn: Any) -> None:
+            if conn is not None:
+                conn.returned_at = time.monotonic()
+            super()._put_conn(conn)
+
+        def _get_conn(self, timeout: float | None = None) -> Any:
+            conn = super()._get_conn(timeout)
+            returned = getattr(conn, "returned_at", None)
+            if returned is not None and time.monotonic() - returned > max_idle:
+                conn.close()  # it connects again when used
+            return conn
+
+    class _RetiringHTTPS(_Retiring, HTTPSConnectionPool):
+        pass
+
+    return {"http": _Retiring, "https": _RetiringHTTPS}
 
 
 def _kind(exc: BaseException) -> str:
@@ -86,11 +113,13 @@ class ObservedHTTPClient(DefaultHTTPClient):
         slow_seconds: float,
         retry_attempts: int = 3,
         resend_dropped: bool = False,
+        max_idle_seconds: float = 0,
     ) -> None:
         super().__init__(request_timeout=request_timeout, retry_attempts=retry_attempts)
         self.connect_timeout = min(connect_timeout, request_timeout)
         self.slow_seconds = slow_seconds  # 0 = don't report slow calls
         self.resend_dropped = resend_dropped  # send once more if the connection broke
+        self.max_idle_seconds = max_idle_seconds  # 0 = reuse however long it has waited
 
     def create_session(self, host: str) -> Session:
         session = super().create_session(host)
@@ -99,6 +128,9 @@ class ObservedHTTPClient(DefaultHTTPClient):
             # method. Raise them instead, so every resend is logged and goes through here.
             assert isinstance(adapter, HTTPAdapter)
             adapter.max_retries = adapter.max_retries.new(other=0)
+            if self.max_idle_seconds:
+                adapter.poolmanager.pool_classes_by_scheme = _retiring_pools(
+                    self.max_idle_seconds)
         return session
 
     def send_request(

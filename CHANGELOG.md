@@ -171,6 +171,10 @@ are versioned together and released from this repository.
 
 ### Fixed
 
+- A request is no longer sent on a database connection that has sat idle for longer than
+  `ARANGO_MAX_IDLE_SECONDS` (default 30, 0 = off); the connection is opened again first. Idle
+  connections can be dropped on the way without notice, and a request on one was then reset or
+  hung until a timeout.
 - A write sent again after a dropped connection no longer counts twice. Entity, relationship
   and tool-step counts carry an id per write and ignore a repeat (documents gain an `ops` field
   with the last 16 ids, episodes written in batches an `op` field). A repeated batch insert no
