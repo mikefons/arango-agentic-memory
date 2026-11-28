@@ -206,7 +206,8 @@ entities          Semantic nodes — the long-term knowledge graph.
                           valid_time, valid_time_explicit, ingestion_time,
                           invalid_at, embedding, embedding_model,
                           embedding_version, agent_id, tenant_id,
-                          schema_version
+                          schema_version, merged_into (a retired
+                          short name, §12)
 
 steps             Procedural memory — tool traces and reasoning patterns.
                   Fields: step_id, tool_name, arguments, outcome
@@ -592,6 +593,24 @@ Dream State confirms contradiction:
   (`MAX(belief, centrality, weight)`), so the agent prioritizes recently-confirmed
   relations; surfaced in `/v1/graph` edges. Knobs: `weight_ewa_alpha`, `weight_lambda`.
 - **Deterministic override:** human-edited config wins over LLM-extracted facts (checked first at retrieval).
+- **Short names (`lifecycle/short_forms.py`, behind `MERGE_SHORT_FORMS`, default off):** which
+  longer names exist depends on what has arrived, so "Ridgeline" and "Ridgeline Ventures" are
+  joined by Dream State, not at write time, and without an LLM call.
+  - **Rule:** a one-word name merges into a longer name that begins with it when exactly one
+    live name of the tenant qualifies: the added words are capitalised and not acronyms (so
+    "Northwind ARR" and "Halcyon deal" don't qualify), ignoring a legal suffix. Two qualifying
+    names ("Northwind Robotics", "Northwind Logistics LLC") leave it alone. Types are ignored,
+    as in write-time name matching.
+  - **Record:** the short entity is retired (`invalid_at`) with `merged_into` naming the longer
+    one. That pointer is the alias: a later write of the short name, or of a name close enough
+    to it to merge, goes to the longer entity. `/v1/graph` leaves retired short names out.
+  - **Move:** mention counts and reliability are added to the longer entity, and its
+    `mentions`, `produced_by` and `relates_to` edges move over; relations both had are
+    combined, and one between the two is dropped. Every statement does nothing when repeated,
+    and each run finishes what an interrupted run or a late write left.
+  - **Limits:** a memory naming both forms counts twice; a merge stays when a second longer
+    name appears later; there is no undo (purging the longer entity restores the short one);
+    a relation updated while it is being moved can lose that one update.
 - **Memory-level fact supersession (GX-2):** the diagram above is *entity* conflict
   (two entities that are the same thing). A changed *fact* — "Sam lives in Boston", later
   "Sam moved to Denver" — is handled at the memory level, Graphiti-style but without hiding

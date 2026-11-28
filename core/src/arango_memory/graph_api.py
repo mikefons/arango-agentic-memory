@@ -3,7 +3,8 @@
 Returns the **semantic graph** for a tenant — entities (nodes) plus `relates_to`
 (typed) and `Supersedes` edges — for an interactive explorer. Unlike
 `list_entities`, **superseded entities are included** (carrying `invalid_at`) so a
-before/after-supersession view is possible. Embeddings are never returned (§17).
+before/after-supersession view is possible; names merged into a longer one are not.
+Embeddings are never returned (§17).
 """
 
 from __future__ import annotations
@@ -16,6 +17,8 @@ from arango.database import StandardDatabase
 _NODES = """
 FOR e IN entities
   FILTER e.tenant_id == @tenant_id
+  // a short name merged into a longer one is that entity, not a node of its own
+  FILTER e.merged_into == null
   RETURN { id: e._key, name: e.name, label: e.label, source: e.source,
            mention_count: e.mention_count, belief: e.belief, centrality: e.centrality,
            community: e.community, valid_time: e.valid_time,

@@ -56,6 +56,17 @@ FOR doc IN @@coll
 """
 
 
+# A short name merged into a purged entity stands on its own again: later writes of it would
+# otherwise go to an entity that no longer exists.
+_UNMERGE = """
+FOR doc IN entities
+  FILTER doc.tenant_id == @tenant_id AND doc.merged_into IN @keys
+  UPDATE doc WITH { invalid_at: null, merged_into: null,
+                    merged_mentions: null, merged_reliability: null } IN entities
+  RETURN 1
+"""
+
+
 def _run(db: StandardDatabase, query: str, **bind: Any) -> int:
     return len(list(cast(Cursor, db.aql.execute(query, bind_vars=bind))))
 
@@ -110,6 +121,9 @@ def purge(db: StandardDatabase, *, tenant_id: str, agent_id: str | None = None) 
         counts[coll] = _run(
             db, _REMOVE_DOCS, **{"@coll": coll, "tenant_id": tenant_id, "agent_id": agent_id}
         )
+
+    gone = [i.split("/", 1)[1] for i in ids if i.startswith("entities/")]
+    _run(db, _UNMERGE, tenant_id=tenant_id, keys=gone)
 
     drop_vector_index(db)
     entity_vectors.drop((db.name, tenant_id))  # this process's copy (PF-1h)

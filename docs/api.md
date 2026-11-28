@@ -367,10 +367,12 @@ soft-deprecates `old` (`invalid_at`).
 
 #### `POST /v1/dream` · *write*
 Run Dream State consolidation (§13): review flagged/well-attested entities, confirm
-conflicts → supersede (better-attested survives), distill summaries; circuit breaker.
+conflicts → supersede (better-attested survives), distill summaries; circuit breaker. With
+`MERGE_SHORT_FORMS=true` it first merges short entity names into longer ones (`merged`).
 ```jsonc
 { "ctx": { "tenant_id": "acme", "agent_id": "a", "access_level": "write" } }
-// → { "reviewed": 4, "superseded": 1, "consolidated": 2, "cleared": 0, "breaker_tripped": false }
+// → { "reviewed": 4, "superseded": 1, "consolidated": 2, "cleared": 0, "breaker_tripped": false,
+//     "memories_superseded": 0, "merged": 0 }
 ```
 
 #### `POST /v1/salience` · *write*

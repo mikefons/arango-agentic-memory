@@ -74,7 +74,7 @@ _FETCH_EXISTING = """
 FOR e IN entities
   FILTER e.tenant_id == @tenant_id
   RETURN { key: e._key, name: e.name, label: e.label, embedding: e.embedding,
-           invalid: e.invalid_at != null }
+           invalid: e.invalid_at != null, merged_into: e.merged_into }
 """
 
 # `_FETCH_EXISTING` for a caller that holds some embeddings already (`vector_cache`): @known maps
@@ -87,7 +87,8 @@ FOR e IN entities
     "|", e.embedding_model, e.embedding_version, e.reembedded_at, e.ingestion_time)
   LET cached = HAS(NOT_NULL(@known[stamp], {}), e._key)
   RETURN { key: e._key, name: e.name, label: e.label, stamp: stamp, cached: cached,
-           embedding: cached ? null : e.embedding, invalid: e.invalid_at != null }
+           embedding: cached ? null : e.embedding, invalid: e.invalid_at != null,
+           merged_into: e.merged_into }
 """
 _SCAN_BATCH_SIZE = 10_000  # rows per cursor page: cached rows are small, so fewer round trips
 
@@ -101,7 +102,7 @@ FOR e IN entities
   SORT score DESC
   LIMIT @topk
   RETURN { key: e._key, name: e.name, label: e.label, embedding: e.embedding,
-           invalid: e.invalid_at != null }
+           invalid: e.invalid_at != null, merged_into: e.merged_into }
 """
 
 # IN-6: the union of top-k nearest existing entity KEYS across a chunk of query vectors, in ONE
@@ -125,7 +126,7 @@ _FETCH_BY_KEYS = """
 FOR e IN entities
   FILTER e._key IN @keys
   RETURN { key: e._key, name: e.name, label: e.label, embedding: e.embedding,
-           invalid: e.invalid_at != null }
+           invalid: e.invalid_at != null, merged_into: e.merged_into }
 """
 
 _TENANT_ENTITY_COUNT = """
@@ -199,12 +200,21 @@ def _by_name(pool: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
 def _name_match(rows: list[dict[str, Any]], label: str) -> str | None:
     """The key of the existing entity a name belongs to, from the rows sharing its
     `name_key`: the same label first, then any live one. A deprecated entity is only taken
-    for its own label (the exact entity coming back)."""
-    usable = [r for r in rows if r["label"] == label or not r.get("invalid")]
+    for its own label (the exact entity coming back). A name merged into a longer one
+    (`lifecycle.short_forms`) belongs to that one, whatever the type."""
+    usable = [
+        r for r in rows
+        if not r.get("merged_into") and (r["label"] == label or not r.get("invalid"))
+    ]
     if not usable:
-        return None
+        return min((r["merged_into"] for r in rows if r.get("merged_into")), default=None)
     best = min(usable, key=lambda r: (r["label"] != label, bool(r.get("invalid")), r["key"]))
     return cast(str, best["key"])
+
+
+def _resolved(row: Mapping[str, Any]) -> str:
+    """The entity a matched row stands for: itself, or the one it was merged into."""
+    return cast(str, row.get("merged_into") or row["key"])
 
 
 def _cos(a: list[float], b: list[float]) -> float:
@@ -509,7 +519,7 @@ def write_entities(
             same = _name_match(_by_name(candidates).get(nk, []), ent.label)
             match, sim = _best_match(vec, candidates, exclude=(ent.name, ent.label))
             if same is None and match is not None and sim >= settings.entity_merge_threshold:
-                same = cast(str, match["key"])  # semantic duplicate under another name
+                same = _resolved(match)  # semantic duplicate under another name
 
         if same is not None:
             inc_bind: dict[str, Any] = {
@@ -627,7 +637,7 @@ def _entity_doc(
         "created_at": now,
         "accessed_at": now,
         "needs_review": needs_review,
-        "conflict_with": match["key"] if needs_review and match else None,
+        "conflict_with": _resolved(match) if needs_review and match else None,
         "schema_version": "0.1.0",
     }
 
@@ -819,7 +829,7 @@ def write_entities_many(
         a = accum[nk]
         same = _name_match(named.get(nk, []), a.ent.label)
         if same is None and match is not None and sim >= settings.entity_merge_threshold:
-            same = cast(str, match["key"])  # semantic duplicate under another name
+            same = _resolved(match)  # semantic duplicate under another name
         if same is not None:
             key_by_nk[nk] = same
             inc = increments.setdefault(same, [0.0, 0.0])

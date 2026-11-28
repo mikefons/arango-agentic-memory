@@ -28,6 +28,7 @@ from ..models import utcnow_iso
 from ..telemetry import metrics
 from .conflict import supersede
 from .facts import run_fact_keys
+from .short_forms import merge_short_forms
 from .supersession import run_supersession
 
 _CONFLICT_SYSTEM = (
@@ -66,6 +67,7 @@ class DreamResult:
     cleared: int = 0
     breaker_tripped: bool = False
     memories_superseded: int = 0  # GX-2 memory-level links (FACT_SUPERSESSION)
+    merged: int = 0  # short names merged into longer ones (MERGE_SHORT_FORMS)
 
 
 def _different_community(a: dict[str, Any], b: dict[str, Any]) -> bool:
@@ -105,10 +107,15 @@ def run_dream_state(
         if settings.fact_supersession else 0
     )
 
+    # Before the review, so it sees (and summarises) the merged entities. No model call.
+    merged = (
+        merge_short_forms(db, tenant_id=tenant_id) if settings.merge_short_forms else 0
+    )
+
     bind: dict[str, Any] = {"tenant_id": tenant_id, "threshold": threshold}
     candidates = list(cast(Cursor, db.aql.execute(_CANDIDATES, bind_vars=bind)))
     if not candidates:
-        return DreamResult(memories_superseded=linked)
+        return DreamResult(memories_superseded=linked, merged=merged)
 
     supersessions: list[tuple[str, str]] = []  # (new_key, old_key)
     clears: list[str] = []
@@ -160,7 +167,8 @@ def run_dream_state(
     reviewed = len(candidates)
     if reviewed and len(supersessions) / reviewed > breaker:
         metrics.emit("consolidation", promoted=0, superseded=0, cleared=0, breaker_tripped=True)
-        return DreamResult(reviewed=reviewed, breaker_tripped=True, memories_superseded=linked)
+        return DreamResult(
+            reviewed=reviewed, breaker_tripped=True, memories_superseded=linked, merged=merged)
 
     now = utcnow_iso()
     entities = db.collection("entities")
@@ -185,4 +193,5 @@ def run_dream_state(
         consolidated=len(summaries),
         cleared=len(clears),
         memories_superseded=linked,
+        merged=merged,
     )
