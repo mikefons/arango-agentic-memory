@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from typing import Any
+from unittest.mock import Mock
 
 import pytest
 from arango.database import StandardDatabase
@@ -12,6 +13,7 @@ from arango_memory.entity_api import list_entities
 from arango_memory.generation import FakeGenerator
 from arango_memory.graph_api import tenant_graph
 from arango_memory.ingest.store import StoreItem, store, store_many
+from arango_memory.lifecycle import dream
 from arango_memory.lifecycle.dream import run_dream_state
 from arango_memory.lifecycle.short_forms import merge_short_forms, plan_merges
 from arango_memory.schema import collections
@@ -268,3 +270,20 @@ def test_dream_state_merges_only_when_enabled(
         db, tenant_id="t", generator=FakeGenerator(handler=lambda p, s: "DISTINCT"))
     assert result.merged == int(enabled)
     assert (_entity(db, "t", "Ridgeline")["invalid_at"] is not None) is enabled
+
+
+def test_dream_state_logs_the_merge_count_before_any_model_call(
+    db: StandardDatabase, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(settings, "merge_short_forms", True)
+    log = Mock()
+    monkeypatch.setattr(dream, "logger", log)
+    _write(db, "t")
+
+    def rejected(prompt: str, system: str | None) -> str:
+        raise RuntimeError("model call failed")
+
+    with pytest.raises(RuntimeError):
+        run_dream_state(
+            db, tenant_id="t", generator=FakeGenerator(handler=rejected), mention_threshold=1)
+    log.info.assert_called_once_with("short names merged", extra={"merged": 1})
