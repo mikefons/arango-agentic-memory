@@ -2096,6 +2096,18 @@ don't show whether concurrency 4 is in effect.
   beside "Vertex Foods" (created without a salience score, so apparently after the pass),
   "CFO Marcus Cole" beside "Marcus Cole", the cut-off "Northwind (Series", and "a Letter of
   Intent".
+  Followed up the same day with the merge report (`/v1/entities/merges`, #336) and the name
+  fixes (#335). The report showed only one of that run's two merges until #338; with it, both
+  showed. "Ridgeline" into "Ridgeline Ventures" is right by its sample sentence. "Halden"
+  into "Halden Technical Advisory" had no sample; it is judged right because the demo's
+  source documents have one Halden. In a later run with the name fixes deployed, Dream State
+  returned 200 in 13.1 s and logged 1 merge, "Ridgeline" into "Ridgeline Ventures", right by
+  its sample; all logged requests returned 200, with no failed or slow database call. None of
+  "a Letter of Intent", "Northwind (Series" or "CFO Marcus Cole" appeared. That is one run on
+  newly written agent text, which may not have had the wording behind them. Still odd:
+  "Northwind Robotics Halcyon Grocers" (two names run together), "Orion and Vertex", "Halden"
+  again (no salience score, so apparently written after the pass), and "Halden" and "Orion
+  Retail" typed as locations.
 
 ### PF-1c — Stop returning embeddings from the retrieval arms (PR 2)  ✅ #304
 
