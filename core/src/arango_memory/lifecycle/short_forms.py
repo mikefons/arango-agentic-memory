@@ -118,39 +118,46 @@ IN relates_to
 """
 
 
+# Which memories of the longer entity the caller may read (see `merge_report`).
+_READABLE = """FILTER m.tenant_id == @tenant_id AND m.invalid_at == null
+      FILTER @agent_ids == null OR m.agent_id IN @agent_ids
+        OR LENGTH(FOR p IN @agent_prefixes FILTER STARTS_WITH(m.agent_id, p) RETURN 1) > 0"""
+
 # Merged pairs with the memories to judge them by. A pair is listed only while the caller can
-# still read a memory using the short name, so forgotten or hidden text doesn't surface a name.
-# `samples`: memories whose link the merge moved, or that use the short name without the longer
-# one (written since). `into_samples`: what the longer name refers to.
-_REPORT = """
+# still read a memory with the short name in it, so forgotten or hidden text doesn't surface a
+# name. `samples`: memories whose link the merge moved, or that use the short name without the
+# longer one; there may be none to find. `into_samples`: what the longer name refers to.
+_REPORT = f"""
 FOR s IN entities
   FILTER s.tenant_id == @tenant_id AND s.merged_into != null
   LET t = DOCUMENT(entities, s.merged_into)
-  FILTER t != null AND t.tenant_id == @tenant_id AND t.invalid_at == null
+  FILTER t != null AND t.tenant_id == @tenant_id
+  LET named = (
+    FOR m, link IN 1..1 INBOUND t._id mentions
+      {_READABLE}
+      FILTER link.merged_short == s._key OR CONTAINS(m.text, s.name)
+      LIMIT 1
+      RETURN 1)
+  FILTER LENGTH(named) > 0
+  SORT s.invalid_at DESC, s._key
+  LIMIT @limit
   LET samples = (
     FOR m, link IN 1..1 INBOUND t._id mentions
-      FILTER m.tenant_id == @tenant_id AND m.invalid_at == null
-      FILTER @agent_ids == null OR m.agent_id IN @agent_ids
-        OR LENGTH(FOR p IN @agent_prefixes FILTER STARTS_WITH(m.agent_id, p) RETURN 1) > 0
+      {_READABLE}
       FILTER link.merged_short == s._key
         OR (CONTAINS(m.text, s.name) AND NOT CONTAINS(m.text, t.name))
       SORT NOT_NULL(m.event_time, m.created_at) DESC, m._key
       LIMIT @samples
       RETURN m.text)
-  FILTER LENGTH(samples) > 0
   LET into_samples = (
     FOR m IN 1..1 INBOUND t._id mentions
-      FILTER m.tenant_id == @tenant_id AND m.invalid_at == null
-      FILTER @agent_ids == null OR m.agent_id IN @agent_ids
-        OR LENGTH(FOR p IN @agent_prefixes FILTER STARTS_WITH(m.agent_id, p) RETURN 1) > 0
+      {_READABLE}
       FILTER CONTAINS(m.text, t.name)
       SORT NOT_NULL(m.event_time, m.created_at) DESC, m._key
       LIMIT @samples
       RETURN m.text)
-  SORT s.invalid_at DESC, s._key
-  LIMIT @limit
-  RETURN { id: s._key, name: s.name, into_id: t._key, into_name: t.name,
-           merged_at: s.invalid_at, samples, into_samples }
+  RETURN {{ id: s._key, name: s.name, into_id: t._key, into_name: t.name,
+            into_retired_at: t.invalid_at, merged_at: s.invalid_at, samples, into_samples }}
 """
 
 

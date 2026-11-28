@@ -335,11 +335,13 @@ absent or forgotten. Embeddings excluded.
 `?tenant_id=&limit=50` (1–200) → short names merged into longer ones (`MERGE_SHORT_FORMS`),
 newest first, with up to 3 memories on each side to judge a merge by. `samples` used the short
 name: their link was moved by the merge, or their text has it without the longer name.
-`into_samples` use the longer name. A credential bound to agents sees only their memories, and
-a merge with no `samples` it can read is left out.
+`into_samples` use the longer name; either list can be empty. `into_retired_at` is set if the
+longer entity has since been retired. A credential bound to agents sees only their memories,
+and a merge is left out when no memory it can read has the short name in it (or a link the
+merge moved).
 ```json
 { "merges": [ { "id": "…", "name": "Ridgeline", "into_id": "…", "into_name": "Ridgeline Ventures",
-                "merged_at": "2026-01-01T00:00:00+00:00", "samples": ["then Ridgeline met Orion."],
+                "into_retired_at": null, "merged_at": "2026-01-01T00:00:00+00:00", "samples": ["then Ridgeline met Orion."],
                 "into_samples": ["Ridgeline Ventures backs Orion."] } ] }
 ```
 

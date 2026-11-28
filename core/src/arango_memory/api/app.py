@@ -347,8 +347,9 @@ class EntityMerge(BaseModel):
     name: str
     into_id: str
     into_name: str
+    into_retired_at: str | None = None  # set if the longer entity has since been retired
     merged_at: str
-    samples: list[str]  # memories that used the short name
+    samples: list[str]  # memories that used the short name; may be none to find
     into_samples: list[str]  # memories that use the longer one
 
 
