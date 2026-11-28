@@ -331,6 +331,18 @@ absent or forgotten. Embeddings excluded.
 { "entities": [ { "id": "…", "name": "Alice", "label": "Person", "belief": 0.875, "centrality": 1.0 } ] }
 ```
 
+#### `GET /v1/entities/merges` · *read*
+`?tenant_id=&limit=50` (1–200) → short names merged into longer ones (`MERGE_SHORT_FORMS`),
+newest first, with up to 3 memories on each side to judge a merge by. `samples` used the short
+name: their link was moved by the merge, or their text has it without the longer name.
+`into_samples` use the longer name. A credential bound to agents sees only their memories, and
+a merge with no `samples` it can read is left out.
+```json
+{ "merges": [ { "id": "…", "name": "Ridgeline", "into_id": "…", "into_name": "Ridgeline Ventures",
+                "merged_at": "2026-01-01T00:00:00+00:00", "samples": ["then Ridgeline met Orion."],
+                "into_samples": ["Ridgeline Ventures backs Orion."] } ] }
+```
+
 #### `GET /v1/graph` · *read*
 `?tenant_id=` → the **full semantic graph** for visualization — entities
 (**including superseded**, carrying `invalid_at`) + `relates_to`/`Supersedes` edges.

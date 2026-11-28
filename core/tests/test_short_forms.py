@@ -7,18 +7,19 @@ from unittest.mock import Mock
 
 import pytest
 from arango.database import StandardDatabase
+from fastapi.testclient import TestClient
 
-from arango_memory.config import settings
+from arango_memory.config import ApiKeyEntry, settings
 from arango_memory.entity_api import list_entities
 from arango_memory.generation import FakeGenerator
 from arango_memory.graph_api import tenant_graph
 from arango_memory.ingest.store import StoreItem, store, store_many
 from arango_memory.lifecycle import dream
 from arango_memory.lifecycle.dream import run_dream_state
-from arango_memory.lifecycle.short_forms import merge_short_forms, plan_merges
+from arango_memory.lifecycle.short_forms import merge_report, merge_short_forms, plan_merges
 from arango_memory.schema import collections
 from arango_memory.schema.collections import has_vector_index
-from arango_memory.security.forget import purge
+from arango_memory.security.forget import forget_memories, purge
 from arango_memory.transport import ObservedHTTPClient
 
 from .conftest import StubEmbedder
@@ -287,3 +288,88 @@ def test_dream_state_logs_the_merge_count_before_any_model_call(
         run_dream_state(
             db, tenant_id="t", generator=FakeGenerator(handler=rejected), mention_threshold=1)
     log.info.assert_called_once_with("short names merged", extra={"merged": 1})
+
+
+def _only_merge(db: StandardDatabase, tenant: str = "t", **kwargs: Any) -> dict[str, Any]:
+    (merge,) = merge_report(db, tenant_id=tenant, **kwargs)
+    return merge
+
+
+def test_report_shows_each_merge_with_both_sides(db: StandardDatabase) -> None:
+    _write(db, "t")
+    _write(db, "other")
+    assert merge_report(db, tenant_id="t") == []
+    merge_short_forms(db, tenant_id="t")
+    merge = _only_merge(db)
+    assert (merge["name"], merge["into_name"]) == ("Ridgeline", "Ridgeline Ventures")
+    assert merge["id"] == _entity(db, "t", "Ridgeline")["_key"]
+    assert merge["into_id"] == _entity(db, "t", "Ridgeline Ventures")["_key"]
+    assert merge["merged_at"]
+    assert sorted(merge["samples"]) == sorted(_TURNS[1:])
+    assert merge["into_samples"] == [_TURNS[0]]
+    assert merge_report(db, tenant_id="other") == []
+    assert len(_only_merge(db, samples=1)["samples"]) == 1
+
+
+def test_report_includes_later_writes_of_the_short_name(db: StandardDatabase) -> None:
+    _write(db, "t")
+    merge_short_forms(db, tenant_id="t")
+    _write(db, "t", "Ridgeline sold a stake.")
+    assert "Ridgeline sold a stake." in _only_merge(db)["samples"]
+
+
+def test_report_knows_moved_links_the_text_does_not_show(db: StandardDatabase) -> None:
+    _write(db, "t", "Ridgeline Ventures backs Orion.", "then RIDGELINE met Orion.")
+    merge_short_forms(db, tenant_id="t")
+    # stored as "RIDGELINE": the same name, which no text match on it would find
+    short = next(db.aql.execute(  # type: ignore[arg-type, call-overload]
+        "FOR e IN entities FILTER e.tenant_id == 't' AND e.merged_into != null RETURN e.name"))
+    db.aql.execute("FOR e IN entities FILTER e.tenant_id == 't' AND e.merged_into != null "
+                   "UPDATE e WITH { name: 'Ridgeline' } IN entities")
+    assert short == "RIDGELINE"
+    assert _only_merge(db)["samples"] == ["then RIDGELINE met Orion."]
+
+
+def test_report_hides_a_merge_whose_memories_are_forgotten(db: StandardDatabase) -> None:
+    _write(db, "t")
+    merge_short_forms(db, tenant_id="t")
+    keys = list(db.aql.execute(  # type: ignore[arg-type]
+        "FOR m IN memories FILTER m.tenant_id == 't' AND m.text IN @texts RETURN m._key",
+        bind_vars={"texts": list(_TURNS[1:])},
+    ))
+    assert forget_memories(db, tenant_id="t", memory_keys=keys) == 2
+    assert merge_report(db, tenant_id="t") == []
+
+
+@pytest.mark.parametrize(
+    ("allowed", "visible"),
+    [(None, True), (["a"], True), (["a*"], True), (["b"], False), (["b*"], False), ([], False)],
+)
+def test_report_reads_only_allowed_agents(
+    db: StandardDatabase, allowed: list[str] | None, visible: bool
+) -> None:
+    _write(db, "t")
+    merge_short_forms(db, tenant_id="t")
+    assert bool(merge_report(db, tenant_id="t", agent_ids=allowed)) is visible
+
+
+def test_report_endpoint_applies_the_keys_agent_binding(
+    api: TestClient, db: StandardDatabase, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _write(db, "t")
+    merge_short_forms(db, tenant_id="t")
+    monkeypatch.setattr(settings, "api_keys", {
+        "k_a": ApiKeyEntry(tenant_id="t", scope="read", agent_ids=["a"]),
+        "k_b": ApiKeyEntry(tenant_id="t", scope="read", agent_ids=["b"]),
+    })
+
+    def get(key: str, query: str = "tenant_id=t") -> Any:
+        return api.get(f"/v1/entities/merges?{query}",
+                       headers={"authorization": f"Bearer {key}"})
+
+    (merge,) = get("k_a").json()["merges"]
+    assert merge["name"] == "Ridgeline"
+    assert get("k_b").json() == {"merges": []}
+    assert get("k_a", "tenant_id=other").status_code == 403
+    assert get("k_a", "tenant_id=t&limit=201").status_code == 422
+    assert api.get("/v1/entities/merges?tenant_id=t").status_code == 401

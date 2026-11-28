@@ -608,6 +608,10 @@ Dream State confirms contradiction:
     `mentions`, `produced_by` and `relates_to` edges move over; relations both had are
     combined, and one between the two is dropped. Every statement does nothing when repeated,
     and each run finishes what an interrupted run or a late write left.
+  - **Review:** a moved `mentions` edge records the retired entity in `merged_short`, and
+    `/v1/entities/merges` lists each merge with memories using either name. Names stay out of
+    the logs, as they can be people's. Links moved before this field existed, and later
+    writes, are found by text alone (exact case, substring).
   - **Limits:** a memory naming both forms counts twice; a merge stays when a second longer
     name appears later; there is no undo (purging the longer entity restores the short one);
     a relation updated while it is being moved can lose that one update.
